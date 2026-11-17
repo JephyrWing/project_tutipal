@@ -1,5 +1,7 @@
 # TUTIPAL
 
+팀 작업은 [AGENTS.md](AGENTS.md)와 [Jira 협업 시작 안내](https://gad03302.atlassian.net/wiki/spaces/PT/pages/589825)를 먼저 읽고 진행한다. 업무·명세·결정·검증 이력은 Jira, 코드와 PR은 GitHub, 파일 산출물은 [Drive](https://drive.google.com/drive/folders/1r7AnAbWxKyroED1DeWxHz5c5dG0fDdn2)에서 관리한다. 최진우(PM)·전설민(PL)은 하네스 이해 확인 질문을 면제하며, 일반 팀원은 첫 사용과 주요 규칙 변경 때 확인한다.
+
 React/Vite 화면을 내장한 Electron 학습 앱, Spring 업무 서버, FastAPI 추론 서버다. [PL 구현](https://github.com/jeonseolmin/tutipal)의 로그인·방·챗봇·퀴즈·자료·공지·게시판·복습·화면공유를 현재 구조와 통신 정책에 맞게 이식했다. 기준과 변경 내역은 [PORTING.md](docs/PORTING.md)에 기록한다.
 
 ## 구성과 책임
