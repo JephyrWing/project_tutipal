@@ -184,3 +184,11 @@ Windows 설치 파일은 미서명이며 설치 마법사를 PC에 적용하지 
 현재 PC의 infra/.env.local에는 사용자 지정 모델명과 auto 제공자를 저장했다. OpenAI를 쓰는 팀원은 자신의 파일에 OPENAI_API_KEY와 OPENAI_MODEL을 설정한다. 비밀값은 채팅이나 공개 저장소에 넣지 않는다. 모델을 바꿨다면 Compose를 다시 적용해야 한다.
 
 점검 후 개발용 로그인은 다시 false로 적용했다. 로컬 서버와 사용자가 요청한 Ollama 모델은 사용할 수 있는 상태로 두며, 임시 Electron/CDP/Vite/Uvicorn 진단 프로세스는 종료했다. 소스는 사용자의 요청으로 JephyrWing/project_tutipal 공개 저장소에 올리고 외부 서버 배포·이미지 push는 하지 않는다.
+
+## 11. 공개 저장소와 GitHub Actions
+
+공개 저장소: https://github.com/JephyrWing/project_tutipal
+
+최초 CI의 ubuntu-latest가 Ubuntu26.04를 선택해 Python3.12.6 설치 단계가 실패했다. Python 버전을 바꾸지 않고 해당 job을 공식 배포본이 있는 ubuntu-24.04로 고정했다.
+
+수정 후 [CI 실행 44055950618](https://github.com/JephyrWing/project_tutipal/actions/runs/44055950618)은 전체 성공했다. Windows Electron NSIS 패키징, Java21 Spring JAR 빌드, Python3.12.6 설치/import/pip check, Compose 설정 검사를 통과했다. Docker Hub 업로드와 SSH 배포 job은 비활성 상태로 건너뛰었다. 실제 환경 파일·비밀값·설치 파일·모델은 원격 저장소에 포함하지 않았다.

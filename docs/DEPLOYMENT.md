@@ -8,7 +8,7 @@ Mindot과 동일한 `main` 푸시 → Docker Hub 이미지 빌드/업로드 → 
 
 `ENABLE_CD`가 `true`일 때만 이미지 업로드/배포한다. 기본은 CI 빌드 확인만 실행한다. 업무 기능은 이식했으며 외부 배포 환경과 Secrets·DNS/Tunnel은 별도 준비해야 한다. 공개 GitHub 저장소의 생성·소스 push는 웹 서비스 외부 배포와 구분한다.
 
-2026-11-17에 Windows 개발 PC에서 backend/FastAPI/DB 이미지 빌드와 로컬 Compose 전체 기동, Flyway V1 및 pgvector 0.8.7 적용을 확인했다. Electron Windows NSIS 설치 파일도 생성했다. 이 결과는 외부 배포나 GitHub Actions 실행 성공을 뜻하지 않는다. npm/Python/Gradle 잠금 파일을 포함하며 CI는 `npm ci`, Python 잠금 파일 설치, Windows NSIS 빌드를 사용한다. 실제 결과는 [개발 안내](DEVELOPMENT.md)의 8장에 기록했다.
+2026-11-17에 로컬 이미지 빌드·Compose 전체 기동·Flyway V1~V12·pgvector0.8.7·앱 실제 동작을 확인했고 공개 GitHub 저장소에 소스를 올렸다. GitHub Actions에서도 Windows NSIS, Spring JAR, Python/Compose 검사가 통과했다. 이미지 업로드/SSH 배포는 실행하지 않았다. 실제 결과는 [개발 안내](DEVELOPMENT.md)의 10~11장에 기록했다.
 
 ## 2. 개인 PC에서 먼저 실행할 때
 
