@@ -2,6 +2,8 @@
 
 팀 작업은 [AGENTS.md](AGENTS.md)와 [Jira 협업 시작 안내](https://gad03302.atlassian.net/wiki/spaces/PT/pages/589825)를 먼저 읽고 진행한다. 업무·명세·결정·검증 이력은 Jira, 코드와 PR은 GitHub, 파일 산출물은 [Drive](https://drive.google.com/drive/folders/1r7AnAbWxKyroED1DeWxHz5c5dG0fDdn2)에서 관리한다. 이해 확인 정책도 Jira 하네스의 최신 본문을 따른다. 현재 운영 기준은 jira_drive-v3이며 작성자는 체크/PM 확인 대기로 제출하고 최종 확인·완료 전이는 PM이 직접 수행한다. 계정은 Jira의 실제 accountId와 확인된 한국어·영문 별칭을 대조한다.
 
+WBS-SYNC-20261118-v1에 따라 WBS의 담당·계획일·범위·선행 변경은 같은 작업에서 Jira 보드의 실제 담당자·지원 날짜 필드·연결 업무에 반영하고 재조회한다. 공동 담당은 역할별 하위 작업으로 나누며 실제 진행·검사·PM 완료는 Jira 증거로 구분한다.
+
 기본·팀 통합 브랜치는 `develop`이다. 작업 브랜치는 최신 `develop`에서 만들고, 모든 팀원 PR과 병합 대상은 `develop`으로 지정한다.
 
 설계가 바뀌면 Jira와 Drive의 모든 산출물을 영향 검토하고, 관련 문서를 모두 갱신·게시한 뒤 PM이 직접 확인하고 해당 변경 작업을 완료로 넘긴다. 세부 절차와 문서별 최신 링크는 Jira 하네스를 따른다.
