@@ -1,0 +1,12 @@
+.gradle
+build
+out
+.idea
+.env
+.env.*
+!.env.example
+src/test
+data
+.git
+*.pem
+*.key

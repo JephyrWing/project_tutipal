@@ -1,0 +1,8 @@
+# IDEでSpringを起動する場合の補助。loopback公開だけを追加する。
+services:
+  tutipal-db:
+    ports: ["127.0.0.1:${DB_PORT:-5432}:5432"]
+  fastapi:
+    ports: ["127.0.0.1:${FASTAPI_PORT:-8000}:8000"]
+  livekit:
+    ports: ["127.0.0.1:7880:7880/tcp"]

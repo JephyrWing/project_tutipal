@@ -1,0 +1,125 @@
+services:
+  backend:
+    build:
+      context: ../tutipal_back
+    environment:
+      SPRING_PROFILES_ACTIVE: local
+      DB_URL: jdbc:postgresql://tutipal-db:5432/${DB_NAME:-tutipal_db}
+      DB_USER: ${DB_USER:-tutipal}
+      DB_PW: ${DB_PW:?Set DB_PW in infra/.env.local}
+      FAST_API_BASE_URL: http://fastapi:8000
+      AI_INTERNAL_KEY: ${AI_INTERNAL_KEY:?Run infra/init-local.ps1 to prepare the internal AI key}
+      AI_MAX_CONCURRENT: ${AI_MAX_CONCURRENT:-2}
+      DEV_LOGIN: ${DEV_LOGIN:-false}
+      APP_ALLOWED_ORIGINS: ${APP_ALLOWED_ORIGINS:-http://127.0.0.1:*,http://localhost:*}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      NAVER_CLIENT_ID: ${NAVER_CLIENT_ID:-}
+      NAVER_CLIENT_SECRET: ${NAVER_CLIENT_SECRET:-}
+      KAKAO_CLIENT_ID: ${KAKAO_CLIENT_ID:-}
+      KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET:-}
+      LIVEKIT_INTERNAL_URL: http://livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?Set LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?Set LIVEKIT_API_SECRET}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      AWS_REGION: ${AWS_REGION:-ap-northeast-2}
+      S3_BUCKET: ${S3_BUCKET:-}
+      MATERIAL_STORAGE: ${MATERIAL_STORAGE:-local}
+      MATERIAL_LOCAL_PATH: /app/data/materials
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+    volumes:
+      - tutipal_materials:/app/data
+    ports:
+      - "${BACKEND_BIND:-127.0.0.1}:${BACKEND_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:8080/actuator/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    depends_on:
+      tutipal-db:
+        condition: service_healthy
+      fastapi:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+    networks: [app, data, model, realtime]
+    restart: unless-stopped
+
+  fastapi:
+    build:
+      context: ../tutipal_ai
+    environment:
+      AI_INTERNAL_KEY: ${AI_INTERNAL_KEY:?Set AI_INTERNAL_KEY}
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-auto}
+      MODEL_NAME: ${MODEL_NAME:-gemma3:12b}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-http://host.docker.internal:11434}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MAX_COMPLETION_TOKENS: ${OPENAI_MAX_COMPLETION_TOKENS:-4096}
+      EMBEDDING_DIMENSIONS: "1024"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    expose: ["8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/internal/ai/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks: [model]
+    restart: unless-stopped
+
+  tutipal-db:
+    build:
+      context: ./postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-tutipal_db}
+      POSTGRES_USER: ${DB_USER:-tutipal}
+      POSTGRES_PASSWORD: ${DB_PW:?Set DB_PW}
+    volumes:
+      - tutipal_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [data]
+    restart: unless-stopped
+
+  livekit:
+    image: livekit/livekit-server:v1.13.11
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:?Set LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET:?Set LIVEKIT_API_SECRET}"
+      LIVEKIT_CONFIG: |
+        port: 7880
+        bind_addresses: ["0.0.0.0"]
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882
+          use_external_ip: false
+          node_ip: ${LIVEKIT_NODE_IP:-127.0.0.1}
+    expose: ["7880"]
+    ports:
+      - "7881:7881/tcp"
+      - "7882:7882/udp"
+    networks: [realtime]
+    restart: unless-stopped
+
+networks:
+  app:
+  data:
+    internal: true
+  model:
+  realtime:
+
+volumes:
+  tutipal_pgdata:
+  tutipal_materials:
