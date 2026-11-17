@@ -4,6 +4,8 @@
 
 기본·팀 통합 브랜치는 `develop`이다. 작업 브랜치는 최신 `develop`에서 만들고, 모든 팀원 PR과 병합 대상은 `develop`으로 지정한다.
 
+설계가 바뀌면 Jira와 Drive의 모든 산출물을 영향 검토하고, 관련 문서를 모두 갱신·게시한 뒤 해당 변경 작업을 완료한다. 세부 절차와 문서별 최신 링크는 Jira 하네스를 따른다.
+
 React/Vite 화면을 내장한 Electron 학습 앱, Spring 업무 서버, FastAPI 추론 서버다. [PL 구현](https://github.com/jeonseolmin/tutipal)의 로그인·방·챗봇·퀴즈·자료·공지·게시판·복습·화면공유를 현재 구조와 통신 정책에 맞게 이식했다. 기준과 변경 내역은 [PORTING.md](docs/PORTING.md)에 기록한다.
 
 ## 구성과 책임
