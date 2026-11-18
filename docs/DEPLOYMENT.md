@@ -31,7 +31,7 @@ Cloudflare Tunnel이 이미 호스트에서 실행 중이면 `--profile cloudfla
 
 다음은 **Linux + Docker Compose + SSH** 서버 기준이다. Windows 개인 PC는 현재 수동 Compose 실행 대상이며, 이 SSH 배포 스크립트를 그대로 사용하는 대상은 아니다.
 
-운영 서버는 **Oracle Cloud ARM(Ampere A1)**으로 계획 중이다(PT-82, 프로토타입). 따라서 `deploy.yml`은 GitHub ARM 러너(`ubuntu-24.04-arm`)에서 이미지를 `linux/arm64`로만 빌드한다. amd64 이미지는 만들지 않는다.
+운영 서버는 **Oracle Cloud ARM(Ampere A1)**으로 계획 중이다(PT-82, 프로토타입). 서버 준비 순서는 [ORACLE_MIGRATION.md](ORACLE_MIGRATION.md)를 따른다. 따라서 `deploy.yml`은 GitHub ARM 러너(`ubuntu-24.04-arm`)에서 이미지를 `linux/arm64`로만 빌드한다. amd64 이미지는 만들지 않는다.
 
 - 팀원 Windows PC의 로컬 개발과 Electron 앱 빌드는 영향이 없다. 로컬 Compose는 각 PC에서 직접 빌드하고, Electron은 CI의 Windows 작업에서 따로 만든다.
 - 서버 관리는 Windows 기본 `ssh`로 접속한다.
