@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.Set;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.event.EventListener;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -121,6 +122,16 @@ public class ScreenShareService {
         }
         help.moveTo(Status.DONE);
         notifyBoth(help, "helpEnded");
+    }
+
+    /** FR-SES-07 학생이 나가거나 내보내지면 그 세션의 열린 도움 요청을 닫는다 (나가기와 같은 트랜잭션, 동기 실행). */
+    @EventListener
+    @Transactional
+    public void onParticipantRemoved(StudySessionService.ParticipantRemoved removed) {
+        for (HelpRequest help : helps.findBySessionIdAndUserIdAndStatusIn(removed.sessionId(), removed.userId(), OPEN)) {
+            help.moveTo(Status.DONE);
+            notifyBoth(help, "helpEnded");
+        }
     }
 
     /** 방 B 입장권: 진행 중(ACCEPTED)일 때 요청한 학생과 그 세션 선생님만. */

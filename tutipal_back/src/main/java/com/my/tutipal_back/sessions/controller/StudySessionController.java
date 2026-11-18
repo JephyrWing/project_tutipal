@@ -7,6 +7,7 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.core.user.OAuth2User;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -78,6 +79,20 @@ public class StudySessionController {
     @PostMapping("/{id}/end")
     public SessionResponse end(@AuthenticationPrincipal OAuth2User me, @PathVariable Long id) {
         return service.end(userId(me), id);
+    }
+
+    /** FR-SES-07 학생이 방에서 나가기 */
+    @DeleteMapping("/{id}/participants/me")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void leave(@AuthenticationPrincipal OAuth2User me, @PathVariable Long id) {
+        service.leave(userId(me), id);
+    }
+
+    /** FR-SES-07 선생님이 학생 내보내기 */
+    @DeleteMapping("/{id}/participants/{userId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void kick(@AuthenticationPrincipal OAuth2User me, @PathVariable Long id, @PathVariable Long userId) {
+        service.kick(userId(me), id, userId);
     }
 
     private static Long userId(OAuth2User me) {

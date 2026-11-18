@@ -8,6 +8,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,15 +44,25 @@ public class StudySessionService {
     private final UserService userService;
     private final SessionEvents events;
     private final Presence presence;
+    private final ApplicationEventPublisher publisher;
     private final Clock clock = Clock.systemUTC();
 
+    /**
+     * 참가자가 나가거나 내보내졌을 때 같은 트랜잭션 안에서 알리는 이벤트. 화면공유(ScreenShareService)가 받아 그 학생의
+     * 열린 도움 요청을 닫는다 (ScreenShareService 가 이 서비스를 쓰므로 직접 부르면 순환 의존이 됨).
+     */
+    public record ParticipantRemoved(Long sessionId, Long userId) {
+    }
+
     public StudySessionService(StudySessionRepository sessions, SessionParticipantRepository participants,
-                               UserService userService, SessionEvents events, Presence presence) {
+                               UserService userService, SessionEvents events, Presence presence,
+                               ApplicationEventPublisher publisher) {
         this.sessions = sessions;
         this.participants = participants;
         this.userService = userService;
         this.events = events;
         this.presence = presence;
+        this.publisher = publisher;
     }
 
     /** 세션을 연 사람이 그 세션의 TEACHER. */
@@ -138,6 +149,40 @@ public class StudySessionService {
             events.toSession(sessionId, "ended", sessionId);
         }
         return response(session, SessionRole.TEACHER);
+    }
+
+    /**
+     * FR-SES-07 학생이 방에서 나가기. 참가 기록이 지워지므로 이후 질문 · 챗봇 · 화면공유 요청이 404 로 막히고,
+     * 이미 연결된 LiveKit 은 LiveKitProxy 주기 검사가 끊는다. 선생님은 나갈 수 없다 (방 닫기를 쓴다).
+     * ponytail: 이미 구독 중인 STOMP 세션 토픽은 다시 구독 검사를 하지 않아 "무엇이 바뀌었나(type, id)" 알림은 계속 받을 수 있다.
+     *   내용은 REST 권한 검사에서 막히므로 데이터는 새지 않는다. 알림 자체도 막아야 하면 Presence 의 STOMP 세션을 끊는다.
+     */
+    @Transactional
+    public void leave(Long userId, Long sessionId) {
+        SessionParticipant me = requireParticipant(sessionId, userId);
+        if (me.isTeacher()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "선생님은 나갈 수 없어요. 방 닫기를 써 주세요");
+        }
+        remove(me);
+    }
+
+    /** FR-SES-07 선생님이 학생 내보내기. 내보낸 학생 화면에는 removed 알림. 다시 코드로 참여하는 것은 막지 않는다. */
+    @Transactional
+    public void kick(Long teacherId, Long sessionId, Long studentId) {
+        requireTeacher(sessionId, teacherId);
+        SessionParticipant target = participants.findBySessionIdAndUserId(sessionId, studentId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "참가자를 찾을 수 없어요"));
+        if (target.isTeacher()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "선생님은 내보낼 수 없어요");
+        }
+        remove(target);
+        events.toUser(studentId, "removed", sessionId);
+    }
+
+    private void remove(SessionParticipant p) {
+        participants.delete(p);
+        publisher.publishEvent(new ParticipantRemoved(p.getSessionId(), p.getUserId()));
+        events.toTeacher(p.getSessionId(), "left", p.getUserId());
     }
 
     /** tutor 도메인용: 참가자이고 진행 중인 세션이면 선생님 챗봇 설정. */

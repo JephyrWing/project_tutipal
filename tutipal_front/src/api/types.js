@@ -156,7 +156,8 @@
 /**
  * com.my.tutipal_back.common.realtime.SessionEvents.Event — 무엇이 바뀌었는지만, 내용은 REST 로 다시 읽음
  * @typedef {Object} SessionEvent
- * @property {'quiz' | 'quizClosed' | 'settings' | 'ended' | 'joined' | 'presence' | 'quizStats' | 'quizResult' | 'help' | 'helpAccepted' | 'helpDeclined' | 'helpEnded' | 'materials' | 'notice' | 'notices' | 'posts'} type
+ * left: 학생이 나갔거나 내보내짐(선생님에게, id=userId) · removed: 내가 내보내짐(그 학생에게, id=sessionId)
+ * @property {'quiz' | 'quizClosed' | 'settings' | 'ended' | 'joined' | 'left' | 'removed' | 'presence' | 'quizStats' | 'quizResult' | 'help' | 'helpAccepted' | 'helpDeclined' | 'helpEnded' | 'materials' | 'notice' | 'notices' | 'posts'} type
  * @property {number} id
  */
 

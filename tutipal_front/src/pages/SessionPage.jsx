@@ -79,6 +79,7 @@ function StudentView({ session, reload }) {
   const [quiz, setQuiz] = useState(null)
   const [dismissed, setDismissed] = useState([])
   const [helpKey, setHelpKey] = useState(0)
+  const [removed, setRemoved] = useState(false)
 
   // 화면을 열 때 이미 열려 있는 질문이 있으면 띄운다 (늦게 들어온 학생 · 새로고침)
   const loadOpen = useCallback(() => {
@@ -95,6 +96,7 @@ function StudentView({ session, reload }) {
 
   const live = useSessionEvents(session.id, false, (e) => {
     if (e.type === 'settings' || e.type === 'ended') reload()
+    else if (e.type === 'removed' && e.id === session.id) setRemoved(true)
     else if (e.type === 'quiz') {
       setDismissed((d) => d.filter((x) => x !== e.id))
       refreshQuiz(e.id)
@@ -116,10 +118,23 @@ function StudentView({ session, reload }) {
 
   const showQuiz = quiz && !dismissed.includes(quiz.id) && (quiz.open || quiz.myAnswer)
 
+  // FR-SES-07 선생님이 내보냄: 이후 이 방의 질문 · 챗봇 · 화면공유는 서버에서 막힘
+  if (removed) {
+    return (
+      <div className="center-page">
+        <div className="card session-card">
+          <Mascot mood="curious" size={110} />
+          <p>선생님이 「{session.title}」 방에서 내보냈어요</p>
+          <Link to="/" className="btn">홈으로</Link>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="page session-page">
       <SessionHead session={session} badge="학생" live={live}
-        actions={<StudentHelp sessionId={session.id} reloadKey={helpKey} />} />
+        actions={<><StudentHelp sessionId={session.id} reloadKey={helpKey} /><LeaveButton sessionId={session.id} /></>} />
       {showQuiz && (
         <StudentQuizModal
           key={quiz.id}
@@ -160,8 +175,8 @@ function TeacherView({ session, onChange, reload }) {
   const [helpKey, setHelpKey] = useState(0)
   const [newHelp, setNewHelp] = useState(false)
   const live = useSessionEvents(session.id, true, (e) => {
-    if (e.type === 'joined') reload()   // 참가자 수
-    if (e.type === 'joined' || e.type === 'presence') setPeopleKey((k) => k + 1)
+    if (e.type === 'joined' || e.type === 'left') reload()   // 참가자 수
+    if (e.type === 'joined' || e.type === 'left' || e.type === 'presence') setPeopleKey((k) => k + 1)
     if (e.type === 'quizStats' || e.type === 'quiz' || e.type === 'quizClosed') setQuizKey((k) => k + 1)
     if (e.type === 'notice' || e.type === 'notices') setBoardKeys((v) => ({ ...v, notice: v.notice + 1 }))
     if (e.type === 'posts') setBoardKeys((v) => ({ ...v, board: v.board + 1 }))
@@ -231,7 +246,7 @@ function Participants({ sessionId, reloadKey }) {
       </div>
       {error && <p className="error-text">{error}</p>}
       <table className="table">
-        <thead><tr><th>이름</th><th>접속</th><th>역할</th><th>참여 시각</th></tr></thead>
+        <thead><tr><th>이름</th><th>접속</th><th>역할</th><th>참여 시각</th><th aria-label="관리" /></tr></thead>
         <tbody>
           {list?.map((p) => (
             <tr key={p.userId}>
@@ -239,11 +254,59 @@ function Participants({ sessionId, reloadKey }) {
               <td><span className={`dot${p.online ? '' : ' off'}`} aria-label={p.online ? '접속 중' : '접속 안 함'} /></td>
               <td>{p.role === 'TEACHER' ? '선생님' : '학생'}</td>
               <td className="muted">{new Date(p.joinedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</td>
+              <td>{p.role === 'STUDENT' && <KickButton sessionId={sessionId} student={p} onDone={load} onError={setError} />}</td>
             </tr>
           ))}
         </tbody>
       </table>
     </section>
+  )
+}
+
+/** FR-SES-07 선생님이 학생 내보내기: 한 번 더 확인 */
+function KickButton({ sessionId, student, onDone, onError }) {
+  const [confirming, setConfirming] = useState(false)
+  async function kick() {
+    try {
+      await sessions.kick(sessionId, student.userId)
+      onDone()
+    } catch (e) {
+      onError(e instanceof Error ? e.message : '내보내지 못했어요')
+      setConfirming(false)
+    }
+  }
+  return confirming ? (
+    <span className="row-gap">
+      <button className="btn btn-sm btn-danger" onClick={() => void kick()}>{student.name} 내보내기</button>
+      <button className="btn btn-sm" onClick={() => setConfirming(false)}>취소</button>
+    </span>
+  ) : (
+    <button className="btn btn-sm" onClick={() => setConfirming(true)}>내보내기</button>
+  )
+}
+
+/** FR-SES-07 학생이 방에서 나가기: 한 번 더 확인 후 홈으로 */
+function LeaveButton({ sessionId }) {
+  const navigate = useNavigate()
+  const [confirming, setConfirming] = useState(false)
+  const [error, setError] = useState('')
+  async function leave() {
+    try {
+      await sessions.leave(sessionId)
+      navigate('/')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '나가지 못했어요')
+    }
+  }
+  return confirming ? (
+    <span className="row-gap">
+      <span className="muted small">이 방의 질문 · 챗봇 · 화면공유를 더 쓸 수 없어요.</span>
+      <button className="btn btn-sm btn-danger" onClick={() => void leave()}>나가기</button>
+      <button className="btn btn-sm" onClick={() => setConfirming(false)}>취소</button>
+      {error && <span className="error-text">{error}</span>}
+    </span>
+  ) : (
+    <button className="btn btn-sm" onClick={() => setConfirming(true)}>방 나가기…</button>
   )
 }
 
