@@ -10,7 +10,7 @@
 
 | 항목 | 용도 | 들어가는 곳 |
 | --- | --- | --- |
-| Spring 공개 도메인 | HTTPS 접속점(Cloudflare) | `APP_ALLOWED_ORIGINS`, Tunnel hostname |
+| Spring 공개 도메인: `tutipal.faultfinder.link` (기존 `faultfinder.link`의 하위 도메인. 루트·www는 기존 AWS 연결 유지, 건드리지 않음) | HTTPS 접속점(Cloudflare) | `APP_ALLOWED_ORIGINS`, Tunnel hostname |
 | Cloudflare Tunnel | Spring 8080만 외부 공개 | `CLOUDFLARE_TUNNEL_TOKEN` |
 | Docker Hub 계정 | 이미지 저장소 | GitHub Secrets, 서버 `docker login`(비공개일 때) |
 | S3 버킷·리전·키 | 운영 자료 원본 | `S3_BUCKET`, `AWS_*` |
@@ -95,7 +95,7 @@ nano .env.prod
 - `DOCKERHUB_USERNAME`, `IMAGE_TAG`(배포할 커밋 SHA)
 - `DB_PW`, `AI_INTERNAL_KEY`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`: 충분히 긴 임의 값
 - `LIVEKIT_NODE_IP`: 1단계의 **고정 공인 IP**. Cloudflare IP가 아니다
-- `SESSION_COOKIE_SECURE=true`, `APP_ALLOWED_ORIGINS=https://<Spring 도메인>`
+- `SESSION_COOKIE_SECURE=true`, `APP_ALLOWED_ORIGINS=https://tutipal.faultfinder.link`
 - `S3_BUCKET`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
 - `CLOUDFLARE_TUNNEL_TOKEN`, `CLOUDFLARED_IMAGE`(검증한 태그로 고정)
 - OAuth 앱을 쓰면 `GOOGLE_*`, `NAVER_*`, `KAKAO_*`. 각 제공자 콘솔의 리디렉트 주소도 새 도메인으로 등록한다
@@ -105,8 +105,12 @@ nano .env.prod
 ## 5. Cloudflare Tunnel
 
 1. Cloudflare Zero Trust → Tunnels → 새 Tunnel을 만들고 토큰을 `.env.prod`에 넣는다.
-2. Public hostname: `<Spring 도메인>` → Service `http://backend:8080` (컨테이너 Tunnel 기준).
+2. Public hostname: `tutipal.faultfinder.link` → Service `http://backend:8080` (컨테이너 Tunnel 기준).
 3. 컨테이너 Tunnel을 쓰므로 GitHub 변수 `ENABLE_CLOUDFLARE=true`, 수동 실행 시 `--profile cloudflare`.
+4. 기존 `faultfinder.link`(A, AWS)·`www` 레코드는 수정·삭제하지 않는다. Tunnel이 `tutipal` CNAME만 추가한다.
+5. Cloudflare 계정 이메일 인증이 안 되어 있으면 Zero Trust 기능이 제한될 수 있으므로 먼저 인증한다.
+
+Electron 앱 서버 주소: 설치 앱의 기본값은 `tutipal_front/package.json`의 `tutipal.serverUrl`(현재 `http://127.0.0.1:8080`)이다. 첫 수동 확인은 실행 환경변수 `TUTIPAL_SPRING_URL=https://tutipal.faultfinder.link`로 하고, 배포용 기본값 변경은 별도 작업으로 PM과 정한다.
 
 ## 6. 첫 배포는 수동으로
 
@@ -124,7 +128,7 @@ docker compose --env-file infra/.env.prod -f infra/docker-compose.prod.yml ps
 
 - 모든 컨테이너가 `healthy`/`running`, `docker image inspect <이미지> --format '{{.Architecture}}'`가 `arm64`
 - Flyway 마이그레이션 로그 정상(`docker compose ... logs backend`)
-- `https://<Spring 도메인>`으로 Electron 로그인
+- `https://tutipal.faultfinder.link`로 Electron 로그인
 - 외부망(휴대폰 핫스팟 등)에서 화면공유 연결. 7881/7882와 `LIVEKIT_NODE_IP` 확인 대상이다
 
 `config` 결과 전체나 `.env.prod`를 증거에 붙이지 않는다.
