@@ -21,7 +21,8 @@ jobs:
     needs: checks
     # 기본은 빌드 확인만 실행. 서버와 Secrets 준비 후 Repository variable로 활성화한다.
     if: vars.ENABLE_CD == 'true' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    # 운영 서버는 Oracle ARM(Ampere A1). QEMU 에뮬레이션 대신 ARM 러너에서 직접 빌드한다.
+    runs-on: ubuntu-24.04-arm
     strategy:
       matrix:
         include:
@@ -42,6 +43,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
+          platforms: linux/arm64
           push: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}:latest
