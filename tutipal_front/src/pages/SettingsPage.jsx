@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { api } from '../api/client'
 import { reviewApi } from '../api/review'
 import { useAuth } from '../auth'
 import Icon from '../components/Icon'
@@ -12,7 +13,7 @@ const TABS = [
 ]
 const PROVIDER = { kakao: '카카오', naver: '네이버', google: '구글', dev: '개발용' }
 
-/** 목업 05 설정: 화면 요약 · 복습 기록 저장 켜고 끄기, 기록 전체 삭제, 계정, 로그아웃 */
+/** 목업 05 설정: 화면 요약 · 복습 기록 저장 켜고 끄기, 기록 전체 삭제, 계정, 로그아웃, 회원 탈퇴 */
 export default function SettingsPage() {
   const [tab, setTab] = useState('screen')
   return (
@@ -141,7 +142,46 @@ function AccountTab() {
         <dt>로그인 방식</dt><dd>{PROVIDER[me?.provider] ?? me?.provider}</dd>
       </dl>
       <Logout />
+      <Withdraw />
     </>
+  )
+}
+
+/** 회원 탈퇴 (FR-MY-02): 한 번 더 확인한 뒤 서버가 기록을 지우면 로그인 화면으로 */
+function Withdraw() {
+  const { refresh } = useAuth()
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+  async function run() {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.withdraw()
+      await refresh()
+    } catch (e) {
+      setError(e.message || '탈퇴하지 못했어요. 잠시 뒤 다시 해 주세요')
+      setBusy(false)
+    }
+  }
+  if (confirming) {
+    return (
+      <div className="settings-danger row-gap">
+        <span className="muted small">
+          탈퇴하면 내가 연 세션(안의 퀴즈 · 자료 · 게시판 포함), 내 답안 · 글 · 복습 기록이 모두 지워져요. 되돌릴 수 없어요
+        </span>
+        <button className="btn btn-danger btn-sm" onClick={() => void run()} disabled={busy}>탈퇴</button>
+        <button className="btn btn-sm" onClick={() => setConfirming(false)} disabled={busy}>취소</button>
+        {error && <span className="error-text" role="alert">{error}</span>}
+      </div>
+    )
+  }
+  return (
+    <div className="settings-danger">
+      <button className="btn btn-outline-danger btn-lg" onClick={() => setConfirming(true)}>
+        <Icon name="trash" /> 회원 탈퇴
+      </button>
+    </div>
   )
 }
 
