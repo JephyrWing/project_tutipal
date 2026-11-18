@@ -56,6 +56,12 @@ export const api = {
 
   logout: () => request('/logout', { method: 'POST' }),
 
+  /** 회원 탈퇴: 서버가 기록을 지우고 로그인 세션을 끊는다 (CSRF 값도 바뀌므로 비움) */
+  async withdraw() {
+    await request('/api/users/me', { method: 'DELETE' })
+    csrf = null
+  },
+
   /** 로컬 테스트용 로그인 (서버에서 app.dev-login=true 일 때만 동작, 아니면 404) */
   /** n = 계정 번호 1~9 (선생님 · 학생을 따로 시험할 때) */
   devLogin: (n = 1) => request(`/dev/login?n=${n}`, { method: 'POST' }),
