@@ -14,7 +14,7 @@
 | Spring 공개 도메인 | `tutipal.faultfinder.link` (기존 `faultfinder.link`의 하위 도메인, Porkbun 등록·Cloudflare DNS) | `APP_ALLOWED_ORIGINS`, Tunnel route |
 | 서버 | EC2 `t3.large`(2 vCPU/8 GiB), gp3 30 GiB, Elastic IP | `LIVEKIT_NODE_IP`, `EC2_HOST` |
 | 운영 방식 | 필요할 때만 켜고 쓰지 않을 때 중지(총 사용 시간 예상 24시간 안팎) | — |
-| 자료 저장소 | 임시로 `MATERIAL_STORAGE=local`(서버 볼륨). S3 버킷·IAM 역할은 결정 대기 | `.env.prod` |
+| 자료 저장소 | S3 `tutipal-materials-ecba03`(서울, 퍼블릭 차단). EC2 IAM 역할 `tutipal-ec2-s3`(이 버킷 Get/Put/Delete/List만)로 접근하므로 액세스 키 없음 | `MATERIAL_STORAGE=s3`, `S3_BUCKET` |
 | 모델 제공자 | 외부 API(Workers AI 또는 OpenAI) 결정 대기. 외부 전송 고지·동의 필요 | `MODEL_*`, `OPENAI_*` |
 | PM 승인 | 담당 변경·일정·비용·`ENABLE_CD` | Jira |
 
@@ -104,7 +104,7 @@ Electron 설치 앱의 기본 서버 주소(`tutipal_front/package.json`의 `tut
 ## 8. 남은 확인
 
 - 실제 로그인(각 제공자), 외부망 두 장비 화면공유(7881/7882·`LIVEKIT_NODE_IP`)
-- 자료 저장소(S3 + EC2 IAM 역할 또는 서버 볼륨+백업), 모델 제공자와 외부 전송 동의
+- 모델 제공자와 외부 전송 동의 (S3는 2026-11-19 역할 연결 후 컨테이너에서 put/get/list/delete 확인 완료, 앱 업로드 경로는 로그인 후 확인)
 - DB 백업: 정기 `pg_dump`. Flyway는 자동 롤백이 없다
 - `CLOUDFLARED_IMAGE` 태그 고정, Cloudflare 계정 이메일 인증
 - CD: GitHub Secrets(`EC2_HOST`=Elastic IP, `EC2_USER`=`ubuntu`, `EC2_SSH_KEY`=CD 전용 키)와 `ENABLE_CD`는 PM 승인 후
