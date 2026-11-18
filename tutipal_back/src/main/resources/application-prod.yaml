@@ -1,4 +1,8 @@
 server:
+  # 운영은 Cloudflare Tunnel(cloudflared)이 HTTPS를 끝내고 http로 backend에 전달한다.
+  # X-Forwarded-Proto를 믿어야 OAuth redirect_uri가 https로 만들어진다.
+  # backend는 127.0.0.1과 내부 Docker 네트워크에서만 접근되므로 외부가 이 헤더를 위조할 수 없다.
+  forward-headers-strategy: native
   servlet:
     session:
       cookie:

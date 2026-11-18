@@ -16,7 +16,7 @@ Mindot과 동일한 `main` 푸시 → Docker Hub 이미지 빌드/업로드 → 
 
 외부 공개 전에는 `SESSION_COOKIE_SECURE=true`, `APP_ALLOWED_ORIGINS=https://실제-Spring-도메인`, HTTPS를 설정하고 개발 로그인을 끈다. 인증·LiveKit 중계와 참가자 정리는 구현했으며 외부 재접속·미디어·장애 동작은 별도 검증한다. 같은 PC 실행 확인과 외부 수업 운영을 구분한다.
 
-Docker Hub 이미지 방식은 다음과 같다. 단, CD가 올리는 운영 이미지는 `linux/arm64` 전용이다(3장). Windows/Intel·AMD PC(amd64)에서는 아래 `pull` 방식이 동작하지 않으므로 [DEVELOPMENT.md](DEVELOPMENT.md)의 로컬 Compose(`build:`로 PC에서 직접 빌드)를 사용한다.
+Docker Hub 이미지 방식은 다음과 같다.
 
 ```powershell
 Copy-Item infra/.env.prod.example infra/.env.prod
@@ -31,12 +31,7 @@ Cloudflare Tunnel이 이미 호스트에서 실행 중이면 `--profile cloudfla
 
 다음은 **Linux + Docker Compose + SSH** 서버 기준이다. Windows 개인 PC는 현재 수동 Compose 실행 대상이며, 이 SSH 배포 스크립트를 그대로 사용하는 대상은 아니다.
 
-운영 서버는 **Oracle Cloud ARM(Ampere A1)**으로 계획 중이다(PT-82, 프로토타입). 서버 준비 순서는 [ORACLE_MIGRATION.md](ORACLE_MIGRATION.md)를 따른다. 따라서 `deploy.yml`은 GitHub ARM 러너(`ubuntu-24.04-arm`)에서 이미지를 `linux/arm64`로만 빌드한다. amd64 이미지는 만들지 않는다.
-
-- 팀원 Windows PC의 로컬 개발과 Electron 앱 빌드는 영향이 없다. 로컬 Compose는 각 PC에서 직접 빌드하고, Electron은 CI의 Windows 작업에서 따로 만든다.
-- 서버 관리는 Windows 기본 `ssh`로 접속한다.
-- amd64 서버나 PC에서 운영 이미지를 받아야 하면 `platforms`에 `linux/amd64`를 추가하고 빌드 방식을 함께 조정한다.
-- Oracle은 콘솔 Security List/NSG와 서버 내부 iptables 두 곳 모두에서 `7881/tcp`, `7882/udp`를 열어야 한다. `8080`은 열지 않는다.
+운영 서버는 **AWS EC2 서울(x86_64)**로 프로토타입 중이다(PT-82). 준비 순서와 실제 실행 결과는 [AWS_MIGRATION.md](AWS_MIGRATION.md)를 따른다. 이미지는 기존과 같은 amd64다.
 
 | GitHub 설정 | 종류 | 값 |
 | --- | --- | --- |
