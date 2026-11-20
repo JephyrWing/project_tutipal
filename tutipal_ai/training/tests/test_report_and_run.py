@@ -91,7 +91,72 @@ def test_write_ko_review_has_bom_and_rows(tmp_path):
     assert len(rows) == 2 and rows[1][5] == "a / b"
 
 
+def test_write_ko_review_keeps_human_scores_on_rerun(tmp_path):
+    path = tmp_path / "r.csv"
+    report.write_ko_review([ko("m", "k1", 1.0)], path)
+    rows = list(csv.reader(path.open(encoding="utf-8-sig")))
+    rows[1][-4:] = ["5", "4", "3", "좋음"]
+    with path.open("w", encoding="utf-8-sig", newline="") as f:
+        csv.writer(f).writerows(rows)
+
+    report.write_ko_review([ko("m", "k1", 1.0), ko("m", "k2", 1.0)], path)  # 이어서 실행
+    rows = {r[0]: r for r in csv.reader(path.open(encoding="utf-8-sig"))}
+    assert rows["k1"][-4:] == ["5", "4", "3", "좋음"]
+    assert rows["k2"][-4:] == ["", "", "", ""]
+
+
 # ---------- run_eval ----------
+
+def _args(tmp_path, **over):
+    grade_set = tmp_path / "g.jsonl"
+    if not grade_set.exists():
+        grade_set.write_text('{"id": "1"}\n', encoding="utf-8")
+    base = dict(tasks=["grade"], grade_set=grade_set, eval_set=tmp_path / "c.jsonl", ko_set=tmp_path / "k.jsonl",
+                num_predict=2048, grade_num_predict=512, ko_temperature=0.0, test_timeout=20, sandbox="docker")
+    return SimpleNamespace(**(base | over))
+
+
+def test_run_config_allows_same_conditions_and_new_models(tmp_path):
+    old = run_eval.run_config(_args(tmp_path), [{"name": "a"}], {"a": "sha-a"})
+    new = run_eval.run_config(_args(tmp_path), [{"name": "a"}, {"name": "b"}], {"a": "sha-a", "b": "sha-b"})
+    assert run_eval.config_conflicts(old, new) == []
+    assert run_eval.merge_config(old, new)["models"] == {"a": "sha-a", "b": "sha-b"}
+
+
+def test_run_config_rejects_new_weights_under_same_name(tmp_path):
+    old = run_eval.run_config(_args(tmp_path), [{"name": "tutipal-grader"}], {"tutipal-grader": "sha-v1"})
+    new = run_eval.run_config(_args(tmp_path), [{"name": "tutipal-grader"}], {"tutipal-grader": "sha-v2"})
+    problems = run_eval.config_conflicts(old, new)
+    assert len(problems) == 1 and "가중치" in problems[0]
+
+
+def test_run_config_rejects_changed_eval_file_or_settings(tmp_path):
+    old = run_eval.run_config(_args(tmp_path), [{"name": "a"}], {"a": "x"})
+    (tmp_path / "g.jsonl").write_text('{"id": "2"}\n', encoding="utf-8")
+    new = run_eval.run_config(_args(tmp_path, grade_num_predict=256), [{"name": "a"}], {"a": "x"})
+    problems = run_eval.config_conflicts(old, new)
+    assert any("평가 파일" in p for p in problems) and any("생성 설정" in p for p in problems)
+
+
+def test_main_refuses_resume_when_weights_changed(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(run_eval, "TRAINING_DIR", tmp_path)
+    grade_set = tmp_path / "g.jsonl"
+    grade_set.write_text(json.dumps({"id": "g1", "qid": "q", "subject": "s", "question": "Q", "model_answer": "M",
+                                     "student_answer": "S", "label": True, "kind": "exact"}) + "\n", encoding="utf-8")
+    digests = {"m": "sha-v1"}
+
+    class Client(FakeClient):
+        def model_digests(self):
+            return dict(digests)
+
+    monkeypatch.setattr(run_eval, "OllamaClient", lambda url: Client('{"correct": true}'))
+    argv = ["--models", "m", "--grade-set", str(grade_set), "--run-name", "r"]
+    assert run_eval.main(argv) == 0
+    digests["m"] = "sha-v2"
+    assert run_eval.main(argv) == 2
+    assert "가중치" in capsys.readouterr().err
+    recs = run_eval.load_jsonl(tmp_path / "results" / "r" / "results.jsonl")
+    assert len(recs) == 1 and recs[0]["model_digest"] == "sha-v1"
 
 def test_done_keys_retries_llm_errors():
     recs = [code("m", "1", "easy", "passed"), code("m", "2", "easy", "llm_error")]

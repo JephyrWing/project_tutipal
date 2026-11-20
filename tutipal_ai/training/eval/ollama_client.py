@@ -41,19 +41,23 @@ class OllamaClient:
         except (urllib.error.URLError, TimeoutError) as e:
             raise OllamaError(f"Ollama 연결 실패({self.base_url}): {e}") from e
 
-    def installed_models(self) -> set[str]:
+    def model_digests(self) -> dict[str, str]:
+        """설치된 모델 이름 → 가중치 digest. 같은 이름에 다른 가중치를 올렸는지 구분하는 데 쓴다."""
         try:
             with urllib.request.urlopen(self.base_url + "/api/tags", timeout=10) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError) as e:
             raise OllamaError(f"Ollama 연결 실패({self.base_url}): {e}") from e
-        names = set()
+        digests: dict[str, str] = {}
         for m in data.get("models", []):
             name = m.get("name") or m.get("model") or ""
-            names.add(name)
+            digests[name] = m.get("digest") or ""
             if name.endswith(":latest"):
-                names.add(name[: -len(":latest")])
-        return names
+                digests[name[: -len(":latest")]] = digests[name]
+        return digests
+
+    def installed_models(self) -> set[str]:
+        return set(self.model_digests())
 
     def chat(self, model: str, messages: list[dict], *, think: bool | None = False,
              temperature: float = 0.0, seed: int = 0, num_ctx: int = 4096,

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -166,9 +167,50 @@ def write_outputs(run_dir: Path, records: list[dict], models: list[dict]) -> str
     return md
 
 
+def task_paths(args) -> dict[str, Path]:
+    return {"grade": args.grade_set, "code": args.eval_set, "ko": args.ko_set}
+
+
 def load_items(args) -> dict[str, list[dict]]:
-    paths = {"grade": args.grade_set, "code": args.eval_set, "ko": args.ko_set}
+    paths = task_paths(args)
     return {t: load_jsonl(paths[t])[: args.limit] for t in args.tasks}
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def run_config(args, models: list[dict], digests: dict[str, str]) -> dict:
+    """이어서 실행해도 되는지 판단할 조건: 평가 파일·프롬프트·생성 설정·모델 가중치."""
+    paths = task_paths(args)
+    return {
+        "settings": {"num_predict": args.num_predict, "grade_num_predict": args.grade_num_predict,
+                     "ko_temperature": args.ko_temperature, "test_timeout": args.test_timeout,
+                     "sandbox": args.sandbox},
+        "prompts": _sha256((GRADE_SYSTEM + CODE_SYSTEM + TUTOR_SYSTEM).encode("utf-8")),
+        "data": {t: _sha256(paths[t].read_bytes()) for t in args.tasks},
+        "models": {m["name"]: digests.get(m["name"], "") for m in models},
+    }
+
+
+def config_conflicts(old: dict, new: dict) -> list[str]:
+    """이전 실행과 겹치는 부분이 달라졌으면 이유 목록. 새 과제·새 모델 추가는 허용한다."""
+    problems = []
+    if old.get("settings") != new["settings"]:
+        problems.append(f"생성 설정이 다름: {old.get('settings')} → {new['settings']}")
+    if old.get("prompts") != new["prompts"]:
+        problems.append("프롬프트가 바뀜")
+    for task, digest in new["data"].items():
+        if task in old.get("data", {}) and old["data"][task] != digest:
+            problems.append(f"{task} 평가 파일이 바뀜")
+    for name, digest in new["models"].items():
+        if name in old.get("models", {}) and old["models"][name] != digest:
+            problems.append(f"{name} 모델 가중치가 바뀜(digest {old['models'][name][:12]} → {digest[:12]})")
+    return problems
+
+
+def merge_config(old: dict, new: dict) -> dict:
+    return new | {"data": old.get("data", {}) | new["data"], "models": old.get("models", {}) | new["models"]}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -195,11 +237,11 @@ def main(argv: list[str] | None = None) -> int:
 
     client = OllamaClient(args.ollama_url)
     try:
-        installed = client.installed_models()
+        digests = client.model_digests()
     except OllamaError as e:
         print(f"오류: {e}\nOllama를 실행했는지 확인하세요.", file=sys.stderr)
         return 2
-    missing = [m["name"] for m in models if m["name"] not in installed]
+    missing = [m["name"] for m in models if m["name"] not in digests]
     if missing:
         print("설치되지 않은 모델이 있습니다. 먼저 받으세요:", file=sys.stderr)
         for name in missing:
@@ -216,6 +258,19 @@ def main(argv: list[str] | None = None) -> int:
 
     run_dir = TRAINING_DIR / "results" / args.run_name
     run_dir.mkdir(parents=True, exist_ok=True)
+    config_path = run_dir / "run_config.json"
+    config = run_config(args, models, digests)
+    if config_path.exists():
+        old = json.loads(config_path.read_text(encoding="utf-8"))
+        problems = config_conflicts(old, config)
+        if problems:
+            print(f"오류: '{args.run_name}' 실행과 평가 조건이 달라 이어서 할 수 없습니다.", file=sys.stderr)
+            for p in problems:
+                print(f"  - {p}", file=sys.stderr)
+            print("새 --run-name으로 실행하세요(예: 파인튜닝 후에는 grade-after-ft).", file=sys.stderr)
+            return 2
+        config = merge_config(old, config)
+    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
     results_path = run_dir / "results.jsonl"
     records = load_jsonl(results_path) if results_path.exists() else []
     done = done_keys(records)
@@ -226,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
                     if (t, model["name"], it["id"]) not in done]
             print(f"== {model.get('label', model['name'])}: {len(todo)}문항 남음")
             for i, (task, item) in enumerate(todo, 1):
-                rec = EVALUATORS[task](client, model, item, args)
+                rec = EVALUATORS[task](client, model, item, args) | {"model_digest": digests.get(model["name"], "")}
                 out.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 out.flush()
                 records.append(rec)

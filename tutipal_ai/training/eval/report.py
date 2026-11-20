@@ -210,13 +210,34 @@ def write_grade_errors(records: list[dict], path: Path) -> None:
                         "정답" if r["label"] else "오답", pred, r.get("response", "")])
 
 
+KO_REVIEW_HEADER = ["문항", "분류", "모델", "질문", "답변", "확인 항목",
+                    "정확성(1-5)", "한국어 자연스러움(1-5)", "튜터 태도(1-5)", "메모"]
+_KO_SCORE_COLS = 4  # 마지막 4칸은 사람이 채우는 칸
+
+
+def _existing_scores(path: Path) -> dict[tuple[str, str], list[str]]:
+    """이미 입력된 사람 점수: (문항, 모델) → 점수 칸. 이어서 실행해도 지워지지 않게 보존한다."""
+    if not path.exists():
+        return {}
+    with path.open(encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.reader(f))
+    scores = {}
+    for row in rows[1:]:
+        if len(row) == len(KO_REVIEW_HEADER) and any(c.strip() for c in row[-_KO_SCORE_COLS:]):
+            scores[(row[0], row[2])] = row[-_KO_SCORE_COLS:]
+    return scores
+
+
 def write_ko_review(records: list[dict], path: Path) -> None:
-    """사람이 점수를 매길 표. 엑셀에서 한글이 깨지지 않게 UTF-8 BOM으로 쓴다."""
+    """사람이 점수를 매길 표. 엑셀에서 한글이 깨지지 않게 UTF-8 BOM으로 쓴다. 기존 점수는 보존한다."""
+    kept = _existing_scores(path)
     ko = sorted((r for r in records if r["kind"] == "ko"), key=lambda r: (r["item_id"], r["model"]))
-    with path.open("w", encoding="utf-8-sig", newline="") as f:
+    tmp = path.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["문항", "분류", "모델", "질문", "답변", "확인 항목",
-                    "정확성(1-5)", "한국어 자연스러움(1-5)", "튜터 태도(1-5)", "메모"])
+        w.writerow(KO_REVIEW_HEADER)
         for r in ko:
+            scores = kept.get((r["item_id"], r["model"]), [""] * _KO_SCORE_COLS)
             w.writerow([r["item_id"], r.get("category", ""), r["model"], r.get("question", ""),
-                        r.get("answer", ""), " / ".join(r.get("checklist", [])), "", "", "", ""])
+                        r.get("answer", ""), " / ".join(r.get("checklist", [])), *scores])
+    tmp.replace(path)  # 쓰다가 멈춰도 기존 파일이 반쯤 지워지지 않게
