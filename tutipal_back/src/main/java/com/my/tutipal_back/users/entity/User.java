@@ -26,7 +26,7 @@ public class User extends BaseTimeEntity {
     @Column(nullable = false, length = 100)
     private String providerId;      // 소셜 쪽 사용자 id
 
-    private String email;           // 동의 안 하면 null 일 수 있음
+    // 이메일은 받지 않는다(PT-14). users.email 컬럼은 DB에 남겨 두지만 매핑하지 않는다(V13에서 기존 값 정리).
 
     @Column(nullable = false, length = 50)
     private String name;
@@ -38,23 +38,20 @@ public class User extends BaseTimeEntity {
     protected User() {
     }
 
-    public User(String provider, String providerId, String email, String name) {
+    public User(String provider, String providerId, String name) {
         this.provider = provider;
         this.providerId = providerId;
-        this.email = email;
         this.name = name;
         this.role = Role.USER;      // 선생님/학생은 세션마다 정해짐 (studysession)
     }
 
-    /** 로그인할 때마다 소셜 쪽 최신 이름/이메일로 갱신. */
-    public void updateProfile(String email, String name) {
-        this.email = email;
+    /** 로그인할 때마다 소셜 쪽 최신 이름으로 갱신. */
+    public void updateProfile(String name) {
         this.name = name;
     }
 
     public Long getId() { return id; }
     public String getProvider() { return provider; }
-    public String getEmail() { return email; }
     public String getName() { return name; }
     public Role getRole() { return role; }
 }

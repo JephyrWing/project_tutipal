@@ -61,7 +61,7 @@ public class AppLoginController {
         }
         if (devLogin && provider.equals("dev")) {
             // 개발용: 소셜 키 없이 딥링크 흐름 전체를 시험 (app.dev-login=true 일 때만)
-            User user = userService.upsert(new SocialProfile("dev", "dev-1", "dev@example.com", "개발 사용자"));
+            User user = userService.upsert(new SocialProfile("dev", "dev-1", "개발 사용자"));
             return new RedirectView("/auth/app/done?code=" + appLogin.issue(user.getId(), challenge));
         }
         if (!PROVIDERS.contains(provider)) {
