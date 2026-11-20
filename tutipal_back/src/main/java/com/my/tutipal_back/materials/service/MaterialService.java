@@ -25,8 +25,8 @@ import com.my.tutipal_back.common.exception.ApiException;
 import com.my.tutipal_back.common.realtime.SessionEvents;
 
 /**
- * 세션 자료 (목업 28) + RAG 검색. 선생님이 올리면 커밋 뒤 가상 스레드에서 글자 뽑기 → 조각 → 임베딩 → 청크 저장.
- * 학생 · 선생님 모두 목록 보기 · 내려받기. 챗봇은 search() 로 관련 조각만 받는다.
+ * 세션 자료 (목업 28). 선생님이 올리면 커밋 뒤 가상 스레드에서 글자 뽑기 → 조각 → 임베딩 → 청크 저장.
+ * 학생 · 선생님 모두 목록 보기 · 내려받기.
  */
 @Service
 @Transactional(readOnly = true)
@@ -38,15 +38,6 @@ public class MaterialService {
     private static final int CHUNK = 800;
     private static final int OVERLAP = 100;
     private static final int BATCH = 32;
-    /** 이보다 덜 비슷하면 "관련 없음" 으로 보고 챗봇에 안 넘김. ponytail: bge-m3 로 몇 번 본 값, 자료가 쌓이면 다시 맞추기 */
-    static final double MIN_SIMILARITY = 0.5;
-
-    public record Hit(String filename, Integer page, String content, double similarity) {
-        public String source() {
-            return page == null ? filename : filename + " p." + page;
-        }
-    }
-
     private final MaterialRepository materials;
     private final StudySessionService sessions;
     private final AiClient ai;
@@ -122,32 +113,6 @@ public class MaterialService {
         materials.deleteById(materialId);   // 청크는 ON DELETE CASCADE
         AfterCommit.run(() -> objects.delete(key));
         events.toSession(m.sessionId(), "materials", materialId);
-    }
-
-    /**
-     * 챗봇용: 질문과 관련 있는 자료 조각 (최대 k개, MIN_SIMILARITY 이상). 자료가 없거나 AI 가 안 되면 빈 목록 (챗봇은 그냥 답함).
-     * 세션 참가자 확인은 부르는 쪽(TutorService → chatSettings)에서 이미 함.
-     */
-    public List<Hit> search(Long sessionId, String query, int k) {
-        Boolean any = jdbc.queryForObject("SELECT EXISTS (SELECT 1 FROM material_chunks WHERE session_id = ?)", Boolean.class, sessionId);
-        if (!Boolean.TRUE.equals(any) || query == null || query.isBlank()) {
-            return List.of();
-        }
-        try {
-            AiClient.EmbedResponse embedded = ai.embedWithModel(List.of(query.strip()));
-            String vec = AiClient.pgVector(embedded.vectors().getFirst());
-            return jdbc.query("""
-                    SELECT m.filename, c.page, c.content, 1 - (c.embedding <=> ?::vector) AS sim
-                    FROM material_chunks c JOIN materials m ON m.id = c.material_id
-                    WHERE c.session_id = ? AND c.embedding_model = ?
-                    ORDER BY c.embedding <=> ?::vector LIMIT ?""",
-                    (rs, i) -> new Hit(rs.getString(1), (Integer) rs.getObject(2), rs.getString(3), rs.getDouble(4)),
-                    vec, sessionId, embedded.model(), vec, k)
-                    .stream().filter(h -> h.similarity() >= MIN_SIMILARITY).toList();
-        } catch (RuntimeException e) {
-            log.warn("material search failed: {}", e.getClass().getSimpleName());
-            return List.of();
-        }
     }
 
     /** 커밋 뒤 가상 스레드: 글자 뽑기 → 조각 → 임베딩 → 저장. 실패하면 FAILED + 이유 */
