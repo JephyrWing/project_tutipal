@@ -120,7 +120,15 @@ def test_run_config_allows_same_conditions_and_new_models(tmp_path):
     old = run_eval.run_config(_args(tmp_path), [{"name": "a"}], {"a": "sha-a"})
     new = run_eval.run_config(_args(tmp_path), [{"name": "a"}, {"name": "b"}], {"a": "sha-a", "b": "sha-b"})
     assert run_eval.config_conflicts(old, new) == []
-    assert run_eval.merge_config(old, new)["models"] == {"a": "sha-a", "b": "sha-b"}
+    assert run_eval.merge_config(old, new)["models"] == {"a": {"digest": "sha-a", "think": False},
+                                                          "b": {"digest": "sha-b", "think": False}}
+
+
+def test_run_config_rejects_changed_think_setting(tmp_path):
+    old = run_eval.run_config(_args(tmp_path), [{"name": "a", "think": False}], {"a": "x"})
+    new = run_eval.run_config(_args(tmp_path), [{"name": "a", "think": True}], {"a": "x"})
+    problems = run_eval.config_conflicts(old, new)
+    assert len(problems) == 1 and "생각 모드" in problems[0]
 
 
 def test_run_config_rejects_new_weights_under_same_name(tmp_path):

@@ -189,7 +189,9 @@ def run_config(args, models: list[dict], digests: dict[str, str]) -> dict:
                      "sandbox": args.sandbox},
         "prompts": _sha256((GRADE_SYSTEM + CODE_SYSTEM + TUTOR_SYSTEM).encode("utf-8")),
         "data": {t: _sha256(paths[t].read_bytes()) for t in args.tasks},
-        "models": {m["name"]: digests.get(m["name"], "") for m in models},
+        # 같은 모델이라도 가중치(digest)나 생각 모드 설정이 다르면 다른 조건이다
+        "models": {m["name"]: {"digest": digests.get(m["name"], ""), "think": m.get("think", False)}
+                   for m in models},
     }
 
 
@@ -203,9 +205,15 @@ def config_conflicts(old: dict, new: dict) -> list[str]:
     for task, digest in new["data"].items():
         if task in old.get("data", {}) and old["data"][task] != digest:
             problems.append(f"{task} 평가 파일이 바뀜")
-    for name, digest in new["models"].items():
-        if name in old.get("models", {}) and old["models"][name] != digest:
-            problems.append(f"{name} 모델 가중치가 바뀜(digest {old['models'][name][:12]} → {digest[:12]})")
+    for name, cur in new["models"].items():
+        prev = old.get("models", {}).get(name)
+        if prev is None:
+            continue
+        if not isinstance(prev, dict) or prev.get("digest") != cur["digest"]:
+            was = prev.get("digest", "") if isinstance(prev, dict) else str(prev)
+            problems.append(f"{name} 모델 가중치가 바뀜(digest {was[:12]} → {cur['digest'][:12]})")
+        elif prev.get("think") != cur["think"]:
+            problems.append(f"{name} 생각 모드 설정이 바뀜(think {prev.get('think')} → {cur['think']})")
     return problems
 
 
