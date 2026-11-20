@@ -29,11 +29,11 @@ public class UserService {
     public User upsert(SocialProfile profile) {
         return userRepository.findByProviderAndProviderId(profile.provider(), profile.providerId())
                 .map(user -> {
-                    user.updateProfile(profile.email(), profile.displayName());
+                    user.updateProfile(profile.displayName());
                     return user;
                 })
                 .orElseGet(() -> userRepository.save(new User(
-                        profile.provider(), profile.providerId(), profile.email(), profile.displayName())));
+                        profile.provider(), profile.providerId(), profile.displayName())));
     }
 
     /** 다른 도메인(auth)용: 엔티티 그대로 (세션 로그인 만들 때). */

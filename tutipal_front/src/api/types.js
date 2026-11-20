@@ -11,7 +11,6 @@
  * @typedef {Object} UserResponse
  * @property {number} id
  * @property {string} name
- * @property {string | null} email
  * @property {SocialProvider | 'dev'} provider
  * @property {Role} role
  */
