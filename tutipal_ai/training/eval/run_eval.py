@@ -186,7 +186,7 @@ def run_config(args, models: list[dict], digests: dict[str, str]) -> dict:
     return {
         "settings": {"num_predict": args.num_predict, "grade_num_predict": args.grade_num_predict,
                      "ko_temperature": args.ko_temperature, "test_timeout": args.test_timeout,
-                     "sandbox": args.sandbox},
+                     "sandbox": args.sandbox, "limit": args.limit},
         "prompts": _sha256((GRADE_SYSTEM + CODE_SYSTEM + TUTOR_SYSTEM).encode("utf-8")),
         "data": {t: _sha256(paths[t].read_bytes()) for t in args.tasks},
         # 같은 모델이라도 가중치(digest)나 생각 모드 설정이 다르면 다른 조건이다

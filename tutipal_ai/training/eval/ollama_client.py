@@ -75,13 +75,11 @@ class OllamaClient:
         try:
             data = self._post("/api/chat", payload)
         except OllamaError as e:
-            # 생각 모드를 지원하지 않는 모델은 think 필드 없이 다시 보낸다
+            # 설정을 몰래 빼고 다시 보내면 기록과 실제 조건이 달라지므로, 오류로 남기고 설정을 고치게 한다
             if think is not None and "think" in str(e).lower():
-                payload.pop("think")
-                start = time.perf_counter()
-                data = self._post("/api/chat", payload)
-            else:
-                raise
+                raise OllamaError(f"{model}이(가) think={think} 설정을 받지 않습니다. "
+                                  f"candidates.json에서 이 모델의 think를 null로 바꾸고 새 --run-name으로 실행하세요. ({e})") from e
+            raise
         wall = time.perf_counter() - start
         eval_tokens = int(data.get("eval_count") or 0)
         eval_ns = data.get("eval_duration") or 0

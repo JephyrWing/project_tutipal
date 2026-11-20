@@ -112,7 +112,8 @@ def _args(tmp_path, **over):
     if not grade_set.exists():
         grade_set.write_text('{"id": "1"}\n', encoding="utf-8")
     base = dict(tasks=["grade"], grade_set=grade_set, eval_set=tmp_path / "c.jsonl", ko_set=tmp_path / "k.jsonl",
-                num_predict=2048, grade_num_predict=512, ko_temperature=0.0, test_timeout=20, sandbox="docker")
+                num_predict=2048, grade_num_predict=512, ko_temperature=0.0, test_timeout=20, sandbox="docker",
+                limit=None)
     return SimpleNamespace(**(base | over))
 
 
@@ -122,6 +123,28 @@ def test_run_config_allows_same_conditions_and_new_models(tmp_path):
     assert run_eval.config_conflicts(old, new) == []
     assert run_eval.merge_config(old, new)["models"] == {"a": {"digest": "sha-a", "think": False},
                                                           "b": {"digest": "sha-b", "think": False}}
+
+
+def test_run_config_rejects_changed_limit(tmp_path):
+    old = run_eval.run_config(_args(tmp_path, limit=10), [{"name": "a"}], {"a": "x"})
+    new = run_eval.run_config(_args(tmp_path, limit=5), [{"name": "a"}], {"a": "x"})
+    assert any("생성 설정" in p for p in run_eval.config_conflicts(old, new))
+
+
+def test_chat_does_not_silently_drop_rejected_think(monkeypatch):
+    from eval.ollama_client import OllamaClient
+
+    client = OllamaClient()
+    sent = []
+
+    def fake_post(path, payload):
+        sent.append(dict(payload))
+        raise OllamaError('HTTP 400: {"error":"model does not support thinking"}')
+
+    monkeypatch.setattr(client, "_post", fake_post)
+    with pytest.raises(OllamaError, match="think"):
+        client.chat("m", [], think=False)
+    assert len(sent) == 1  # think를 빼고 다시 보내지 않는다
 
 
 def test_run_config_rejects_changed_think_setting(tmp_path):
