@@ -37,8 +37,8 @@ public class DevLoginController {
                                      HttpServletRequest request, HttpServletResponse response) {
         int k = Math.clamp(n, 1, 9);
         User user = userService.upsert(k == 1
-                ? new SocialProfile("dev", "dev-1", "dev@example.com", "개발 사용자")
-                : new SocialProfile("dev", "dev-" + k, "dev" + k + "@example.com", "개발 사용자 " + k));
+                ? new SocialProfile("dev", "dev-1", "개발 사용자")
+                : new SocialProfile("dev", "dev-" + k, "개발 사용자 " + k));
         sessionLogin.login(user, request, response);
         return Map.of("name", user.getName());
     }

@@ -138,7 +138,6 @@ function AccountTab() {
       <Head mood="idle" title="계정" text="TUTIPAL 에 로그인한 계정이에요." />
       <dl className="account-list">
         <dt>이름</dt><dd>{me?.name}</dd>
-        <dt>이메일</dt><dd>{me?.email ?? '없음'}</dd>
         <dt>로그인 방식</dt><dd>{PROVIDER[me?.provider] ?? me?.provider}</dd>
       </dl>
       <Logout />
