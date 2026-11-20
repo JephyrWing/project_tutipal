@@ -57,12 +57,14 @@ class OllamaClient:
 
     def chat(self, model: str, messages: list[dict], *, think: bool | None = False,
              temperature: float = 0.0, seed: int = 0, num_ctx: int = 4096,
-             num_predict: int = 1024) -> ChatResult:
+             num_predict: int = 1024, json_mode: bool = False) -> ChatResult:
         payload: dict = {
             "model": model, "messages": messages, "stream": False,
             "options": {"temperature": temperature, "seed": seed, "num_ctx": num_ctx,
                         "num_predict": num_predict},
         }
+        if json_mode:  # 추론 서버(app/clients/ollama_client.py)의 json_mode와 같은 방식
+            payload["format"] = "json"
         if think is not None:
             payload["think"] = think
         start = time.perf_counter()
