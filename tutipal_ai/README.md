@@ -13,6 +13,8 @@ Mindot의 단일 `app.py`/에이전트 파일 구조를 복사하지 않고 MVC�
 
 PL 저장소 `jeonseolmin/tutipal`의 main `d60f705748da927375d77aedc11165ca0ea1f49e`에서 채팅·비전·임베딩 계산을 현재 MVC로 옮겼다. 원본의 자료 추출·DB 점검 엔드포인트와 PostgreSQL/pgvector 드라이버는 옮기지 않았다. PDF 추출·청킹·DB 검색·S3는 Spring이 담당한다.
 
+수업 학생과 개인 학습의 LangGraph 채팅 Agent는 [AI 워크플로 계약](../docs/AI_WORKFLOW_CONTRACT.md)의 구현 대상이다. Spring이 Agent와 허용 도구를 정하고 FastAPI는 전달받은 범위에서 실행한다. 화면 분석·요약 계산은 두 모드의 위젯 자동 요약에도 사용한다.
+
 | 경로 | 입력·출력 | 인증 |
 | --- | --- | --- |
 | `GET /internal/ai/health`, `/health` | `status=ok`, 실제 Ollama 모델 파일을 확인한 `model_ready` | 없음, 내부 네트워크 전용 |

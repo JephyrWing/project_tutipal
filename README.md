@@ -53,6 +53,7 @@ AI는 `MODEL_PROVIDER=auto`에서 설치된 Ollama 모델을 우선하고, 해�
 ## 안내
 
 - [설계 원본](docs/TUTIPAL_DESIGN.md)
+- [수업 학생·개인 학습 Agent와 AI 워크플로 계약](docs/AI_WORKFLOW_CONTRACT.md)
 - [설치·개발·검증 결과](docs/DEVELOPMENT.md)
 - [PL 기능 이식 범위](docs/PORTING.md)
 - [외부 배포 준비](docs/DEPLOYMENT.md)
