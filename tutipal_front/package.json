@@ -14,6 +14,8 @@
     "dev": "node scripts/dev.mjs",
     "build": "vite build",
     "start": "electron .",
+    "test:e2e": "playwright test",
+    "test:e2e:list": "playwright test --list",
     "pack": "npm run build && electron-builder --dir --publish never",
     "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
     "dist:mac": "npm run build && electron-builder --mac dmg --publish never",
@@ -30,6 +32,7 @@
     "ws": "8.18.3"
   },
   "devDependencies": {
+    "@playwright/test": "1.65.1",
     "@vitejs/plugin-react": "6.3.0",
     "electron": "45.3.3",
     "electron-builder": "26.17.0",
