@@ -166,7 +166,7 @@ function StudentView({ session, reload }) {
   )
 }
 
-/** 목업 20 선생님 모드: 참가자 · 주제 설정(목업 21) · 챗봇 미리보기 · 세션 종료 */
+/** 목업 20 선생님 모드: 참가자 · 주제 설정(목업 21) · 출제와 답안 관리 · 세션 종료 */
 function TeacherView({ session, onChange, reload }) {
   const [tab, setTab] = useState('people')
   const [boardKeys, setBoardKeys] = useState({ notice: 0, board: 0, materials: 0 })
@@ -205,7 +205,6 @@ function TeacherView({ session, onChange, reload }) {
         </button>
         <button role="tab" aria-selected={tab === 'materials'} onClick={() => setTab('materials')}>자료 · 공지</button>
         <button role="tab" aria-selected={tab === 'board'} onClick={() => setTab('board')}>게시판</button>
-        <button role="tab" aria-selected={tab === 'chat'} onClick={() => setTab('chat')}>챗봇 미리보기</button>
         <EndButton session={session} onChange={onChange} />
       </nav>
       {tab === 'people' && <Participants sessionId={session.id} reloadKey={peopleKey} />}
@@ -220,7 +219,6 @@ function TeacherView({ session, onChange, reload }) {
       )}
       {tab === 'board' && <BoardPanel sessionId={session.id} teacher reloadKey={boardKeys.board} />}
       {tab === 'settings' && <Settings session={session} onChange={onChange} />}
-      {tab === 'chat' && <ChatPanel topic={session.topic} sessionId={session.id} />}
     </div>
   )
 }

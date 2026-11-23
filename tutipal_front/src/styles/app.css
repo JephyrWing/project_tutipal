@@ -184,6 +184,12 @@
 .input:focus { border-color: var(--primary); }
 .quiz-tab { display: flex; flex-direction: column; gap: 16px; overflow: auto; padding-bottom: 8px; }
 .quiz-form { gap: 12px; }
+.quiz-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.teacher-quiz-dialog { border: 0; margin: auto; width: min(720px, calc(100% - 32px)); }
+.teacher-quiz-dialog:not([open]) { display: none; }
+.teacher-quiz-dialog::backdrop { background: rgba(31, 38, 51, 0.35); }
+.teacher-quiz-dialog h2 { margin: 0; }
+.teacher-quiz-dialog .quiz-question { overflow-wrap: anywhere; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; }
 .seg button { border: 0; background: var(--surface); padding: 10px 22px; font-weight: 700; cursor: pointer; color: var(--text-2); }
 .seg button[aria-selected='true'] { background: var(--primary); color: #fff; }
@@ -208,11 +214,11 @@
 .bar-fill.low { background: var(--red); }
 .quiz-pct { font-size: 18px; text-align: right; }
 .quiz-count { font-size: 13px; white-space: nowrap; }
-.answer-review { padding: 4px 4px 16px 66px; display: flex; flex-direction: column; gap: 8px; }
+.answer-review { display: flex; flex-direction: column; gap: 8px; }
 .answer-review p { margin: 0; }
 .answer-item { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px dashed var(--line); flex-wrap: wrap; }
 .answer-name { min-width: 90px; }
-.answer-text { flex: 1; min-width: 200px; }
+.answer-text { flex: 1; min-width: min(200px, 100%); overflow-wrap: anywhere; }
 .answer-actions { display: inline-flex; gap: 6px; }
 .modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgba(31, 38, 51, 0.35); }
 .modal { width: min(560px, 100%); max-height: calc(100vh - 32px); overflow: auto; padding: 28px; border-radius: var(--radius-lg); display: flex; flex-direction: column; gap: 16px; box-shadow: var(--shadow-float); }
@@ -231,7 +237,10 @@
 @media (max-width: 860px) {
   .quiz-row-head { grid-template-columns: 44px 1fr 48px; }
   .quiz-row-head .bar, .quiz-row-head .quiz-count { display: none; }
-  .answer-review { padding-left: 4px; }
+}
+@media (max-width: 650px) {
+  .quiz-form > .row-between { flex-wrap: wrap; gap: 8px; }
+  .quiz-form .ai-gen { min-width: min(280px, 100%); }
 }
 
 /* 3단계: 화면 분석 동의(04) · 위젯 요약/질문(07 · 08) · 앱 로그인 대기(02) */
