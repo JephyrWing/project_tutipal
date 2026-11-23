@@ -4,7 +4,7 @@ import { ApiRequestError } from '../api/client'
 import { reviewApi } from '../api/review'
 import { screenApi } from '../api/screen'
 import Icon from '../components/Icon'
-import Mascot, {  } from '../components/Mascot'
+import Mascot from '../components/Mascot'
 
 /** 화면이 그대로면 서버를 부르지 않으므로, 40초마다 한 장 찍어 비교만 한다 */
 const SUMMARY_EVERY_MS = 40_000
@@ -24,20 +24,27 @@ export default function WidgetPage() {
   const [text, setText] = useState('')
   const [mood, setMood] = useState('happy')
   const busy = useRef(false)
-  /** 동의한 창이 닫혔거나 다시 열려서 못 찾음 → 다시 골라야 함 */
+  /** 선택한 창이 닫히면 다시 선택해야 한다. */
   const [gone, setGone] = useState(false)
   const lastSeen = useRef(Date.now())
+  const analysisRevision = useRef(0)
   const [suggestion, setSuggestion] = useState(null)
 
-  /** 복습 기록 (동의 안 했으면 서버가 그냥 무시). 실패해도 위젯은 계속 */
-  const observe = async (summary) => {
+  /** 진행 중인 분석의 복습 기록만 보내고, 기록 실패 시 위젯은 계속 실행한다. */
+  const observe = async (summary, revision) => {
     const seconds = Math.round((Date.now() - lastSeen.current) / 1000)
     lastSeen.current = Date.now()
-    const show = (r) => r.suggestion && setSuggestion(r.suggestion)
+    const show = (result) => {
+      if (analysisRevision.current === revision && result.suggestion) {
+        setSuggestion(result.suggestion)
+      }
+    }
     try {
       if (summary) {
         show(await reviewApi.observe(null, seconds))   // 지금까지 본 시간은 직전 화면(묶음)에
-        show(await reviewApi.observe(summary, 0))      // 새 화면은 0초부터
+        if (analysisRevision.current === revision) {
+          show(await reviewApi.observe(summary, 0))
+        }
       } else {
         show(await reviewApi.observe(null, seconds))
       }
@@ -56,7 +63,15 @@ export default function WidgetPage() {
     if (!desktop) return
     const load = () => desktop.getScreenSettings().then(setSettings, () => undefined)
     load()
-    return desktop.onScreenSettingsChanged(load)
+    const unsubscribe = desktop.onScreenSettingsChanged(() => {
+      analysisRevision.current += 1
+      lastSeen.current = Date.now()
+      load()
+    })
+    return () => {
+      analysisRevision.current += 1
+      unsubscribe()
+    }
   }, [desktop])
 
   const explain = (e) => {
@@ -69,9 +84,10 @@ export default function WidgetPage() {
   const look = useCallback(async (ask) => {
     if (!desktop || busy.current) return
     busy.current = true
+    const revision = analysisRevision.current
     try {
       const cap = await desktop.captureScreen()
-      if (cap.status === 'off') return
+      if (analysisRevision.current !== revision || cap.status === 'off') return
       setGone(cap.status === 'gone')
       if (cap.status === 'gone') {
         setMood('curious')
@@ -79,15 +95,17 @@ export default function WidgetPage() {
         return
       }
       if (!ask && !cap.changed) {
-        void observe(null)   // 같은 화면을 계속 보는 중 → 본 시간만 더함
+        void observe(null, revision)   // 같은 화면을 계속 보는 중 → 본 시간만 더함
         return
       }
       setMood(ask ? 'think' : 'listen')
       const { text: answer } = await screenApi.describe(cap.image, ask)
+      if (analysisRevision.current !== revision) return
       setText(answer)
       setMood(ask ? 'talk' : 'happy')
-      if (!ask) void observe(answer)
+      if (!ask) void observe(answer, revision)
     } catch (e) {
+      if (analysisRevision.current !== revision) return
       // 자동 요약 중 GPU 가 바쁘면(503) 조용히 다음 차례에
       if (!ask && e instanceof ApiRequestError && e.status === 503) return
       explain(e)
@@ -116,12 +134,18 @@ export default function WidgetPage() {
 
   function openAsk() {
     // 화면 분석이 꺼져 있으면 일반 챗봇으로
-    if (!settings?.enabled) {
+    if (!settings?.enabled || paused || gone) {
       if (desktop) desktop.openChat()
       else navigate('/chat')
       return
     }
     setAsking(true)
+  }
+
+  function togglePause() {
+    analysisRevision.current += 1
+    lastSeen.current = Date.now()
+    setPaused((active) => !active)
   }
 
   const off = !settings?.enabled
@@ -159,7 +183,7 @@ export default function WidgetPage() {
           {off || gone ? (
             <button className="btn btn-sm" onClick={() => desktop?.openScreenConsent()}>{off ? '화면 분석 켜기' : '창 다시 고르기'}</button>
           ) : (
-            <button className="btn btn-sm" onClick={() => setPaused((p) => !p)} aria-label={paused ? '다시 시작' : '일시정지'}>
+            <button className="btn btn-sm" onClick={togglePause} aria-label={paused ? '다시 시작' : '일시정지'}>
               <Icon name={paused ? 'play' : 'pause'} size={16} /> {paused ? '다시' : '일시정지'}
             </button>
           )}
