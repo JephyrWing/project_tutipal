@@ -45,8 +45,8 @@ public class User extends BaseTimeEntity {
         this.role = Role.USER;      // 선생님/학생은 세션마다 정해짐 (studysession)
     }
 
-    /** 로그인할 때마다 소셜 쪽 최신 이름으로 갱신. */
-    public void updateProfile(String name) {
+    /** 앱 표시 이름. 소셜 로그인은 최초 가입 이후 이 값을 덮어쓰지 않는다. */
+    public void rename(String name) {
         this.name = name;
     }
 

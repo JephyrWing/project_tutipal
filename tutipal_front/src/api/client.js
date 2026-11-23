@@ -56,6 +56,12 @@ export const api = {
 
   logout: () => request('/logout', { method: 'POST' }),
 
+  updateName: (name) => request('/api/users/me/name', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  }),
+
   /** 회원 탈퇴: 서버가 기록을 지우고 로그인 세션을 끊는다 (CSRF 값도 바뀌므로 비움) */
   async withdraw() {
     await request('/api/users/me', { method: 'DELETE' })

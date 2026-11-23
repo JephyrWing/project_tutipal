@@ -20,11 +20,17 @@ export function AuthProvider({ children }) {
     setMe(null)
   }, [])
 
+  const updateName = useCallback(async (name) => {
+    const updated = await api.updateName(name)
+    setMe(updated)
+    return updated
+  }, [])
+
   useEffect(() => {
     void refresh()
   }, [refresh])
 
-  return <AuthContext.Provider value={{ me, refresh, logout }}>{children}</AuthContext.Provider>
+  return <AuthContext.Provider value={{ me, refresh, logout, updateName }}>{children}</AuthContext.Provider>
 }
 
 export function useAuth() {

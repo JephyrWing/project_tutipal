@@ -109,7 +109,32 @@ function ReviewTab() {
 }
 
 function AccountTab() {
-  const { me } = useAuth()
+  const { me, updateName } = useAuth()
+  const [name, setName] = useState(me?.name ?? '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState(false)
+  const normalized = name.trim()
+
+  useEffect(() => { setName(me?.name ?? '') }, [me?.name])
+
+  async function saveName(event) {
+    event.preventDefault()
+    if (busy || !normalized || normalized.length > 50 || normalized === me?.name) return
+    setBusy(true)
+    setError('')
+    setSaved(false)
+    try {
+      const updated = await updateName(normalized)
+      setName(updated.name)
+      setSaved(true)
+    } catch (e) {
+      setError(e.message || '이름을 저장하지 못했어요. 다시 시도해 주세요')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <>
       <Head mood="idle" title="계정" text="TUTIPAL 에 로그인한 계정이에요." />
@@ -117,6 +142,20 @@ function AccountTab() {
         <dt>이름</dt><dd>{me?.name}</dd>
         <dt>로그인 방식</dt><dd>{PROVIDER[me?.provider] ?? me?.provider}</dd>
       </dl>
+      <form onSubmit={saveName} aria-label="이름 수정" className="field">
+        <label htmlFor="account-name">이름</label>
+        <input id="account-name" name="name" className="input" value={name} maxLength={50} required
+          autoComplete="nickname" disabled={busy}
+          aria-describedby="account-name-help"
+          onChange={(e) => { setName(e.target.value); setError(''); setSaved(false) }} />
+        <button type="submit" className="btn btn-outline"
+          disabled={busy || !normalized || normalized === me?.name}>
+          {busy ? '저장 중…' : '이름 저장'}
+        </button>
+      </form>
+      <p id="account-name-help" className="muted small">1~50자로 입력해 주세요. 바꾼 이름은 다시 로그인해도 유지돼요.</p>
+      {error && <p className="error-text" role="alert">{error}</p>}
+      {saved && <p className="muted small" role="status">이름을 저장했어요.</p>}
       <Logout />
       <Withdraw />
     </>
