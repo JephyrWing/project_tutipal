@@ -112,4 +112,48 @@ jobs:
           docker compose --env-file infra/.env.local.example -f infra/docker-compose.local.yml config --quiet
           docker compose --env-file infra/.env.local.example -f infra/docker-compose.local.yml -f infra/docker-compose.dev.yml config --quiet
           docker compose --env-file infra/.env.prod.example -f infra/docker-compose.prod.yml --profile cloudflare config --quiet
-      # Playwright / pytest execution is added after requirements are agreed. JUnit runs in spring-test.
+
+  python-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.6"
+      - name: Install isolated test dependencies
+        working-directory: tutipal_ai
+        run: |
+          python -m venv .venv-test
+          .venv-test/bin/python -m pip install -r requirements-test.lock.txt
+          .venv-test/bin/python -m pip check
+      - name: Run inference contract tests without model servers
+        working-directory: tutipal_ai
+        run: .venv-test/bin/python -m pytest -q --junitxml=test-results/pytest.xml
+      - name: Summarize pytest results
+        if: always()
+        working-directory: tutipal_ai
+        run: |
+          python - <<'PY'
+          import os, sys, xml.etree.ElementTree as ET
+          root = ET.parse("test-results/pytest.xml").getroot()
+          cases = list(root.iter("testcase"))
+          failed = sum(c.find("failure") is not None for c in cases)
+          errors = sum(c.find("error") is not None for c in cases)
+          skipped = sum(c.find("skipped") is not None for c in cases)
+          ran = len(cases) - skipped
+          text = f"pytest: collected={len(cases)}, ran={ran}, passed={ran-failed-errors}, failed={failed}, errors={errors}, skipped={skipped}"
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              out.write(text + "\n\nMock provider contracts only; no paid API/GPU or model-quality validation.\n")
+          if ran == 0 or failed or errors:
+              sys.exit("pytest did not produce a successful non-empty run")
+          PY
+      - name: Upload pytest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: tutipal_ai/test-results/pytest.xml
+          if-no-files-found: error
+          retention-days: 14
