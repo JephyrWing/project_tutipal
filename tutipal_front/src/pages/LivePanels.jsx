@@ -18,6 +18,7 @@ function useRoom(getInfo, onVideo) {
   const [error, setError] = useState('')
   const [state, setState] = useState('connecting')
   const [attemptId, setAttemptId] = useState(0)
+  const [mediaEpoch, setMediaEpoch] = useState(0)
   const videoCb = useRef(onVideo)
   videoCb.current = onVideo
 
@@ -40,6 +41,7 @@ function useRoom(getInfo, onVideo) {
       onVideo: track => videoCb.current?.(track),
       onState: state => {
         setState(state)
+        if (state === 'reconnecting') setMediaEpoch(epoch => epoch + 1)
         if (state === 'connected') setError('')
       },
       onError: (e) => setError(errText(e, '화면공유 서버에 연결하지 못했어요')),
@@ -51,7 +53,7 @@ function useRoom(getInfo, onVideo) {
     }
   }, [getInfo, attemptId])
 
-  return { room, error, state, retry: () => setAttemptId(id => id + 1) }
+  return { room, error, state, mediaEpoch, retry: () => setAttemptId(id => id + 1) }
 }
 
 function ConnectionNotice({ state, error, retry }) {
@@ -95,7 +97,7 @@ export function TeacherShareTab({ sessionId }) {
   const desktop = window.desktop
   const getInfo = useCallback(() => screenshare.classToken(sessionId), [sessionId])
   const connection = useRoom(getInfo)
-  const { room } = connection
+  const { room, mediaEpoch } = connection
   const [sources, setSources] = useState([])
   const [picked, setPicked] = useState('')
   const [sharing, setSharing] = useState(false)
@@ -170,7 +172,7 @@ export function TeacherShareTab({ sessionId }) {
       void control.dispose()
       room.off(RoomEvent.ParticipantConnected, count).off(RoomEvent.ParticipantDisconnected, count)
     }
-  }, [room, desktop, refreshSources])
+  }, [room, mediaEpoch, desktop, refreshSources])
 
   async function start() {
     const control = shareControl.current
@@ -321,7 +323,7 @@ function HelpSession({ help, onEnd }) {
   const desktop = window.desktop
   const getInfo = useCallback(() => screenshare.helpToken(help.id), [help.id])
   const connection = useRoom(getInfo)
-  const { room, error } = connection
+  const { room, error, mediaEpoch } = connection
   const [shareError, setShareError] = useState('')
   const [consented, setConsented] = useState(false)
   const [sharing, setSharing] = useState(false)
@@ -352,7 +354,7 @@ function HelpSession({ help, onEnd }) {
       shareControl.current = null
       void control.dispose()
     }
-  }, [room, help.shareScreen, desktop])
+  }, [room, mediaEpoch, help.shareScreen, desktop])
 
   useEffect(() => {
     desktop?.showOverlay(sharing)
