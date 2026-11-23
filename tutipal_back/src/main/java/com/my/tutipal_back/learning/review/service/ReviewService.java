@@ -19,7 +19,7 @@ import com.my.tutipal_back.common.exception.ApiException;
 /**
  * 복습 (목업 09 · 10). 위젯이 화면 요약을 받을 때마다 observe() 로 알려 준다.
  * 비슷한 요약(임베딩 유사도 0.7 이상, 최근 7일)은 한 묶음으로 세고, 3번 이상 보거나 10분 이상 보면 복습을 제안한다 (같은 묶음은 하루 한 번).
- * 결정: 2026-11-16 "3번 또는 10분". 동의(review_consent)한 사람만 기록한다.
+ * 화면 분석을 시작한 위젯이 보낸 요약과 학습 시간을 로그인한 본인에게 기록한다.
  */
 @Service
 public class ReviewService {
@@ -59,26 +59,11 @@ public class ReviewService {
         this.clock = clock;
     }
 
-    public boolean consent(Long userId) {
-        return store.consent(userId);
-    }
-
-    /** 끄면 기록도 지운다 (동의를 거두면 남겨 둘 이유가 없음) */
-    public void setConsent(Long userId, boolean on) {
-        store.setConsent(userId, on);
-        if (!on) {
-            store.deleteAll(userId);
-        }
-    }
-
     /**
      * summary 가 있으면 새로 본 화면, 없으면 같은 화면을 계속 보는 중 (seconds 만 더함).
      * 실패해도 위젯 동작에는 영향 없게 recorded=false 로만 알린다.
      */
     public Observed observe(Long userId, String summary, int seconds) {
-        if (!store.consent(userId)) {
-            return new Observed(false, null);
-        }
         int secs = Math.clamp(seconds, 0, 120);
         Instant now = clock.instant();
         try {

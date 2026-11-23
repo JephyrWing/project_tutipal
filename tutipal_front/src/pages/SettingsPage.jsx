@@ -13,7 +13,7 @@ const TABS = [
 ]
 const PROVIDER = { kakao: '카카오', naver: '네이버', google: '구글', dev: '개발용' }
 
-/** 목업 05 설정: 화면 요약 · 복습 기록 저장 켜고 끄기, 기록 전체 삭제, 계정, 로그아웃, 회원 탈퇴 */
+/** 목업 05 설정: 화면 분석 시작·중지, 복습 기록 전체 삭제, 계정, 로그아웃, 회원 탈퇴 */
 export default function SettingsPage() {
   const [tab, setTab] = useState('screen')
   return (
@@ -48,25 +48,10 @@ function Head({ mood, title, text }) {
   )
 }
 
-/** 복습 기록 동의 (끄면 서버가 기존 기록도 지움) */
-function useReviewConsent() {
-  const [on, setOn] = useState(null)
-  useEffect(() => {
-    reviewApi.consent().then((c) => setOn(c.on), () => setOn(false))
-  }, [])
-  const toggle = async () => {
-    const next = !on
-    await reviewApi.setConsent(next)
-    setOn(next)
-  }
-  return [on, toggle]
-}
-
 function ScreenTab() {
   const navigate = useNavigate()
   const desktop = window.desktop
   const [screen, setScreen] = useState(null)
-  const [review, toggleReview] = useReviewConsent()
 
   useEffect(() => {
     if (!desktop) return
@@ -75,7 +60,7 @@ function ScreenTab() {
     return desktop.onScreenSettingsChanged?.(load)
   }, [desktop])
 
-  // 켜기는 볼 창을 골라야 하므로 동의 화면(04)으로, 끄기는 바로
+  // 분석을 시작할 때 창을 고르고, 중지는 현재 상태에 바로 반영한다.
   async function toggleScreen() {
     if (!screen?.enabled) return navigate('/screen-consent')
     setScreen(await desktop.setScreenSettings({ ...screen, enabled: false }))
@@ -95,14 +80,6 @@ function ScreenTab() {
           {screen?.enabled && <Link to="/screen-consent" className="btn-link small">다른 창 고르기</Link>}
         </span>
         <input type="checkbox" className="switch" checked={!!screen?.enabled} onChange={() => void toggleScreen()} disabled={!desktop || !screen} />
-      </label>
-      <label className="setting-card">
-        <Icon name="book" size={28} />
-        <span>
-          <strong>복습 기록 저장</strong>
-          <span className="muted small">자주 · 오래 본 내용의 요약 글만 남겨 복습을 제안해요. 끄면 지금까지 기록도 지워져요</span>
-        </span>
-        <input type="checkbox" className="switch" checked={!!review} onChange={() => void toggleReview()} disabled={review === null} />
       </label>
       <DeleteAll />
       <Logout />

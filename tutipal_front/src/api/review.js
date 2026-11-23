@@ -6,10 +6,8 @@ const json = (method, body) => ({
   body: JSON.stringify(body),
 })
 
-/** ReviewController: 내 복습 기록만 (동의한 경우에만 쌓임) */
+/** 로그인한 사용자의 복습 기록 */
 export const reviewApi = {
-  consent: () => request('/api/review/consent'),
-  setConsent: (on) => request('/api/review/consent', json('PUT', { on })),
   /** summary 없으면 같은 화면을 계속 보는 중 */
   observe: (summary, seconds) => request('/api/review/observe', json('POST', { summary, seconds })),
   items: () => request('/api/review/items'),
