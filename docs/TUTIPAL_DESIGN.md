@@ -199,7 +199,7 @@ Electron 앱은 내장한 화면을 실행하고 외부 업무 요청을 Spring�
 | 자료 업로드와 열람 | Electron ↔ Spring ↔ 개발 볼륨 또는 S3 / DB에 storage_key | 업로드·열람·삭제 권한과 수업 범위 |
 | AI 채팅 | 현재 Electron → Spring → FastAPI 모델 호출. 목표는 Spring이 사용 상황에 맞는 Agent를 선택하고 FastAPI의 LangGraph가 허용 도구를 실행하는 흐름. 최종 답변은 Spring을 통해 SSE로 반환 | Spring이 본인·수업 역할과 자료·도구 범위를 확인 |
 | 자동 화면 요약 | 개인 학습과 수업 학생 위젯에서 동의한 창의 변경을 Electron이 감지 → Spring → FastAPI 화면 분석·요약 → 캐릭터 말풍선 | 선택 창, 화면 분석 동의, 일시정지·끄기 상태 |
-| 문제 쌍 생성(LangGraph, A안) | 설계 경로는 Electron → Spring(권한·자료 조각 선택) → FastAPI 그래프 → Spring 저장(PENDING) → 선생님 승인 | Spring의 수업 권한과 자료 범위. FastAPI는 무상태이며 DB·S3 권한 없음. 문제 쌍 흐름 구현 대기 |
+| 학생 Agent의 기존 문항 변형(LangGraph, A안) | Electron 복습 요청 → Spring(수업·본인 오답 확인) → FastAPI 변형·자동 검증 → 학생 Agent 응답 | 권한은 Spring이 검사한다. FastAPI는 무상태이며 DB·S3 권한이 없다. 학생용 변형 문항은 교사 승인 없이 제공한다. 구현·검증 예정 |
 | 업무 알림 | Spring → 인증된 STOMP 구독자. 클라이언트 SEND는 모두 거절 | 세션 인증, 수신할 수업과 사용자 |
 | LiveKit 제어 | Electron ↔ 현재 Spring 서버의 내부 중계 ↔ LiveKit | 접속 및 재접속 승인, 사용자와 방의 결합 |
 | 화면공유 미디어 | Electron ↔ LiveKit의 WebRTC / 필요 시 TURN을 경유 | 승인된 참가자와 화면 트랙 송수신 권한 |
@@ -494,6 +494,7 @@ flowchart TD
         Student["수업 학생 Agent"] --> Graph["허용 도구 선택·실행"]
         Personal["개인 학습 Agent"] --> Graph
         Graph --> Tools["화면 분석 · 현재 화면 요약 · 질문 답변"]
+        Graph --> Variant["학생 Agent의 기존 문항 변형"]
         Tools -->|"필요한 범위에서 반복"| Graph
         Graph --> Reply["최종 답변"]
     end
@@ -509,7 +510,7 @@ flowchart TD
 | 수업 학생 | 수업 채팅과 위젯 질문 모두 Spring이 해당 수업 참가와 학생 역할을 확인한다. 선생님이 설정한 설명 난이도와 정답 공개 정책을 적용하고, 허용된 수업 자료와 동의한 화면 정보를 필요에 따라 사용한다. [PT-85](https://gad03302.atlassian.net/browse/PT-85)의 질문 분류 → 단계별 힌트 → 학생 답 점검 → 필요시 도움 요청 추천을 지원한다. |
 | 개인 학습 | Spring이 개인 학습 맥락과 본인 범위를 확인한다. 위젯에서 사용자가 질문하면 분석에 동의한 현재 창 정보가 필요할 때만 사용한다. 텍스트만으로도 질문할 수 있다. |
 
-Agent는 Spring이 부여한 범위에서만 도구를 사용한다. `화면 분석`은 주어진 이미지에서 화면 정보를 읽고, `현재 화면 요약`은 그 정보를 학습용 요약으로 정리하며, `질문 답변`은 질문과 허용된 화면 정보·자료를 바탕으로 답변한다. 질문과 입력 상황에 따라 필요한 도구만 선택한다. 화면 입력이 없는 요청에는 텍스트와 허용된 자료를 사용한다.
+Agent는 Spring이 부여한 범위에서만 도구를 사용한다. `화면 분석`은 주어진 이미지에서 화면 정보를 읽고, `현재 화면 요약`은 그 정보를 학습용 요약으로 정리하며, `질문 답변`은 질문과 허용된 화면 정보·자료를 바탕으로 답변한다. 질문과 입력 상황에 따라 필요한 도구만 선택한다. 화면 입력이 없는 요청에는 텍스트와 허용된 자료를 사용한다. 본인 오답 복습에서는 수업 학생 Agent가 기존 문항 변형 도구를 사용할 수 있다. 정답 공개는 수업 정책을 따른다.
 
 #### PT-83의 공통 실행 경계
 
@@ -517,14 +518,14 @@ Agent는 Spring이 부여한 범위에서만 도구를 사용한다. `화면 분
 - FastAPI는 Spring이 보낸 입력만 사용해 그래프를 무상태로 실행한다. DB·S3 계정이나 Spring을 직접 호출하는 경로는 갖지 않는다.
 - 재검색이 필요한 경우 그래프가 `need_search`와 쿼리·상태를 반환한다. Spring이 같은 권한으로 검색한 결과를 첨부해 재호출한다. 재검색은 최대 2회다. Agent 내부 도구 반복 상한은 구현 계약에서 정한다.
 - 마지막 응답만 NDJSON으로 전달하고 Spring이 앱에 SSE로 중계한다. 기존 Ollama·OpenAI 클라이언트, 내부 키, 요청 크기와 스키마 검증, 입력 비로그 기준을 적용한다. 자료 내용과 이미지 속 글은 분석 데이터로 처리한다.
-- 문제 쌍 출제는 비동기 워크플로다. 결과는 STOMP로 알리고 Spring DB 상태 `PENDING → APPROVED / REJECTED`로 선생님 확인을 처리한다. 학생에게는 승인된 문제만 공개한다.
+- 수업 학생 Agent는 권한과 본인 오답이 확인된 기존 문항을 변형한다. 자동 검증을 통과한 변형 문항은 Agent 응답으로 바로 제공하고 정답·해설은 해당 수업 공개 정책을 적용한다.
 
 계약 근거는 [PT-83](https://gad03302.atlassian.net/browse/PT-83), [PR #13](https://github.com/JephyrWing/project_tutipal/pull/13), [AI 워크플로 계약](AI_WORKFLOW_CONTRACT.md)에서 확인한다.
 
 | 등록 범위 | 11/22 기준 기록과 남은 작업 |
 | --- | --- |
-| [PT-84](https://gad03302.atlassian.net/browse/PT-84) 문제 쌍 생성·교사 승인 (FR-QZ-07/08) | PDF 기반 본문제·변형 문제 쌍을 생성·검증하고 Spring 문제은행에 `PENDING`으로 저장한다. 해당 수업 교사가 문항과 근거를 검토하고 승인 결과를 저장·조회한다. FastAPI 모의 모델 첫 단위 검사 21건 통과 기록이 있으며 Spring·교사 화면 검증은 남아 있다. |
-| [PT-53](https://gad03302.atlassian.net/browse/PT-53) 오답 변형 문제 복습 (FR-REV-04) | 승인된 변형 문제를 본문제를 틀린 학생의 본인 오답과 연결해 해설과 함께 복습 화면에 제공한다. [PT-73](https://gad03302.atlassian.net/browse/PT-73)에서 노출 조건과 교사 재판정 후 조회를 검증한다. |
+| [PT-84](https://gad03302.atlassian.net/browse/PT-84) 기존 문항 변형·자동 검증 (FR-QZ-07) | 기존 출제 문항을 같은 개념의 새 예제로 변형하고 문항·정답·해설을 검증한다. PDF 문제 쌍의 모의 모델 21건은 이전 범위 기록이다. |
+| [PT-53](https://gad03302.atlassian.net/browse/PT-53) 오답 변형 연습 진입 (FR-REV-04) | 학생 본인의 오답 복습에서 [PT-85](https://gad03302.atlassian.net/browse/PT-85)의 수업 학생 Agent 도구를 호출한다. 검증된 변형 문항을 교사 승인 없이 제공하며 [PT-73](https://gad03302.atlassian.net/browse/PT-73)에서 종단 흐름을 검증한다. |
 | PT-85 단계별 AI 튜터 (FR-TUT-06) | 학생 Agent의 분류·힌트·점검·추천 흐름. 구현 대기 |
 | PT-86 리랭커·청킹 (FR-MAT-05) | Spring 후보 검색, Cross-Encoder 재순위화와 문장·제목 단위 청킹 개선 계획 |
 | PT-87 개념 태그·질문 군집·이해도 | 수업별 개념·질문 군집과 교사 대시보드 설계. 구현·DB 변경 대기 |
