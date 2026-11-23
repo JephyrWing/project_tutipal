@@ -1,7 +1,6 @@
 package com.my.tutipal_back.learning.review.controller;
 
 import java.util.List;
-import java.util.Map;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Size;
@@ -13,7 +12,6 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -32,24 +30,10 @@ public class ReviewController {
     public record ObserveRequest(@Size(max = 2000) String summary, int seconds) {
     }
 
-    public record ConsentRequest(boolean on) {
-    }
-
     private final ReviewService service;
 
     public ReviewController(ReviewService service) {
         this.service = service;
-    }
-
-    @GetMapping("/consent")
-    public Map<String, Boolean> consent(@AuthenticationPrincipal OAuth2User me) {
-        return Map.of("on", service.consent(uid(me)));
-    }
-
-    @PutMapping("/consent")
-    public Map<String, Boolean> setConsent(@AuthenticationPrincipal OAuth2User me, @RequestBody ConsentRequest req) {
-        service.setConsent(uid(me), req.on());
-        return Map.of("on", req.on());
     }
 
     @PostMapping("/observe")

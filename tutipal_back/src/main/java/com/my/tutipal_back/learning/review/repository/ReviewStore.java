@@ -31,14 +31,6 @@ public class ReviewStore {
         this.jdbc = jdbc;
     }
 
-    public boolean consent(Long userId) {
-        return Boolean.TRUE.equals(jdbc.queryForObject("SELECT review_consent FROM users WHERE id = ?", Boolean.class, userId));
-    }
-
-    public void setConsent(Long userId, boolean on) {
-        jdbc.update("UPDATE users SET review_consent = ? WHERE id = ?", on, userId);
-    }
-
     /** since 이후에 본 묶음 중 가장 비슷한 것 (유사도 minSimilarity 이상) */
     public Optional<Item> nearest(Long userId, String vector, String model, Instant since, double minSimilarity) {
         return jdbc.query("SELECT " + COLS + ", 1 - (embedding <=> ?::vector) AS sim FROM review_items "
