@@ -14,12 +14,14 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.my.tutipal_back.learning.review.repository.ReviewStore.Item;
 import com.my.tutipal_back.learning.review.service.ReviewService;
 import com.my.tutipal_back.learning.review.service.ReviewService.Observed;
+import com.my.tutipal_back.learning.review.dto.ReviewHistoryPage;
 
 /** 복습: 자기 기록만 (모든 요청이 로그인한 본인 id 기준). */
 @RestController
@@ -44,6 +46,13 @@ public class ReviewController {
     @GetMapping("/items")
     public List<Item> list(@AuthenticationPrincipal OAuth2User me) {
         return service.list(uid(me));
+    }
+
+    @GetMapping("/history")
+    public ReviewHistoryPage history(@AuthenticationPrincipal OAuth2User me,
+                                    @RequestParam(defaultValue = "0") int page,
+                                    @RequestParam(defaultValue = "20") int size) {
+        return service.history(uid(me), page, size);
     }
 
     @GetMapping("/items/{id}")

@@ -80,6 +80,15 @@ public class ReviewStore {
                 MAPPER, userId);
     }
 
+    public long count(Long userId) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM review_items WHERE user_id = ?", Long.class, userId);
+    }
+
+    public List<Item> history(Long userId, int size, long offset) {
+        return jdbc.query("SELECT " + COLS + " FROM review_items WHERE user_id = ? "
+                        + "ORDER BY last_seen DESC, id DESC LIMIT ? OFFSET ?", MAPPER, userId, size, offset);
+    }
+
     public Optional<Item> find(Long userId, Long id) {
         return jdbc.query("SELECT " + COLS + " FROM review_items WHERE user_id = ? AND id = ?", MAPPER, userId, id).stream().findFirst();
     }

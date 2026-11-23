@@ -11,6 +11,7 @@ export const reviewApi = {
   /** summary 없으면 같은 화면을 계속 보는 중 */
   observe: (summary, seconds) => request('/api/review/observe', json('POST', { summary, seconds })),
   items: () => request('/api/review/items'),
+  history: (page = 0, size = 20) => request(`/api/review/history?${new URLSearchParams({ page, size })}`),
   item: (id) => request(`/api/review/items/${id}`),
   deleteAll: () => request('/api/review/items', { method: 'DELETE' }),
   remove: (id) => request(`/api/review/items/${id}`, { method: 'DELETE' }),

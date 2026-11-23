@@ -11,28 +11,69 @@ export default function ReviewPage() {
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const [items, setItems] = useState(null)
+  const [page, setPage] = useState(0)
+  const [totalCount, setTotalCount] = useState(0)
+  const [totalPages, setTotalPages] = useState(0)
+  const [revision, setRevision] = useState(0)
+  const [loading, setLoading] = useState(true)
+  const [loadedPage, setLoadedPage] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [actionError, setActionError] = useState('')
   const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState('')
+  const pending = loading || (!error && loadedPage !== page)
 
   const explain = useCallback((summary) => {
     navigate(`/chat?ask=${encodeURIComponent(explainQuestion(summary))}`)
   }, [navigate])
 
-  const load = useCallback(() => {
-    reviewApi.items().then(setItems, (e) => setError(e instanceof Error ? e.message : '불러오지 못했어요'))
-  }, [])
-  useEffect(load, [load])
+  const load = () => setRevision((v) => v + 1)
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    setError('')
+    reviewApi.history(page).then((result) => {
+      if (!active) return
+      // 마지막 페이지의 기록을 삭제했거나 다른 창에서 지웠으면 유효한 페이지로 이동한다.
+      const lastPage = Math.max(0, result.totalPages - 1)
+      if (page > lastPage) {
+        setPage(lastPage)
+        return
+      }
+      setItems(result.items)
+      setTotalCount(result.totalCount)
+      setTotalPages(result.totalPages)
+      setLoadedPage(page)
+    }, (e) => {
+      if (active) setError(e instanceof Error ? e.message : '불러오지 못했어요')
+    }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [page, revision])
 
   // 위젯의 "설명 듣기"(?explain=id) → 바로 챗봇으로
   useEffect(() => {
+    let active = true
     const id = Number(params.get('explain'))
-    if (id) reviewApi.item(id).then((it) => explain(it.summary), () => undefined)
+    if (id) reviewApi.item(id).then((it) => { if (active) explain(it.summary) }, (e) => {
+      if (active) setActionError(e instanceof Error ? e.message : '기록을 불러오지 못했어요')
+    })
+    return () => { active = false }
   }, [params, explain])
 
-  async function deleteAll() {
-    await reviewApi.deleteAll()
-    setItems([])
-    setConfirming(false)
+  async function remove(id) {
+    if (busy) return
+    setBusy(true)
+    setActionError('')
+    try {
+      if (id === undefined) await reviewApi.deleteAll()
+      else await reviewApi.remove(id)
+      setConfirming(false)
+      load()
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : '삭제하지 못했어요')
+    } finally {
+      setBusy(false)
+    }
   }
 
   return (
@@ -49,24 +90,34 @@ export default function ReviewPage() {
           {confirming ? (
             <span className="row-gap">
               <span className="muted small">모두 지울까요? 되돌릴 수 없어요</span>
-              <button className="btn btn-danger btn-sm" onClick={() => void deleteAll()}>삭제</button>
-              <button className="btn btn-sm" onClick={() => setConfirming(false)}>취소</button>
+              <button className="btn btn-danger btn-sm" disabled={busy || pending} onClick={() => void remove()}>삭제</button>
+              <button className="btn btn-sm" disabled={busy} onClick={() => setConfirming(false)}>취소</button>
             </span>
           ) : (
-            <button className="btn btn-outline-danger" onClick={() => setConfirming(true)} disabled={!items?.length}>🗑 기록 삭제</button>
+            <button className="btn btn-outline-danger" onClick={() => setConfirming(true)} disabled={busy || pending || !!error || !totalCount}>🗑 기록 삭제</button>
           )}
         </header>
-        {error && <p className="error-text">{error}</p>}
+        {actionError && <p className="error-text" role="alert">{actionError}</p>}
+        {pending && <p role="status">복습 기록을 불러오는 중이에요…</p>}
+        {!pending && error && <div role="alert"><p className="error-text">{error}</p><button className="btn" onClick={load}>다시 불러오기</button></div>}
+        {!pending && !error && <>
+        <p className="muted" role="status">전체 {totalCount}개 · 최근 본 순</p>
         {items?.length === 0 && <p className="muted">아직 모인 내용이 없어요</p>}
         {items?.map((it) => (
           <div key={it.id} className="review-row">
             <span className="post-icon"><Icon name={looksLikeCode(it.summary) ? 'code' : 'book'} size={24} /></span>
-            <span className="review-text">{it.summary}</span>
-            <span className="badge">{it.seenCount >= 2 ? `${it.seenCount}번 봄` : `${Math.max(1, Math.round(it.seenSeconds / 60))}분 봄`}</span>
-            <button className="btn btn-outline" onClick={() => explain(it.summary)}>▶ 설명 듣기</button>
-            <button className="btn-link small" onClick={() => void reviewApi.remove(it.id).then(load)} aria-label="이 기록 지우기">✕</button>
+            <span className="review-text">{it.summary}<br /><time className="muted small" dateTime={it.lastSeen}>최근 본 날짜: {new Date(it.lastSeen).toLocaleString('ko-KR')}</time></span>
+            <span className="badge">{it.seenCount}번 봄 · 누적 {Math.floor(it.seenSeconds / 60)}분 {it.seenSeconds % 60}초</span>
+            <button className="btn btn-outline" disabled={busy} onClick={() => explain(it.summary)}>▶ 설명 듣기</button>
+            <button className="btn-link small" disabled={busy} onClick={() => void remove(it.id)} aria-label="이 기록 지우기">✕</button>
           </div>
         ))}
+        {totalPages > 0 && <nav className="row-gap" aria-label="복습 기록 페이지">
+          <button className="btn" disabled={busy || page === 0} onClick={() => setPage((v) => v - 1)}>이전</button>
+          <span>{page + 1} / {totalPages} 페이지</span>
+          <button className="btn" disabled={busy || page + 1 >= totalPages} onClick={() => setPage((v) => v + 1)}>다음</button>
+        </nav>}
+        </>}
       </section>
     </div>
   )
