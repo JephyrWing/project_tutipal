@@ -1,0 +1,29 @@
+name: Screen sharing lifecycle
+
+on:
+  pull_request:
+    branches: [develop]
+    paths:
+      - 'tutipal_front/src/pages/LivePanels.jsx'
+      - 'tutipal_front/src/utils/*Session.js'
+      - 'tutipal_front/src/utils/roomConnection.js'
+      - 'tutipal_front/src/utils/helpScreenShare.js'
+      - 'tutipal_front/src/utils/shareSourceCatalog.js'
+      - 'tutipal_front/tests/*.test.mjs'
+      - '.github/workflows/front-share-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  share-lifecycle:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.3'
+      - name: Run lifecycle regressions
+        working-directory: tutipal_front
+        run: node --test tests/*.test.mjs
