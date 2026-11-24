@@ -45,6 +45,16 @@ dependencies {
 
 tasks.named('test') {
     useJUnitPlatform()
+    exclude '**/ReviewStorePostgresTest.class'
+}
+
+// PT-53: 실제 DB 검사는 별도 일회용 DB/CI에서 실행한다. env 누락은 skip 대신 실패한다.
+tasks.register('reviewDbTest', Test) {
+    description = 'Runs review boundary and privacy checks against disposable PostgreSQL/pgvector'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    include '**/ReviewStorePostgresTest.class'
 }
 
 tasks.named('bootJar') {

@@ -71,8 +71,12 @@ public class ReviewStore {
         return jdbc.queryForObject("SELECT " + COLS + " FROM review_items WHERE id = ?", MAPPER, id);
     }
 
-    public void markSuggested(Long id, Instant now) {
-        jdbc.update("UPDATE review_items SET suggested_at = ? WHERE id = ?", Timestamp.from(now), id);
+    /** 제안 자리를 먼저 얻은 요청만 성공. 삭제·집계 초기화·동시 요청 후의 오래된 조회 결과는 거절한다. */
+    public boolean markSuggestedIfDue(Long id, Instant now, Instant cutoff, int minCount, int minSeconds) {
+        return jdbc.update("UPDATE review_items SET suggested_at = ? WHERE id = ? "
+                        + "AND (suggested_at IS NULL OR suggested_at <= ?) "
+                        + "AND (seen_count >= ? OR seen_seconds >= ?)",
+                Timestamp.from(now), id, Timestamp.from(cutoff), minCount, minSeconds) == 1;
     }
 
     public List<Item> list(Long userId) {
