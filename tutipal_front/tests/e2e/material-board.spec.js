@@ -61,30 +61,34 @@ function materialRow(app, filename) {
   return app.page.getByRole('row').filter({ has: app.page.getByRole('link', { name: filename, exact: true }) })
 }
 
-function pdf(text) {
-  const stream = 'BT /F1 12 Tf 20 50 Td (' + text + ') Tj ET'
+function pdf(...pages) {
+  const pageIds = pages.map((_, i) => 4 + 2 * i)
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 100] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Pages /Kids [' + pageIds.map(id => id + ' 0 R').join(' ') + '] /Count ' + pages.length + ' >>',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-    '<< /Length ' + stream.length + ' >>\nstream\n' + stream + '\nendstream',
   ]
+  for (const [i, text] of pages.entries()) {
+    const stream = 'BT /F1 12 Tf 20 50 Td (' + text + ') Tj ET'
+    objects.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 240 100] /Resources << /Font << /F1 3 0 R >> >> /Contents '
+      + (pageIds[i] + 1) + ' 0 R >>', '<< /Length ' + stream.length + ' >>\nstream\n' + stream + '\nendstream')
+  }
   let contents = '%PDF-1.4\n'
   const offsets = objects.map((object, index) => {
     const offset = contents.length
     contents += (index + 1) + ' 0 obj\n' + object + '\nendobj\n'
     return offset
   })
-  return contents + 'xref\n0 6\n0000000000 65535 f \n' +
+  const size = objects.length + 1
+  return contents + 'xref\n0 ' + size + '\n0000000000 65535 f \n' +
     offsets.map(offset => String(offset).padStart(10, '0') + ' 00000 n \n').join('') +
-    'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n' + contents.length + '\n%%EOF\n'
+    'trailer\n<< /Size ' + size + ' /Root 1 0 R >>\nstartxref\n' + contents.length + '\n%%EOF\n'
 }
 
-async function sources(app, roomId) {
+async function sources(app, roomId, question = 'PT70MATERIAL example') {
   const result = await guarded(app, '/api/tutor/chat', {
     method: 'POST',
-    json: { topic: '수학', sessionId: roomId, messages: [{ role: 'user', content: 'PT70MATERIAL example' }] },
+    json: { topic: '수학', sessionId: roomId, messages: [{ role: 'user', content: question }] },
   })
   expect(result.status).toBe(200)
   expect(result.data).toContain('event:done')
@@ -92,6 +96,134 @@ async function sources(app, roomId) {
   expect(result.data).not.toContain('event:error')
   return result.data.match(/event:sources\r?\ndata:(.+)/)?.[1]
 }
+
+async function indexControl(options = {}) {
+  const response = await fetch('http://127.0.0.1:28081/_test/material-index', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(options),
+  })
+  expect(response.status).toBe(200)
+  return response.json()
+}
+
+test('PT-99 부분 처리 서버 재기동·중복 재색인·실패 색인 보존', async ({ apps }) => {
+  test.setTimeout(180_000)
+  const { teacher, student, outsider } = await actors(apps)
+  const room = await createRoom(teacher, 'PT99 자료 복구')
+  await enter(student, room)
+  const teacherUrl = teacher.page.url()
+  const studentUrl = student.page.url()
+  await tab(teacher, '자료 · 공지').click()
+  await tab(student, '자료').click()
+  const files = '/api/sessions/' + room.id + '/materials'
+  const read = async id => (await guarded(teacher, files)).data.find(row => row.id === id)
+  const query = (model = 'old') => sources(student, room.id, 'PT99QUERY ' + model)
+
+  const { documentCalls } = await indexControl({ outcome: 'hold', after: 1 })
+  const pages = Array.from({ length: 33 }, (_, i) => 'PT99MATERIAL recovery page ' + (i + 1))
+  const handout = await upload(teacher, 'pt99-recovery.pdf', pdf(...pages), 'application/pdf')
+  const row = materialRow(teacher, handout.filename)
+  const indexPath = '/api/materials/' + handout.id + '/index'
+  await expect(row).toContainText('처리 중')
+  // 첫 임베딩 배치는 이미 반환했고 두 번째는 멈춘 상태다.
+  await expect.poll(indexControl).toMatchObject({ documentCalls: documentCalls + 2, held: 1 })
+  expect(await read(handout.id)).toMatchObject({ status: 'PROCESSING', indexedAt: null, chunkCount: 0 })
+  expect(await query()).toBeUndefined()
+  expect((await guarded(student, indexPath, { method: 'POST' })).status).toBe(403)
+  expect((await guarded(outsider, indexPath, { method: 'POST' })).status).toBe(404)
+
+  await indexControl({ restart: true })
+  await expect.poll(async () => {
+    try { return (await fetch('http://127.0.0.1:28080/actuator/health')).status } catch { return 0 }
+  }, { timeout: 90_000 }).toBe(200)
+  await expect.poll(indexControl).toMatchObject({ documentCalls: documentCalls + 3, held: 1 })
+  await login(teacher, 1)
+  await login(student, 2)
+  await teacher.page.goto(teacherUrl)
+  await student.page.goto(studentUrl)
+  await tab(teacher, '자료 · 공지').click()
+  await expect(row).toContainText('처리 중')
+  expect(await query()).toBeUndefined()
+  await indexControl({ outcome: 'success' })
+  await expect(row).toContainText('완료')
+  const first = await read(handout.id)
+  expect(first.chunkCount).toBe(33)
+  expect(first.indexedAt).toBeTruthy()
+  expect(await query()).toContain(handout.filename + ' p.')
+  expect(await query('new')).toBeUndefined()
+
+  const reindex = await indexControl({ outcome: 'hold', model: 'new' })
+  await row.getByRole('button', { name: '재색인' }).click()
+  await expect(row).toContainText('재색인 중')
+  await expect.poll(indexControl).toMatchObject({ documentCalls: reindex.documentCalls + 1, held: 1 })
+  for (const response of await Promise.all(Array.from({ length: 4 }, () => guarded(teacher, indexPath, { method: 'POST' })))) {
+    expect(response.status).toBe(202)
+    expect(response.data.status).toBe('PROCESSING')
+  }
+  expect(await query()).toContain(handout.filename)
+  expect(await query('new')).toBeUndefined()
+  await indexControl({ outcome: 'fail', model: 'new' })
+  await expect(row).toContainText('재색인 실패')
+  await expect(row).toContainText('기존 색인 보관')
+  expect(await read(handout.id)).toMatchObject({ status: 'FAILED', indexedAt: first.indexedAt, chunkCount: 33, indexRetryable: true })
+  expect(await query()).toContain(handout.filename)
+  expect(await query('new')).toBeUndefined()
+
+  const retry = await indexControl({ outcome: 'hold', model: 'new' })
+  for (const response of await Promise.all(Array.from({ length: 4 }, () => guarded(teacher, indexPath, { method: 'POST' })))) {
+    expect(response.status).toBe(202)
+  }
+  await expect.poll(indexControl).toMatchObject({ documentCalls: retry.documentCalls + 1, held: 1 })
+  await indexControl({ outcome: 'success', model: 'new' })
+  await expect(row).toContainText('완료')
+  expect(await indexControl()).toMatchObject({ documentCalls: retry.documentCalls + 2, held: 0 })
+  expect(await read(handout.id)).toMatchObject({ status: 'DONE', chunkCount: 33, indexRetryable: false })
+  expect(await query()).toBeUndefined()
+  expect(await query('new')).toContain(handout.filename)
+})
+
+test('PT-99 첫 색인 오류 구분·재시도·색인 중 삭제', async ({ apps }) => {
+  test.setTimeout(90_000)
+  const { teacher, student } = await actors(apps)
+  const room = await createRoom(teacher, 'PT99 실패와 삭제')
+  await enter(student, room)
+  await tab(teacher, '자료 · 공지').click()
+  await tab(student, '자료').click()
+  const bad = await upload(teacher, 'pt99-invalid.pdf', 'invalid file', 'application/pdf')
+  const invalid = materialRow(teacher, bad.filename)
+  await expect(invalid).toContainText('파일을 확인한 뒤 새로 올려 주세요')
+  await expect(invalid.getByRole('button', { name: '재시도' })).toHaveCount(0)
+  expect((await guarded(teacher, '/api/materials/' + bad.id + '/index', { method: 'POST' })).status).toBe(409)
+
+  await indexControl({ outcome: 'fail' })
+  const good = await upload(teacher, 'pt99-deleted.pdf', pdf('PT99MATERIAL a handout'), 'application/pdf')
+  const row = materialRow(teacher, good.filename)
+  await expect(row).toContainText('임베딩을 만들지 못했어요')
+  expect(await sources(student, room.id, 'PT99QUERY old')).toBeUndefined()
+  await expect(materialRow(student, good.filename).getByRole('button', { name: '재시도' })).toHaveCount(0)
+  await indexControl({ outcome: 'success' })
+  await row.getByRole('button', { name: '재시도' }).click()
+  await expect(row).toContainText('완료')
+  expect(await sources(student, room.id, 'PT99QUERY old')).toContain(good.filename)
+
+  await indexControl({ outcome: 'hold' })
+  await row.getByRole('button', { name: '재색인' }).click()
+  await expect.poll(indexControl).toMatchObject({ held: 1 })
+  const resource = '/api/materials/' + good.id
+  await deleteViaUi(teacher, row.getByRole('button', { name: '삭제' }), resource)
+  await expect(materialRow(student, good.filename)).toHaveCount(0)
+  expect(await sources(student, room.id, 'PT99QUERY old')).toBeUndefined()
+  await indexControl({ outcome: 'success' })
+  // 후속 작업이 끝날 때까지 기다려, 지연된 결과가 삭제를 되돌리지 않았는지 확인한다.
+  const next = await upload(teacher, 'pt99-after-delete.pdf', pdf('PT99MATERIAL remaining handout'), 'application/pdf')
+  await expect(materialRow(teacher, next.filename)).toContainText('완료')
+  expect((await guarded(teacher, resource + '/file')).status).toBe(404)
+  expect((await guarded(teacher, resource + '/index', { method: 'POST' })).status).toBe(404)
+  const after = await sources(student, room.id, 'PT99QUERY old')
+  expect(after).toContain(next.filename)
+  expect(after).not.toContain(good.filename)
+})
 
 test('PT-70 자료 형식·독립 재사용·수업 권한·삭제 후 검색', async ({ apps }) => {
   test.setTimeout(120_000)

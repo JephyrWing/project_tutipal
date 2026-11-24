@@ -17,6 +17,7 @@ export const materials = {
   },
   reusable: (sessionId) => request(`/api/sessions/${sessionId}/materials/reusable`),
   reuse: (sessionId, sourceId) => request(`/api/sessions/${sessionId}/materials/reuse/${sourceId}`, { method: 'POST' }),
+  index: (id) => request(`/api/materials/${id}/index`, { method: 'POST' }),
   remove: (id) => request(`/api/materials/${id}`, { method: 'DELETE' }),
   /** 같은 주소 + 로그인 쿠키라 <a href> 로 바로 내려받기 */
   fileUrl: (id) => `/api/materials/${id}/file`,
