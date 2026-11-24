@@ -7,7 +7,7 @@ const exec = promisify(execFile)
 // Only synthetic rows in the isolated E2E database. No product-only seed API is introduced.
 async function seed(app, count) {
   const container = process.env.E2E_DB_CONTAINER ?? `tutipal-pt24-${process.env.GITHUB_RUN_ID}`
-  if (!/^(tutipal-pt24-\d+|tutipal-pt54-review-check)$/.test(container)) throw new Error('Disposable test container required')
+  if (!/^(tutipal-pt24-\d+|tutipal-pt54-review-check|tutipal-pt53-lifecycle-check)$/.test(container)) throw new Error('Disposable test container required')
   const id = await app.page.evaluate(async () => (await (await fetch('/api/users/me')).json()).id)
   if (!Number.isSafeInteger(id) || id < 1 || !Number.isInteger(count) || count < 0 || count > 110) throw new Error('Invalid synthetic seed')
   const sql = `DELETE FROM review_items WHERE user_id=${id};

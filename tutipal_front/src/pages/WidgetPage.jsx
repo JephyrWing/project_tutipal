@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ApiRequestError } from '../api/client'
 import { reviewApi } from '../api/review'
 import { screenApi } from '../api/screen'
+import { createScreenAnalysis } from '../utils/screenAnalysis'
 import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
 
@@ -23,35 +24,29 @@ export default function WidgetPage() {
   const [question, setQuestion] = useState('')
   const [text, setText] = useState('')
   const [mood, setMood] = useState('happy')
-  const busy = useRef(false)
   /** 선택한 창이 닫히면 다시 선택해야 한다. */
   const [gone, setGone] = useState(false)
-  const lastSeen = useRef(Date.now())
-  const analysisRevision = useRef(0)
   const [suggestion, setSuggestion] = useState(null)
 
-  /** 진행 중인 분석의 복습 기록만 보내고, 기록 실패 시 위젯은 계속 실행한다. */
-  const observe = async (summary, revision) => {
-    const seconds = Math.round((Date.now() - lastSeen.current) / 1000)
-    lastSeen.current = Date.now()
-    const show = (result) => {
-      if (analysisRevision.current === revision && result.suggestion) {
-        setSuggestion(result.suggestion)
-      }
-    }
-    try {
-      if (summary) {
-        show(await reviewApi.observe(null, seconds))   // 지금까지 본 시간은 직전 화면(묶음)에
-        if (analysisRevision.current === revision) {
-          show(await reviewApi.observe(summary, 0))
-        }
-      } else {
-        show(await reviewApi.observe(null, seconds))
-      }
-    } catch {
-      // 복습 기록 실패는 위젯 동작에 영향 없음
-    }
-  }
+  const analysis = useRef(null)
+  if (!analysis.current) analysis.current = createScreenAnalysis({
+    capture: () => desktop.captureScreen(),
+    describe: async (image, question) => (await screenApi.describe(image, question)).text,
+    observe: (summary, seconds) => reviewApi.observe(summary, seconds),
+    onAnswer: (answer, asked) => { setText(answer); setMood(asked ? 'talk' : 'happy') },
+    onSuggestion: setSuggestion,
+    onGone: (closed) => {
+      setGone(closed)
+      if (closed) { setMood('curious'); setText('보던 창이 닫혔어요. 볼 창을 다시 골라 주세요.') }
+    },
+    onError: (error, asked) => {
+      if (!asked && error instanceof ApiRequestError && error.status === 503) return
+      setMood('curious')
+      setText(error instanceof ApiRequestError && error.status === 401
+        ? '메인 창에서 로그인하면 화면을 같이 볼 수 있어요.'
+        : error instanceof Error ? error.message : '지금은 화면을 보지 못했어요')
+    },
+  })
 
   useEffect(() => {
     document.documentElement.classList.add('transparent')
@@ -61,66 +56,35 @@ export default function WidgetPage() {
   // 화면 분석 설정 (메인 창에서 바꾸면 알려 줌)
   useEffect(() => {
     if (!desktop) return
-    const load = () => desktop.getScreenSettings().then(setSettings, () => undefined)
+    let active = true
+    const load = () => desktop.getScreenSettings().then((value) => {
+      if (active) setSettings(value)
+    }, () => undefined)
     load()
+    desktop.getReviewDeletionState().then(value => { if (active) analysis.current.deletion(value) })
     const unsubscribe = desktop.onScreenSettingsChanged(() => {
-      analysisRevision.current += 1
-      lastSeen.current = Date.now()
+      analysis.current.setRunning(false)
+      analysis.current.reset()
+      setGone(false)
       load()
     })
+    const reviewUnsubscribe = desktop.onReviewDeletionChanged(value => analysis.current.deletion(value))
     return () => {
-      analysisRevision.current += 1
+      active = false
+      analysis.current.setRunning(false)
       unsubscribe()
+      reviewUnsubscribe()
     }
   }, [desktop])
 
-  const explain = (e) => {
-    setMood('curious')
-    if (e instanceof ApiRequestError && e.status === 401) setText('메인 창에서 로그인하면 화면을 같이 볼 수 있어요.')
-    else setText(e instanceof Error ? e.message : '지금은 화면을 보지 못했어요')
-  }
-
-  /** 한 번 찍어서 (바뀌었으면 / 질문이면) 서버에 묻는다 */
-  const look = useCallback(async (ask) => {
-    if (!desktop || busy.current) return
-    busy.current = true
-    const revision = analysisRevision.current
-    try {
-      const cap = await desktop.captureScreen()
-      if (analysisRevision.current !== revision || cap.status === 'off') return
-      setGone(cap.status === 'gone')
-      if (cap.status === 'gone') {
-        setMood('curious')
-        setText('보던 창이 닫혔어요. 볼 창을 다시 골라 주세요.')
-        return
-      }
-      if (!ask && !cap.changed) {
-        void observe(null, revision)   // 같은 화면을 계속 보는 중 → 본 시간만 더함
-        return
-      }
-      setMood(ask ? 'think' : 'listen')
-      const { text: answer } = await screenApi.describe(cap.image, ask)
-      if (analysisRevision.current !== revision) return
-      setText(answer)
-      setMood(ask ? 'talk' : 'happy')
-      if (!ask) void observe(answer, revision)
-    } catch (e) {
-      if (analysisRevision.current !== revision) return
-      // 자동 요약 중 GPU 가 바쁘면(503) 조용히 다음 차례에
-      if (!ask && e instanceof ApiRequestError && e.status === 503) return
-      explain(e)
-    } finally {
-      busy.current = false
-    }
-  }, [desktop])
-
-  const watching = !!settings?.enabled && !paused && !asking
+  const watching = !!settings?.enabled && !paused && !gone
   useEffect(() => {
-    if (!watching) return
-    void look()
-    const t = setInterval(() => void look(), SUMMARY_EVERY_MS)
-    return () => clearInterval(t)
-  }, [watching, look])
+    analysis.current.setRunning(watching)
+    if (!watching || asking) return
+    void analysis.current.look()
+    const timer = setInterval(() => void analysis.current.look(), SUMMARY_EVERY_MS)
+    return () => clearInterval(timer)
+  }, [watching, asking, settings])
 
   async function onAsk(e) {
     e.preventDefault()
@@ -129,7 +93,7 @@ export default function WidgetPage() {
     setText('화면을 보면서 생각하는 중…')
     setAsking(false)
     setQuestion('')
-    await look(q)
+    await analysis.current.look(q)
   }
 
   function openAsk() {
@@ -143,8 +107,7 @@ export default function WidgetPage() {
   }
 
   function togglePause() {
-    analysisRevision.current += 1
-    lastSeen.current = Date.now()
+    analysis.current.setRunning(paused)
     setPaused((active) => !active)
   }
 
@@ -178,7 +141,7 @@ export default function WidgetPage() {
         )}
         <div className="widget-row">
           <span className="widget-status">
-            <span className={off || paused ? 'dot off' : 'dot'} /> {off ? '꺼짐' : paused ? '일시정지' : 'AI 보는 중'}
+            <span className={off || paused || gone ? 'dot off' : 'dot'} /> {off ? '꺼짐' : gone ? '창 종료' : paused ? '일시정지' : 'AI 보는 중'}
           </span>
           {off || gone ? (
             <button className="btn btn-sm" onClick={() => desktop?.openScreenConsent()}>{off ? '화면 분석 켜기' : '창 다시 고르기'}</button>
@@ -193,7 +156,7 @@ export default function WidgetPage() {
         </div>
       </div>
       <div className="widget-mascot" title="끌어서 옮기기">
-        <Mascot mood={off || paused ? 'sleep' : mood} size={110} float={!paused && !off} />
+        <Mascot mood={off || paused || gone ? 'sleep' : mood} size={110} float={!paused && !off && !gone} />
       </div>
     </div>
   )

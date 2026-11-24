@@ -22,6 +22,8 @@ class ReviewSuggestionBoundaryTest {
         store = mock(ReviewStore.class);
         ai = mock(AiClient.class);
         service = new ReviewService(store, ai, Clock.fixed(NOW, ZoneOffset.UTC));
+        lenient().when(store.recordIfCurrent(anyLong(), anyLong(), any(), any())).thenAnswer(invocation ->
+                ((java.util.function.Supplier<?>) invocation.getArgument(2)).get());
         lenient().when(store.markSuggestedIfDue(11L, NOW, NOW.minus(Duration.ofDays(1)), 3, 600)).thenReturn(true);
     }
 
@@ -69,7 +71,8 @@ class ReviewSuggestionBoundaryTest {
     @Test void embeddingFailureDoesNotBreakWidgetOrCreateARecord() {
         when(ai.embedWithModel(anyList())).thenThrow(new IllegalStateException("synthetic failure"));
         assertThat(service.observe(7L, "새 화면", 40)).isEqualTo(new ReviewService.Observed(false, null));
-        verifyNoInteractions(store);
+        verify(store).generation(7L);
+        verifyNoMoreInteractions(store);
     }
 
     @Test void repositoryFailureIsReportedAsNotRecorded() {

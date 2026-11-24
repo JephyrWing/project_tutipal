@@ -2,6 +2,7 @@ package com.my.tutipal_back.learning.review.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.*;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -35,6 +36,8 @@ class ReviewServiceTest {
         float[] embedding = {1.0f, 0.0f};
         String vector = AiClient.pgVector(embedding);
         ReviewService service = new ReviewService(store, ai, Clock.fixed(now, ZoneOffset.UTC));
+        when(store.recordIfCurrent(anyLong(), anyLong(), any(), any())).thenAnswer(invocation ->
+                ((java.util.function.Supplier<?>) invocation.getArgument(2)).get());
 
         when(ai.embedWithModel(List.of(summary)))
                 .thenReturn(new AiClient.EmbedResponse("test-model", List.of(embedding)));
