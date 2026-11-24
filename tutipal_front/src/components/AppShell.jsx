@@ -13,7 +13,7 @@ const MENU = [
 
 /** 목업 공통 틀: 왼쪽 세로 아이콘 메뉴 카드 + 오른쪽 본문 */
 export default function AppShell() {
-  const { logout } = useAuth()
+  const { logout, logoutError, loggingOut } = useAuth()
   return (
     <div className="shell">
       <nav className="side card" aria-label="메인 메뉴">
@@ -31,11 +31,13 @@ export default function AppShell() {
             </span>
           ),
         )}
-        <button className="side-item side-bottom" onClick={() => void logout()} title="로그아웃" aria-label="로그아웃">
+        <button className="side-item side-bottom" disabled={loggingOut} onClick={() => void logout()} title="로그아웃" aria-label="로그아웃">
           <Icon name="logout" />
         </button>
       </nav>
       <main className="shell-main">
+        {logoutError && <div className="card" role="alert"><p className="error-text">{logoutError}</p>
+          <button className="btn btn-sm" disabled={loggingOut} onClick={() => void logout()}>다시 로그아웃</button></div>}
         <Outlet />
       </main>
     </div>
