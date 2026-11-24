@@ -7,6 +7,8 @@ import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBr
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
 
+import com.my.tutipal_back.common.realtime.SessionEventAccessInterceptor;
+import com.my.tutipal_back.common.realtime.SessionWebSocketGuard;
 import com.my.tutipal_back.common.realtime.StompAuthInterceptor;
 
 // 로그인 서블릿 세션으로 핸드셰이크가 인증됨: /ws 는 SecurityConfig 의 authenticated 규칙을 따름.
@@ -19,12 +21,15 @@ import com.my.tutipal_back.common.realtime.StompAuthInterceptor;
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     private final StompAuthInterceptor authInterceptor;
-    private final com.my.tutipal_back.common.realtime.SessionWebSocketGuard sessionGuard;
+    private final SessionEventAccessInterceptor eventAccessInterceptor;
+    private final SessionWebSocketGuard sessionGuard;
     @org.springframework.beans.factory.annotation.Value("${app.allowed-origins:http://127.0.0.1:*,http://localhost:*}")
     private String[] allowedOrigins;
 
-    public WebSocketConfig(StompAuthInterceptor authInterceptor, com.my.tutipal_back.common.realtime.SessionWebSocketGuard sessionGuard) {
+    public WebSocketConfig(StompAuthInterceptor authInterceptor, SessionEventAccessInterceptor eventAccessInterceptor,
+                           SessionWebSocketGuard sessionGuard) {
         this.authInterceptor = authInterceptor;
+        this.eventAccessInterceptor = eventAccessInterceptor;
         this.sessionGuard = sessionGuard;
     }
 
@@ -45,6 +50,12 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     public void configureClientInboundChannel(ChannelRegistration registration) {
         registration.interceptors(authInterceptor);
     }
+
+    @Override
+    public void configureClientOutboundChannel(ChannelRegistration registration) {
+        registration.interceptors(eventAccessInterceptor);
+    }
+
     @Override public void configureWebSocketTransport(org.springframework.web.socket.config.annotation.WebSocketTransportRegistration registration) {
         registration.addDecoratorFactory(sessionGuard);
     }
