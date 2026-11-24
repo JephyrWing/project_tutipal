@@ -1,0 +1,81 @@
+name: Review PostgreSQL checks
+
+on:
+  pull_request:
+    branches: [develop]
+    paths: ['tutipal_back/**', 'infra/postgres/**', '.github/workflows/review-checks.yml']
+  push:
+    branches: [develop]
+    paths: ['tutipal_back/**', 'infra/postgres/**', '.github/workflows/review-checks.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  review-db:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Start disposable PostgreSQL and pgvector
+        shell: bash
+        run: |
+          set -euo pipefail
+          password=$(openssl rand -hex 24)
+          echo "::add-mask::$password"
+          echo "REVIEW_TEST_DB_PASSWORD=$password" >> "$GITHUB_ENV"
+          echo 'REVIEW_TEST_DB_URL=jdbc:postgresql://127.0.0.1:25436/tutipal_review_e2e' >> "$GITHUB_ENV"
+          echo 'REVIEW_TEST_DB_ALLOW_RESET=disposable' >> "$GITHUB_ENV"
+          docker build -f infra/postgres/Dockerfile -t tutipal-review-postgres .
+          docker run --detach --rm --name "tutipal-review-${GITHUB_RUN_ID}" \
+            -p 127.0.0.1:25436:5432 \
+            -e POSTGRES_DB=tutipal_review_e2e -e POSTGRES_USER=tutipal_review_e2e \
+            -e POSTGRES_PASSWORD="$password" tutipal-review-postgres
+          ready=false
+          for attempt in $(seq 1 30); do
+            if docker exec "tutipal-review-${GITHUB_RUN_ID}" pg_isready -h 127.0.0.1 -U tutipal_review_e2e -d tutipal_review_e2e; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = true
+      - name: Run real database checks
+        working-directory: tutipal_back
+        run: |
+          chmod +x gradlew
+          ./gradlew reviewDbTest --no-daemon
+      - name: Publish actual database test counts
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, os, sys, xml.etree.ElementTree as ET
+          total = failed = skipped = 0
+          for path in glob.glob('tutipal_back/build/test-results/reviewDbTest/TEST-*.xml'):
+              root = ET.parse(path).getroot()
+              total += int(root.get('tests', 0))
+              failed += int(root.get('failures', 0)) + int(root.get('errors', 0))
+              skipped += int(root.get('skipped', 0))
+          summary = f'Review DB: collected={total} ran={total-skipped} failed={failed} skipped={skipped}'
+          print(summary)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as out:
+              out.write(summary + '\n')
+          if total - skipped == 0 or failed or skipped:
+              sys.exit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: review-db-report
+          path: |
+            tutipal_back/build/test-results/reviewDbTest
+            tutipal_back/build/reports/tests/reviewDbTest
+          retention-days: 14
+      - name: Stop this run's disposable database
+        if: always()
+        run: docker stop "tutipal-review-${GITHUB_RUN_ID}" || true

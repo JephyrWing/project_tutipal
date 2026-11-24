@@ -100,11 +100,13 @@ public class ReviewService {
 
     Suggestion suggestIfDue(Item item, Instant now) {
         boolean often = item.seenCount() >= MIN_COUNT || item.seenSeconds() >= MIN_SECONDS;
-        boolean notToday = item.suggestedAt() == null || item.suggestedAt().isBefore(now.minus(SUGGEST_GAP));
+        boolean notToday = item.suggestedAt() == null || !item.suggestedAt().isAfter(now.minus(SUGGEST_GAP));
         if (!often || !notToday) {
             return null;
         }
-        store.markSuggested(item.id(), now);
+        if (!store.markSuggestedIfDue(item.id(), now, now.minus(SUGGEST_GAP), MIN_COUNT, MIN_SECONDS)) {
+            return null;
+        }
         return new Suggestion(item.id(), item.summary());
     }
 
