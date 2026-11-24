@@ -20,7 +20,9 @@
     "test:e2e": "playwright test",
     "test:e2e:list": "playwright test --list",
     "pack": "npm run build && electron-builder --dir --publish never",
-    "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never && npm run verify:win",
+    "verify:win": "node scripts/verify-win-package.mjs",
+    "preverify:win": "node --check scripts/verify-win-package.mjs",
     "dist:mac": "npm run build && electron-builder --mac dmg --publish never",
     "dist:linux": "npm run build && electron-builder --linux AppImage --publish never",
     "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/bridge.cjs && node --check electron/applogin.cjs && node --check electron/screen.cjs && node --check electron/share.cjs && node --check scripts/dev.mjs && node --check vite.config.js && node --check electron/helpShareTarget.cjs && node --check electron/windowTarget.cjs && node --check electron/shareGeometry.cjs && node --check scripts/build-window-target.mjs",
@@ -38,6 +40,7 @@
     "ws": "8.18.3"
   },
   "devDependencies": {
+    "@electron/fuses": "1.8.0",
     "@playwright/test": "1.65.1",
     "@vitejs/plugin-react": "6.3.0",
     "electron": "45.3.3",
@@ -48,6 +51,15 @@
     "appId": "com.tutipal.desktop",
     "productName": "TUTIPAL",
     "asar": true,
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "grantFileProtocolExtraPrivileges": false
+    },
     "asarUnpack": [
       "electron/native/bin/*.exe"
     ],
