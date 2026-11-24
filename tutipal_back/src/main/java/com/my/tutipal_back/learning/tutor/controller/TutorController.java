@@ -7,8 +7,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import jakarta.validation.Valid;
 
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.core.user.OAuth2User;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -44,6 +46,7 @@ public class TutorController {
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chat(@AuthenticationPrincipal OAuth2User me, @Valid @RequestBody ChatRequest request) {
         Long userId = Long.valueOf(me.getName());
+        tutor.requireChatAccess(userId, request.sessionId());
         SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
         AtomicBoolean gone = new AtomicBoolean(false);
         emitter.onTimeout(() -> gone.set(true));
@@ -87,6 +90,13 @@ public class TutorController {
             }
         });
         return emitter;
+    }
+
+    @ExceptionHandler(ApiException.class)
+    ResponseEntity<Map<String, Object>> rejectChat(ApiException error) {
+        return ResponseEntity.status(error.getStatus())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("status", error.getStatus().value(), "message", error.getMessage()));
     }
 
     private static void finishWithError(SseEmitter emitter, String message) {

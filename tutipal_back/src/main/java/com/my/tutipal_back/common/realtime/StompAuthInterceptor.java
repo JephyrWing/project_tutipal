@@ -27,6 +27,9 @@ public class StompAuthInterceptor implements ChannelInterceptor {
 
     private static final Pattern SESSION_TOPIC = Pattern.compile("^/topic/sessions/(\\d{1,18})/(events|teacher)$");
 
+    record SessionTopic(Long sessionId, boolean teacherOnly) {
+    }
+
     private final StudySessionService sessions;
 
     // @Lazy: 세션 서비스 → SessionEvents → 메시징 설정 → 이 인터셉터 로 이어지는 빈 순환을 끊음
@@ -56,23 +59,28 @@ public class StompAuthInterceptor implements ChannelInterceptor {
         if (destination.equals("/user/queue/events") || destination.equals("/user/queue/draw")) {
             return;   // 자기 앞으로 온 것만 받음 (Spring 이 사용자별로 나눔)
         }
-        Matcher m = SESSION_TOPIC.matcher(destination);
-        if (!m.matches()) {
+        SessionTopic topic = sessionTopic(destination);
+        if (topic == null) {
             throw new MessagingException("구독할 수 없는 곳");
         }
-        SessionRole role = sessions.roleOf(Long.valueOf(user.getName()), Long.valueOf(m.group(1)))
+        SessionRole role = sessions.roleOf(Long.valueOf(user.getName()), topic.sessionId())
                 .orElseThrow(() -> new MessagingException("세션 참가자 아님"));
-        if (m.group(2).equals("teacher") && role != SessionRole.TEACHER) {
+        if (topic.teacherOnly() && role != SessionRole.TEACHER) {
             throw new MessagingException("선생님 전용");
         }
     }
 
     /** /topic/sessions/{id}/events 면 id, 아니면 null (Presence 용). */
     static Long eventsTopicSession(String destination) {
+        SessionTopic topic = sessionTopic(destination);
+        return topic != null && !topic.teacherOnly() ? topic.sessionId() : null;
+    }
+
+    static SessionTopic sessionTopic(String destination) {
         if (destination == null) {
             return null;
         }
         Matcher m = SESSION_TOPIC.matcher(destination);
-        return m.matches() && m.group(2).equals("events") ? Long.valueOf(m.group(1)) : null;
+        return m.matches() ? new SessionTopic(Long.valueOf(m.group(1)), m.group(2).equals("teacher")) : null;
     }
 }

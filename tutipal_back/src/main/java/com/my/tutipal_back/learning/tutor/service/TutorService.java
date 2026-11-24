@@ -30,6 +30,13 @@ public class TutorService {
         this.slots = slots;
     }
 
+    /** 스트림을 열기 전에 세션 참여·종료 상태를 확인한다. */
+    public void requireChatAccess(Long userId, Long sessionId) {
+        if (sessionId != null) {
+            sessions.requireActiveRole(userId, sessionId);
+        }
+    }
+
     /** 답변을 조각 단위로 onDelta 에 넘긴다. 호출한 스레드에서 끝까지 실행된다 (가상 스레드에서 부를 것). */
     /**
      * onSources: 세션 자료에서 관련 있는 조각을 찾았으면 그 출처 목록 (답변 전에 한 번). 없으면 안 부름.
