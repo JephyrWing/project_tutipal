@@ -1,6 +1,6 @@
 # TUTIPAL
 
-팀 작업은 [AGENTS.md](AGENTS.md)와 [Jira 협업 시작 안내](https://gad03302.atlassian.net/wiki/spaces/PT/pages/589825)를 먼저 읽고 진행한다. 업무·명세·결정·검증 이력은 Jira, 코드와 PR은 GitHub, 파일 산출물은 [Drive](https://drive.google.com/drive/folders/1r7AnAbWxKyroED1DeWxHz5c5dG0fDdn2)에서 관리한다. 이해 확인 정책도 Jira 하네스의 최신 본문을 따른다. 현재 운영 기준은 jira_drive-v3이며 작성자는 체크/PM 확인 대기로 제출하고 최종 확인·완료 전이는 PM이 직접 수행한다. 계정은 Jira의 실제 accountId와 확인된 한국어·영문 별칭을 대조한다.
+팀 작업은 [AGENTS.md](AGENTS.md)를 확인한 뒤 [Jira 협업 시작 안내](https://gad03302.atlassian.net/wiki/spaces/PT/pages/589825)와 [운영 규칙](https://gad03302.atlassian.net/wiki/spaces/PT/pages/425986)의 현재 본문을 먼저 읽고 진행한다. [HARNESS-READ-20261124-v1](https://gad03302.atlassian.net/browse/PT-1?focusedCommentId=10318)에 따라 새 작업·새 세션·중단/인계/PM 보완 후 재개 시 관련 원문과 작업의 최근 댓글·연결 이슈·활성 예약을 직접 조회하고 같은 작업의 Jira 댓글에 근거를 남긴 뒤 편집한다. 업무·명세·결정·검증 이력은 Jira, 코드와 PR은 GitHub, 파일 산출물은 [Drive](https://drive.google.com/drive/folders/1r7AnAbWxKyroED1DeWxHz5c5dG0fDdn2)에서 관리한다. 이해 확인 정책도 Jira 하네스의 최신 본문을 따른다. 현재 운영 기준은 jira_drive-v3이며 작성자는 체크/PM 확인 대기로 제출하고 최종 확인·완료 전이는 PM이 직접 수행한다. 계정은 Jira의 실제 accountId와 확인된 한국어·영문 별칭을 대조한다.
 
 WBS-SYNC-20261118-v1에 따라 WBS의 담당·계획일·범위·선행 변경은 같은 작업에서 Jira 보드의 실제 담당자·지원 날짜 필드·연결 업무에 반영하고 재조회한다. 공동 담당은 역할별 하위 작업으로 나누며 실제 진행·검사·PM 완료는 Jira 증거로 구분한다.
 
