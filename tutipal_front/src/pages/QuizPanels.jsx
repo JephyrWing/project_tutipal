@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { quizzes } from '../api/quizzes'
 import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
@@ -22,7 +22,8 @@ const mmss = (sec) => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0
 /** 목업 22 · 23 · 24: 이해도 질문 만들기 + 질문별 정답률 + 응답 검토. reloadKey 가 바뀌면(실시간 알림) 다시 읽는다 */
 export function TeacherQuizTab({ sessionId, reloadKey }) {
   const [list, setList] = useState([])
-  const [openId, setOpenId] = useState(null)
+  const [formMode, setFormMode] = useState(null)
+  const [reviewId, setReviewId] = useState(null)
   const [error, setError] = useState('')
 
   const load = useCallback(() => {
@@ -30,25 +31,67 @@ export function TeacherQuizTab({ sessionId, reloadKey }) {
   }, [sessionId])
   useEffect(load, [load, reloadKey])
 
+  function onCreated(quiz) {
+    setList((current) => current.some((item) => item.id === quiz.id) ? current : [...current, quiz])
+    setFormMode(null)
+    setReviewId(quiz.id)
+  }
+
+  const reviewedQuiz = list.find((quiz) => quiz.id === reviewId)
   return (
     <div className="quiz-tab">
-      <QuizForm sessionId={sessionId} onCreated={(q) => { setList((l) => [...l, q]); setOpenId(q.id) }} />
       <section className="card session-body">
+        <div className="row-between">
+          <button className="btn" onClick={() => setFormMode('manual')}>직접 문제 출제</button>
+          <button className="btn btn-primary" onClick={() => setFormMode('ai')}>AI 문제 생성</button>
+        </div>
         <strong className="section-title"><Icon name="chart" size={18} /> 질문별 정답률</strong>
         {error && <p className="error-text">{error}</p>}
         {list.length === 0 && <p className="muted">아직 보낸 질문이 없어요</p>}
         {[...list].reverse().map((q) => (
-          <QuizRow key={q.id} quiz={q} expanded={openId === q.id} reloadKey={reloadKey}
-            onToggle={() => setOpenId(openId === q.id ? null : q.id)} onChanged={load} />
+          <QuizRow key={q.id} quiz={q} onOpen={() => setReviewId(q.id)} />
         ))}
       </section>
+      {formMode && <QuizForm key={formMode} sessionId={sessionId} aiMode={formMode === 'ai'}
+        onCreated={onCreated} onClose={() => setFormMode(null)} />}
+      {reviewedQuiz && (
+        <TeacherQuizDialog title="학생별 답안 관리" onClose={() => setReviewId(null)}>
+          <p className="quiz-question">{reviewedQuiz.question}</p>
+          <p className="muted small">
+            응답 {reviewedQuiz.answered}/{reviewedQuiz.studentCount} · 정답 {reviewedQuiz.correct} · 채점 대기 {reviewedQuiz.pending}
+          </p>
+          <AnswerReview key={reviewedQuiz.id} quiz={reviewedQuiz} reloadKey={reloadKey} onChanged={load} />
+        </TeacherQuizDialog>
+      )}
     </div>
+  )
+}
+
+function TeacherQuizDialog({ title, onClose, closeDisabled, children }) {
+  const dialog = useRef(null)
+  useEffect(() => {
+    const element = dialog.current
+    element.showModal()
+    return () => element.close()
+  }, [])
+
+  return (
+    <dialog ref={dialog} className="card modal teacher-quiz-dialog" aria-label={title} onCancel={(event) => {
+      event.preventDefault()
+      if (!closeDisabled) onClose()
+    }}>
+      <header className="row-between">
+        <h2>{title}</h2>
+        <button type="button" className="btn btn-sm" disabled={closeDisabled} onClick={onClose}>닫기</button>
+      </header>
+      {children}
+    </dialog>
   )
 }
 
 const EMPTY_CHOICES = ['', '', '', '']
 
-function QuizForm({ sessionId, onCreated }) {
+function QuizForm({ sessionId, aiMode, onCreated, onClose }) {
   const [type, setType] = useState('CHOICE')
   const [question, setQuestion] = useState('')
   const [choices, setChoices] = useState(EMPTY_CHOICES)
@@ -58,20 +101,40 @@ function QuizForm({ sessionId, onCreated }) {
   const [hint, setHint] = useState('')
   const [busy, setBusy] = useState('')
   const [status, setStatus] = useState('')
+  const [draftState, setDraftState] = useState('empty')
+  const kept = choices.map((value, index) => ({ value: value.trim(), index })).filter(({ value }) => value)
+  const newAnswer = kept.findIndex(({ index }) => index === answerIndex)
+  const validQuestion = question.trim() !== '' && (type === 'CHOICE'
+    ? kept.length >= 2 && newAnswer >= 0
+    : modelAnswer.trim() !== '')
+
+  function edit(setter, value) {
+    setter(value)
+    if (draftState === 'approved') {
+      setDraftState('review')
+      setStatus('수정한 초안을 다시 승인해 주세요.')
+    }
+  }
+
+  function changeType(nextType) {
+    if (nextType === type) return
+    setType(nextType)
+    setDraftState('empty')
+    setStatus('')
+  }
 
   async function generate() {
+    setDraftState('empty')
     setBusy('ai')
-    setStatus('AI 가 문제를 만들고 있어요… (10초쯤)')
+    setStatus('AI가 문제를 만들고 있어요…')
     try {
       const d = await quizzes.generate(sessionId, type, hint)
       setQuestion(d.question)
-      if (d.type === 'CHOICE' && d.choices) {
-        setChoices([...d.choices, ...EMPTY_CHOICES].slice(0, Math.max(4, d.choices.length)))
-        setAnswerIndex(d.answerIndex)
-      } else {
-        setModelAnswer(d.modelAnswer ?? '')
-      }
-      setStatus('초안이에요. 확인하고 고친 뒤 보내 주세요')
+      setChoices(d.choices ? [...d.choices, ...EMPTY_CHOICES].slice(0, Math.max(4, d.choices.length)) : EMPTY_CHOICES)
+      setAnswerIndex(d.answerIndex ?? null)
+      setModelAnswer(d.modelAnswer ?? '')
+      setDraftState('review')
+      setStatus('문제와 정답을 확인하고 초안을 승인해 주세요.')
     } catch (e) {
       setStatus(errText(e, 'AI 가 문제를 만들지 못했어요'))
     } finally {
@@ -81,26 +144,18 @@ function QuizForm({ sessionId, onCreated }) {
 
   async function onSubmit(e) {
     e.preventDefault()
-    const filled = choices.map((c) => c.trim())
-    // 빈 보기는 빼고 보낸다 (정답 번호도 그에 맞게)
-    const kept = filled.map((c, i) => ({ c, i })).filter((x) => x.c)
-    const newAnswer = kept.findIndex((x) => x.i === answerIndex)
+    if (busy || !validQuestion || (aiMode && draftState !== 'approved')) return
     setBusy('send')
     try {
       const created = await quizzes.create(sessionId, {
         type,
         question,
-        choices: type === 'CHOICE' ? kept.map((x) => x.c) : null,
-        answerIndex: type === 'CHOICE' ? (newAnswer >= 0 ? newAnswer : null) : null,
+        choices: type === 'CHOICE' ? kept.map(({ value }) => value) : null,
+        answerIndex: type === 'CHOICE' ? newAnswer : null,
         modelAnswer: type === 'TEXT' ? modelAnswer : null,
         timeLimitSec,
       })
       onCreated(created)
-      setQuestion('')
-      setChoices(EMPTY_CHOICES)
-      setAnswerIndex(null)
-      setModelAnswer('')
-      setStatus('학생들에게 보냈어요')
     } catch (err) {
       setStatus(errText(err, '보내지 못했어요'))
     } finally {
@@ -109,59 +164,71 @@ function QuizForm({ sessionId, onCreated }) {
   }
 
   return (
-    <form className="card session-body quiz-form" onSubmit={onSubmit}>
-      <div className="row-between">
-        <div className="seg" role="tablist" aria-label="질문 종류">
-          <button type="button" role="tab" aria-selected={type === 'CHOICE'} onClick={() => setType('CHOICE')}>객관식</button>
-          <button type="button" role="tab" aria-selected={type === 'TEXT'} onClick={() => setType('TEXT')}>주관식</button>
+    <TeacherQuizDialog title={aiMode ? 'AI 문제 생성' : '직접 문제 출제'} onClose={onClose} closeDisabled={busy === 'send'}>
+      <form className="session-body quiz-form" onSubmit={onSubmit}>
+        <div className="row-between">
+          <div className="seg" role="tablist" aria-label="질문 종류">
+            <button type="button" role="tab" aria-selected={type === 'CHOICE'} disabled={!!busy} onClick={() => changeType('CHOICE')}>객관식</button>
+            <button type="button" role="tab" aria-selected={type === 'TEXT'} disabled={!!busy} onClick={() => changeType('TEXT')}>주관식</button>
+          </div>
+          {aiMode && <div className="ai-gen">
+            <input value={hint} disabled={!!busy} onChange={(e) => setHint(e.target.value)} maxLength={200} placeholder="수업 내용 (예: 자바 반복문)" aria-label="AI 문제 힌트" />
+            <button type="button" className="btn btn-outline" onClick={() => void generate()} disabled={busy !== ''}>
+              ✦ {busy === 'ai' ? '만드는 중…' : 'AI로 문제 만들기'}
+            </button>
+          </div>}
         </div>
-        <div className="ai-gen">
-          <input value={hint} onChange={(e) => setHint(e.target.value)} maxLength={200} placeholder="수업 내용 (예: 자바 반복문)" aria-label="AI 문제 힌트" />
-          <button type="button" className="btn btn-outline" onClick={() => void generate()} disabled={busy !== ''}>
-            ✦ {busy === 'ai' ? '만드는 중…' : 'AI로 문제 만들기'}
-          </button>
-        </div>
-      </div>
-      <textarea className="input" value={question} onChange={(e) => setQuestion(e.target.value)} maxLength={1000} rows={3} placeholder="질문" required />
-      {type === 'CHOICE' ? (
-        <div className="choice-edit">
-          {choices.map((c, i) => (
-            <label key={i} className={`choice-row${answerIndex === i ? ' correct' : ''}`}>
-              <input type="radio" name="answer" checked={answerIndex === i} onChange={() => setAnswerIndex(i)} aria-label={`${i + 1}번을 정답으로`} />
-              <input className="input" value={c} maxLength={200} placeholder={`보기 ${i + 1}`}
-                onChange={(e) => setChoices(choices.map((x, j) => (j === i ? e.target.value : x)))} />
+        {(!aiMode || draftState !== 'empty') && <fieldset className="quiz-fields" disabled={!!busy}>
+          <textarea className="input" value={question} onChange={(e) => edit(setQuestion, e.target.value)} maxLength={1000} rows={3} placeholder="질문" aria-label="질문" required />
+          {type === 'CHOICE' ? (
+            <div className="choice-edit">
+              {choices.map((c, i) => (
+                <label key={i} className={`choice-row${answerIndex === i ? ' correct' : ''}`}>
+                  <input type="radio" name="answer" checked={answerIndex === i} onChange={() => edit(setAnswerIndex, i)} aria-label={`${i + 1}번을 정답으로`} />
+                  <input className="input" value={c} maxLength={200} placeholder={`보기 ${i + 1}`}
+                    onChange={(e) => edit(setChoices, choices.map((x, j) => (j === i ? e.target.value : x)))} />
+                </label>
+              ))}
+              <span className="muted small">동그라미를 눌러 정답을 고르세요. 빈 보기는 빠져요.</span>
+            </div>
+          ) : (
+            <label className="field small-label">
+              <strong>모범 답안 <span className="muted">(AI 채점 기준)</span></strong>
+              <textarea className="input" value={modelAnswer} onChange={(e) => edit(setModelAnswer, e.target.value)} maxLength={2000} rows={3} required />
             </label>
-          ))}
-          <span className="muted small">동그라미를 눌러 정답을 고르세요. 빈 보기는 빠져요.</span>
-        </div>
-      ) : (
-        <label className="field small-label">
-          <strong>모범 답안 <span className="muted">(AI 채점 기준)</span></strong>
-          <textarea className="input" value={modelAnswer} onChange={(e) => setModelAnswer(e.target.value)} maxLength={2000} rows={3} required />
-        </label>
-      )}
-      <div className="row-between">
-        <label className="muted">
-          제한 시간{' '}
-          <select value={timeLimitSec} onChange={(e) => setTimeLimitSec(Number(e.target.value))}>
-            {[30, 60, 120, 300].map((s) => <option key={s} value={s}>{mmss(s)}</option>)}
-          </select>
-        </label>
-        <span className="muted" aria-live="polite">{status}</span>
-      </div>
-      <button className="btn btn-primary btn-lg" disabled={busy !== '' || !question.trim()}>
-        <Icon name="send" size={18} /> 전체 학생에게 보내기
-      </button>
-    </form>
+          )}
+          <div className="row-between">
+            <label className="muted">
+              제한 시간{' '}
+              <select value={timeLimitSec} onChange={(e) => setTimeLimitSec(Number(e.target.value))}>
+                {[30, 60, 120, 300].map((s) => <option key={s} value={s}>{mmss(s)}</option>)}
+              </select>
+            </label>
+          </div>
+          <div className="row-between">
+            {aiMode && draftState !== 'approved' && (
+              <button type="button" className="btn" disabled={!validQuestion} onClick={() => {
+                setDraftState('approved')
+                setStatus('초안이 승인됐어요. 수업에 보낼 수 있습니다.')
+              }}>초안 승인</button>
+            )}
+            <button type="submit" className="btn btn-primary" disabled={!validQuestion || (aiMode && draftState !== 'approved')}>
+              <Icon name="send" size={18} /> 전체 학생에게 보내기
+            </button>
+          </div>
+        </fieldset>}
+        <span className="muted" role="status">{status}</span>
+      </form>
+    </TeacherQuizDialog>
   )
 }
 
-function QuizRow({ quiz, expanded, reloadKey, onToggle, onChanged }) {
+function QuizRow({ quiz, onOpen }) {
   const graded = quiz.answered - quiz.pending
   const pct = graded > 0 ? Math.round((quiz.correct / graded) * 100) : 0
   return (
     <div className="quiz-row">
-      <button className="quiz-row-head" onClick={onToggle} aria-expanded={expanded}>
+      <button className="quiz-row-head" onClick={onOpen} aria-haspopup="dialog">
         <strong className="quiz-no">{quiz.no}번</strong>
         <span className="quiz-q">{quiz.question}</span>
         <span className="bar" aria-label={`정답률 ${pct}%`}>
@@ -173,7 +240,6 @@ function QuizRow({ quiz, expanded, reloadKey, onToggle, onChanged }) {
         </span>
         {quiz.open ? <OpenBadge closesAt={quiz.closesAt} /> : <span className="badge badge-gray">마감</span>}
       </button>
-      {expanded && <AnswerReview quiz={quiz} reloadKey={reloadKey} onChanged={onChanged} />}
     </div>
   )
 }
