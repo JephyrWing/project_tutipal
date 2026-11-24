@@ -226,6 +226,59 @@ if (!app.requestSingleInstanceLock()) {
       return saved
     })
     ipcMain.handle('screen-capture', (event) => (fromOurPage(event) ? capture() : { status: 'off' }))
+    // Only trusted pages can suspend collection around record deletion.
+    const reviewDeletions = new Map()
+    const reviewDeletionSenders = new Set()
+    let reviewDeletionTicket = 0
+    const notifyReviewDeletion = () => widgetWindow?.webContents.send('review-deletion-changed', reviewDeletions.size > 0)
+    const endReviewDeletion = senderId => {
+      const count = reviewDeletions.get(senderId) ?? 0
+      if (count > 1) reviewDeletions.set(senderId, count - 1)
+      else reviewDeletions.delete(senderId)
+      notifyReviewDeletion()
+    }
+    ipcMain.handle('review-deletion-state', event => fromOurPage(event) ? reviewDeletions.size > 0 : false)
+    ipcMain.handle('review-deletion-start', async event => {
+      if (!fromOurPage(event)) throw new Error('복습 기록 요청을 허용하지 않아요')
+      const sender = event.sender
+      reviewDeletions.set(sender.id, (reviewDeletions.get(sender.id) ?? 0) + 1)
+      if (!reviewDeletionSenders.has(sender.id)) {
+        reviewDeletionSenders.add(sender.id)
+        sender.once('destroyed', () => {
+          reviewDeletionSenders.delete(sender.id)
+          reviewDeletions.delete(sender.id)
+          notifyReviewDeletion()
+        })
+      }
+      const target = widgetWindow?.webContents
+      if (!target || target.isDestroyed()) return
+      const ticket = ++reviewDeletionTicket
+      // Do not issue DELETE until the widget has invalidated its old analysis.
+      try {
+        await new Promise((resolve, reject) => {
+          const cleanup = () => {
+            clearTimeout(timer)
+            ipcMain.removeListener('review-deletion-ready', ready)
+            target.removeListener('destroyed', closed)
+          }
+          const ready = (response, value) => {
+            if (response.sender === target && value === ticket && fromOurPage(response)) { cleanup(); resolve() }
+          }
+          const closed = () => { cleanup(); resolve() }
+          const timer = setTimeout(() => { cleanup(); reject(new Error('위젯 준비를 기다리지 못했어요. 다시 삭제해 주세요.')) }, 5000)
+          ipcMain.on('review-deletion-ready', ready)
+          target.once('destroyed', closed)
+          target.send('review-deletion-changed', true, ticket)
+        })
+      } catch (error) {
+        endReviewDeletion(sender.id)
+        throw error
+      }
+    })
+    ipcMain.handle('review-deletion-end', event => {
+      if (!fromOurPage(event)) return
+      endReviewDeletion(event.sender.id)
+    })
     // 4단계 화면공유: 공유할 창 고르기 → getDisplayMedia 허용, 학생 PC 그림 오버레이
     installDisplayMediaHandler(isOurPage)
     ipcMain.handle('help-share-sources', event => fromOurPage(event) ? helpShareSources() : [])

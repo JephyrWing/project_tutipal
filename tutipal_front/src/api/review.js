@@ -6,6 +6,16 @@ const json = (method, body) => ({
   body: JSON.stringify(body),
 })
 
+async function deleteRecords(path) {
+  const desktop = window.desktop
+  await desktop?.beginReviewDeletion()
+  try {
+    return await request(path, { method: 'DELETE' })
+  } finally {
+    await desktop?.endReviewDeletion()
+  }
+}
+
 /** 로그인한 사용자의 복습 기록 */
 export const reviewApi = {
   /** summary 없으면 같은 화면을 계속 보는 중 */
@@ -13,8 +23,8 @@ export const reviewApi = {
   items: () => request('/api/review/items'),
   history: (page = 0, size = 20) => request(`/api/review/history?${new URLSearchParams({ page, size })}`),
   item: (id) => request(`/api/review/items/${id}`),
-  deleteAll: () => request('/api/review/items', { method: 'DELETE' }),
-  remove: (id) => request(`/api/review/items/${id}`, { method: 'DELETE' }),
+  deleteAll: () => deleteRecords('/api/review/items'),
+  remove: (id) => deleteRecords(`/api/review/items/${id}`),
 }
 
 /** 챗봇에 보낼 "설명 듣기" 질문 */

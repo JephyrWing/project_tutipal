@@ -232,7 +232,7 @@ function DeleteAll({ onDone }) {
   if (confirming) {
     return (
       <div className="settings-danger row-gap">
-        <span className="muted small">복습 기록을 모두 지울까요? 되돌릴 수 없어요</span>
+        <span className="muted small">복습 기록을 모두 지울까요? 되돌릴 수 없어요. 화면 분석이 켜져 있으면 이후 새 기록이 모일 수 있어요.</span>
         <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => void run()}>삭제</button>
         <button className="btn btn-sm" disabled={busy} onClick={() => { setConfirming(false); setError('') }}>취소</button>
         {error && <span className="error-text" role="alert">{error}</span>}

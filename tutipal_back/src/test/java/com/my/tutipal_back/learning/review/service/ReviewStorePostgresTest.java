@@ -33,11 +33,18 @@ class ReviewStorePostgresTest {
         String password = System.getenv("REVIEW_TEST_DB_PASSWORD");
         if (password == null || password.isBlank()) throw new IllegalStateException("Missing disposable DB password");
         var ds = new DriverManagerDataSource(url, "tutipal_review_e2e", password);
-        Flyway.configure().dataSource(ds).load().migrate();
+        Flyway.configure().dataSource(ds).target("14").load().migrate();
         jdbc = new JdbcTemplate(ds);
         jdbc.update("INSERT INTO users(id,created_at,updated_at,name,provider,provider_id,role) VALUES "
                 + "(101,now(),now(),'synthetic owner','dev','review-owner','USER'),"
                 + "(202,now(),now(),'synthetic other','dev','review-other','USER') ON CONFLICT DO NOTHING");
+        // Verify the forward migration preserves existing user/record rows.
+        jdbc.update("INSERT INTO review_items(user_id,summary,embedding,embedding_model,seen_count,seen_seconds,first_seen,last_seen) "
+                + "VALUES (101,'migration preservation',?::vector,'synthetic:1024',1,40,now(),now())", vector());
+        long priorCount = jdbc.queryForObject("SELECT count(*) FROM review_items", Long.class);
+        Flyway.configure().dataSource(ds).load().migrate();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM review_items", Long.class)).isEqualTo(priorCount);
+        assertThat(jdbc.queryForObject("SELECT review_generation FROM users WHERE id=101", Long.class)).isZero();
     }
 
     @BeforeEach void setup() {
@@ -48,6 +55,71 @@ class ReviewStorePostgresTest {
 
     long insert(long user, int seconds) {
         return store.insert(user, "합성 복습", vector(), "synthetic:1024", seconds, NOW);
+    }
+
+    @Test void deletionDuringEmbeddingCannotRecreateRecordsAndFreshObservationWorks() throws Exception {
+        checkDeletionDuringEmbedding(false);
+    }
+
+    @Test void individualDeletionDuringEmbeddingAlsoInvalidatesOldObservation() throws Exception {
+        checkDeletionDuringEmbedding(true);
+    }
+
+    private void checkDeletionDuringEmbedding(boolean individual) throws Exception {
+        long id = insert(101, 600);
+        long other = insert(202, 80);
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        AiClient ai = mock(AiClient.class);
+        when(ai.embedWithModel(any())).thenAnswer(invocation -> {
+            entered.countDown();
+            if (!release.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("Test release missing");
+            float[] v = new float[1024]; v[0] = 1;
+            return new AiClient.EmbedResponse("synthetic:1024", List.of(v));
+        });
+        var observer = new ReviewService(store, ai, Clock.fixed(NOW, ZoneOffset.UTC));
+        try (var pool = Executors.newSingleThreadExecutor()) {
+            Future<ReviewService.Observed> pending = pool.submit(() -> observer.observe(101L, "늦은 합성 요약", 40));
+            try {
+                assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+                if (individual) service.delete(101L, id); else service.deleteAll(101L);
+            } finally { release.countDown(); }
+            assertThat(pending.get(10, TimeUnit.SECONDS)).isEqualTo(new ReviewService.Observed(false, null));
+        }
+        assertThat(store.list(101L)).isEmpty();
+        assertThat(store.find(202L, other)).isPresent();
+        assertThat(observer.observe(101L, "새 합성 요약", 0).recorded()).isTrue();
+        assertThat(store.list(101L)).hasSize(1);
+    }
+
+    @Test void staleTimeOnlyObservationIsRejectedAndOtherUserGenerationIsIndependent() {
+        long old = store.generation(101L);
+        long other = store.generation(202L);
+        insert(101, 40); insert(202, 80);
+        service.deleteAll(101L);
+        assertThat(store.recordIfCurrent(101L, old, () -> { throw new AssertionError("stale write ran"); }, false)).isFalse();
+        assertThat(store.recordIfCurrent(202L, other, () -> true, false)).isTrue();
+    }
+
+    @Test void deleteWaitsForAlreadyCommittingObservationThenRemovesItsRow() throws Exception {
+        long generation = store.generation(101L);
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            var observing = pool.submit(() -> store.recordIfCurrent(101L, generation, () -> {
+                entered.countDown();
+                try { if (!release.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("release missing"); }
+                catch (InterruptedException e) { throw new RuntimeException(e); }
+                return insert(101, 40);
+            }, -1L));
+            assertThat(entered.await(10, TimeUnit.SECONDS)).isTrue();
+            var deleting = pool.submit(() -> { service.deleteAll(101L); return true; });
+            try { assertThatThrownBy(() -> deleting.get(150, TimeUnit.MILLISECONDS)).isInstanceOf(TimeoutException.class); }
+            finally { release.countDown(); }
+            assertThat(observing.get(10, TimeUnit.SECONDS)).isPositive();
+            assertThat(deleting.get(10, TimeUnit.SECONDS)).isTrue();
+        }
+        assertThat(store.list(101L)).isEmpty();
     }
 
     @Test void concurrentObserversOfSameSnapshotSuggestOnlyOnce() throws Exception {

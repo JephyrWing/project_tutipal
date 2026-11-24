@@ -5,6 +5,8 @@ on:
     branches: [develop]
     paths:
       - 'tutipal_front/src/pages/LivePanels.jsx'
+      - 'tutipal_front/src/pages/WidgetPage.jsx'
+      - 'tutipal_front/src/utils/screenAnalysis.js'
       - 'tutipal_front/src/utils/*Session.js'
       - 'tutipal_front/src/utils/roomConnection.js'
       - 'tutipal_front/src/utils/helpScreenShare.js'

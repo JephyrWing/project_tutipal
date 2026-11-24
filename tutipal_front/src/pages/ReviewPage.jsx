@@ -89,7 +89,7 @@ export default function ReviewPage() {
           </div>
           {confirming ? (
             <span className="row-gap">
-              <span className="muted small">모두 지울까요? 되돌릴 수 없어요</span>
+              <span className="muted small">모두 지울까요? 되돌릴 수 없어요. 화면 분석이 켜져 있으면 이후 새 기록이 모일 수 있어요.</span>
               <button className="btn btn-danger btn-sm" disabled={busy || pending} onClick={() => void remove()}>삭제</button>
               <button className="btn btn-sm" disabled={busy} onClick={() => setConfirming(false)}>취소</button>
             </span>

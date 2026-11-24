@@ -70,28 +70,33 @@ public class ReviewService {
         int secs = Math.clamp(seconds, 0, 120);
         Instant now = clock.instant();
         try {
-            Long id;
+            long generation = store.generation(userId);
             if (summary == null || summary.isBlank()) {
-                Item last = store.latest(userId).orElse(null);
-                if (last == null || last.lastSeen().isBefore(now.minus(STILL_LOOKING))) {
-                    return new Observed(false, null);
-                }
-                store.touch(last.id(), 0, secs, now, now.minus(WINDOW));
-                id = last.id();
+                return store.recordIfCurrent(userId, generation, () -> {
+                    Item last = store.latest(userId).orElse(null);
+                    if (last == null || last.lastSeen().isBefore(now.minus(STILL_LOOKING))) {
+                        return new Observed(false, null);
+                    }
+                    store.touch(last.id(), 0, secs, now, now.minus(WINDOW));
+                    return new Observed(true, suggestIfDue(store.get(last.id()), now));
+                }, new Observed(false, null));
             } else {
-                String text = summary.strip();
-                text = text.length() > 500 ? text.substring(0, 500) : text;
-                AiClient.EmbedResponse embedded=ai.embedWithModel(List.of(text));
+                String stripped = summary.strip();
+                String text = stripped.length() > 500 ? stripped.substring(0, 500) : stripped;
+                AiClient.EmbedResponse embedded = ai.embedWithModel(List.of(text));
                 String vec = AiClient.pgVector(embedded.vectors().getFirst());
-                Item near = store.nearest(userId, vec, embedded.model(), now.minus(WINDOW), SIMILAR).orElse(null);
-                if (near != null) {
-                    store.touch(near.id(), 1, secs, now, now.minus(WINDOW));
-                    id = near.id();
-                } else {
-                    id = store.insert(userId, text, vec, embedded.model(), secs, now);
-                }
+                return store.recordIfCurrent(userId, generation, () -> {
+                    Long id;
+                    Item near = store.nearest(userId, vec, embedded.model(), now.minus(WINDOW), SIMILAR).orElse(null);
+                    if (near != null) {
+                        store.touch(near.id(), 1, secs, now, now.minus(WINDOW));
+                        id = near.id();
+                    } else {
+                        id = store.insert(userId, text, vec, embedded.model(), secs, now);
+                    }
+                    return new Observed(true, suggestIfDue(store.get(id), now));
+                }, new Observed(false, null));
             }
-            return new Observed(true, suggestIfDue(store.get(id), now));
         } catch (RuntimeException e) {
             log.warn("review observe failed: {}", e.getClass().getSimpleName());
             return new Observed(false, null);

@@ -4,10 +4,14 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Objects;
+import java.util.function.Supplier;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 복습 기록 저장소. 임베딩(pgvector) 비교가 필요해서 JPA 대신 JDBC.
@@ -26,9 +30,23 @@ public class ReviewStore {
             rs.getTimestamp(7) == null ? null : rs.getTimestamp(7).toInstant());
 
     private final JdbcTemplate jdbc;
+    private final TransactionTemplate mutations;
 
     public ReviewStore(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
+        this.mutations = new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(jdbc.getDataSource())));
+    }
+
+    public long generation(Long userId) {
+        return jdbc.queryForObject("SELECT review_generation FROM users WHERE id = ?", Long.class, userId);
+    }
+
+    /** Embed outside the lock; serialize only the short DB mutation with deletions. */
+    public <T> T recordIfCurrent(Long userId, long generation, Supplier<T> record, T stale) {
+        return mutations.execute(status -> {
+            long current = jdbc.queryForObject("SELECT review_generation FROM users WHERE id = ? FOR UPDATE", Long.class, userId);
+            return current == generation ? record.get() : stale;
+        });
     }
 
     /** since 이후에 본 묶음 중 가장 비슷한 것 (유사도 minSimilarity 이상) */
@@ -98,10 +116,16 @@ public class ReviewStore {
     }
 
     public int deleteAll(Long userId) {
-        return jdbc.update("DELETE FROM review_items WHERE user_id = ?", userId);
+        return mutations.execute(status -> {
+            jdbc.update("UPDATE users SET review_generation = review_generation + 1 WHERE id = ?", userId);
+            return jdbc.update("DELETE FROM review_items WHERE user_id = ?", userId);
+        });
     }
 
     public int delete(Long userId, Long id) {
-        return jdbc.update("DELETE FROM review_items WHERE user_id = ? AND id = ?", userId, id);
+        return mutations.execute(status -> {
+            jdbc.update("UPDATE users SET review_generation = review_generation + 1 WHERE id = ?", userId);
+            return jdbc.update("DELETE FROM review_items WHERE user_id = ? AND id = ?", userId, id);
+        });
     }
 }
