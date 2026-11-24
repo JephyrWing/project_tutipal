@@ -22,6 +22,12 @@ async function guarded(app, url, { method = 'GET', json, file } = {}) {
   }, { url, method, json, file })
 }
 
+async function deleteViaUi(app, button, resource) {
+  const removal = app.page.waitForResponse(r => r.url().endsWith(resource) && r.request().method() === 'DELETE')
+  await button.click()
+  expect((await removal).status()).toBe(204)
+}
+
 async function actors(apps) {
   const teacher = await apps.launch()
   const student = await apps.launch()
@@ -163,7 +169,7 @@ test('PT-70 자료 형식·독립 재사용·수업 권한·삭제 후 검색', 
     .toEqual({ filename: original.filename, state: 'completed' })
   expect(await readFile(destination, 'utf8')).toBe(contents)
   expect(await sources(student, target.id)).toContain(original.filename)
-  await materialRow(teacher, original.filename).getByRole('button', { name: '삭제' }).click()
+  await deleteViaUi(teacher, materialRow(teacher, original.filename).getByRole('button', { name: '삭제' }), deleteUrl(copy.id))
   await expect(materialRow(student, original.filename)).toHaveCount(0)
   expect((await guarded(student, fileUrl(copy.id))).status).toBe(404)
   expect(await sources(student, target.id)).toBeUndefined()
@@ -259,6 +265,7 @@ test('PT-70 공지·자료 알림 선택과 게시글·댓글 삭제 권한', as
   async function addComment(body) {
     await student.page.getByPlaceholder('댓글', { exact: true }).fill(body)
     await student.page.getByRole('button', { name: '등록', exact: true }).click()
+    await expect(student.page.getByText(body, { exact: true })).toBeVisible()
     await expect(teacher.page.getByText(body, { exact: true })).toBeVisible()
     const { data } = await guarded(teacher, postPath)
     return data.comments.find(row => row.body === body).id
@@ -269,18 +276,19 @@ test('PT-70 공지·자료 알림 선택과 게시글·댓글 삭제 권한', as
   await expect(peer.page.locator('.comment').getByRole('button', { name: '삭제' })).toHaveCount(0)
   expect((await guarded(peer, commentPath, { method: 'DELETE' })).status).toBe(403)
   expect((await guarded(outsider, commentPath, { method: 'DELETE' })).status).toBe(404)
-  await student.page.locator('.comment').getByRole('button', { name: '삭제' }).click()
+  await deleteViaUi(student, student.page.locator('.comment').getByRole('button', { name: '삭제' }), commentPath)
   await expect(teacher.page.getByText('작성자 댓글', { exact: true })).toHaveCount(0)
-  await addComment('교사가 삭제할 댓글')
-  await teacher.page.locator('.comment').getByRole('button', { name: '삭제' }).click()
+  const teacherModerated = await addComment('교사가 삭제할 댓글')
+  await deleteViaUi(teacher, teacher.page.locator('.comment').getByRole('button', { name: '삭제' }), '/api/comments/' + teacherModerated)
   await expect(student.page.getByText('교사가 삭제할 댓글', { exact: true })).toHaveCount(0)
-  await student.page.getByRole('button', { name: '글 삭제' }).click()
-  await expect(peer.page.getByRole('button', { name: /학생의 글/ })).toHaveCount(0)
+  await deleteViaUi(student, student.page.getByRole('button', { name: '글 삭제' }), postPath)
+  await expect(peer.page.getByText('아직 글이 없어요')).toBeVisible()
   expect((await guarded(teacher, postPath)).status).toBe(404)
 
   const secondPost = await write('교사가 삭제할 글')
+  await expect(student.page.getByRole('button', { name: /교사가 삭제할 글/ })).toBeVisible()
   await teacher.page.getByRole('button', { name: /교사가 삭제할 글/ }).click()
-  await teacher.page.getByRole('button', { name: '글 삭제' }).click()
+  await deleteViaUi(teacher, teacher.page.getByRole('button', { name: '글 삭제' }), '/api/posts/' + secondPost)
   await expect(student.page.getByRole('button', { name: /교사가 삭제할 글/ })).toHaveCount(0)
   expect((await guarded(student, '/api/posts/' + secondPost)).status).toBe(404)
 })
