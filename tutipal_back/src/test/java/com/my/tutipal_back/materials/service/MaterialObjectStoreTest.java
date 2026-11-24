@@ -8,6 +8,7 @@ import java.nio.file.NoSuchFileException;
 
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.awscore.exception.AwsErrorDetails;
+import software.amazon.awssdk.awscore.exception.AwsServiceException;
 import software.amazon.awssdk.services.s3.model.S3Exception;
 
 import static com.my.tutipal_back.materials.service.MaterialObjectStore.ReadFailureKind.*;
@@ -33,7 +34,7 @@ class MaterialObjectStoreTest {
         assertThat(classifyReadFailure(response(403, "AccessDenied"))).isEqualTo(FORBIDDEN);
     }
 
-    private static S3Exception response(int status, String code) {
+    private static AwsServiceException response(int status, String code) {
         return S3Exception.builder().statusCode(status)
                 .awsErrorDetails(AwsErrorDetails.builder().errorCode(code).build()).build();
     }
