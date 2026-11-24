@@ -28,6 +28,14 @@ public interface MaterialRepository extends JpaRepository<Material, Long> {
             + "from Material m where m.id = :id")
     java.util.Optional<MaterialRow> row(@Param("id") Long id);
 
+    record ReusableMaterial(Long id, String filename, String sessionTitle) {
+    }
+
+    @Query("select new com.my.tutipal_back.materials.repository.MaterialRepository$ReusableMaterial("
+            + "m.id, m.filename, s.title) from Material m, StudySession s "
+            + "where m.sessionId = s.id and s.ownerId = :userId and m.sessionId <> :sessionId order by m.id desc")
+    List<ReusableMaterial> reusable(@Param("userId") Long userId, @Param("sessionId") Long sessionId);
+
     /** 처리 스레드(트랜잭션 밖)에서 부르므로 자체 트랜잭션 */
     @Transactional
     @Modifying

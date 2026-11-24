@@ -9,11 +9,14 @@ const json = (method, body) => ({
 /** MaterialController (목업 28) */
 export const materials = {
   list: (sessionId) => request(`/api/sessions/${sessionId}/materials`),
-  upload: (sessionId, file) => {
+  upload: (sessionId, file, alert = false) => {
     const form = new FormData()
     form.append('file', file)
+    form.append('alert', String(alert))
     return request(`/api/sessions/${sessionId}/materials`, { method: 'POST', body: form })
   },
+  reusable: (sessionId) => request(`/api/sessions/${sessionId}/materials/reusable`),
+  reuse: (sessionId, sourceId) => request(`/api/sessions/${sessionId}/materials/reuse/${sourceId}`, { method: 'POST' }),
   remove: (id) => request(`/api/materials/${id}`, { method: 'DELETE' }),
   /** 같은 주소 + 로그인 쿠키라 <a href> 로 바로 내려받기 */
   fileUrl: (id) => `/api/materials/${id}/file`,

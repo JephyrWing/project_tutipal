@@ -11,8 +11,11 @@ const kb = (n) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))}KB` : 
 export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
   const [list, setList] = useState([])
   const [error, setError] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [busy, setBusy] = useState(null)
   const [drag, setDrag] = useState(false)
+  const [alert, setAlert] = useState(false)
+  const [candidates, setCandidates] = useState(null)
+  const [sourceId, setSourceId] = useState('')
   const inputRef = useRef(null)
 
   const load = useCallback(() => {
@@ -21,17 +24,43 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
   useEffect(load, [load, reloadKey])
 
   async function upload(files) {
-    if (!files?.length) return
-    setBusy(true)
+    if (busy || !files?.length) return
+    setBusy('uploading')
     setError('')
     try {
-      for (const f of Array.from(files)) await materials.upload(sessionId, f)
-      load()
+      for (const f of Array.from(files)) await materials.upload(sessionId, f, alert)
     } catch (e) {
       setError(errText(e, '올리지 못했어요'))
     } finally {
-      setBusy(false)
+      load()
+      setBusy(null)
       if (inputRef.current) inputRef.current.value = ''
+    }
+  }
+
+  async function showReusable() {
+    setError('')
+    try {
+      setCandidates(await materials.reusable(sessionId))
+      setSourceId('')
+    } catch (e) {
+      setError(errText(e, '이전 수업 자료를 불러오지 못했어요'))
+    }
+  }
+
+  async function reuse(e) {
+    e.preventDefault()
+    if (!sourceId) return
+    setBusy('reusing')
+    setError('')
+    try {
+      await materials.reuse(sessionId, sourceId)
+      setCandidates(null)
+      load()
+    } catch (err) {
+      setError(errText(err, '자료를 불러오지 못했어요'))
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -45,15 +74,33 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
     <section className="card session-body">
       <strong className="section-title"><Icon name="book" size={18} /> 자료</strong>
       {teacher && (
-        <label className={`dropzone${drag ? ' over' : ''}`} onDragOver={(e) => { e.preventDefault(); setDrag(true) }}
-          onDragLeave={() => setDrag(false)} onDrop={onDrop}>
-          <Mascot mood="happy" size={70} />
-          <span>
-            <strong>{busy ? '올리는 중…' : '자료 업로드'}</strong>
-            <span className="muted small">txt · md · pdf, 10MB 이하. 끌어다 놓거나 눌러서 고르기. 학생 챗봇이 이 자료를 근거로 답해요</span>
-          </span>
-          <input ref={inputRef} type="file" accept=".txt,.md,.pdf" multiple disabled={busy} onChange={(e) => void upload(e.target.files)} />
-        </label>
+        <>
+          <label className={`dropzone${drag ? ' over' : ''}`} onDragOver={(e) => { e.preventDefault(); setDrag(true) }}
+            onDragLeave={() => setDrag(false)} onDrop={onDrop}>
+            <Mascot mood="happy" size={70} />
+            <span>
+              <strong>{busy === 'uploading' ? '올리는 중…' : '자료 업로드'}</strong>
+              <span className="muted small">txt · md · pdf, 10MB 이하. 끌어다 놓거나 눌러서 고르기. 학생 챗봇이 이 자료를 근거로 답해요</span>
+            </span>
+            <input ref={inputRef} type="file" accept=".txt,.md,.pdf" multiple disabled={!!busy} onChange={(e) => void upload(e.target.files)} />
+          </label>
+          <label className="check-row">
+            <input type="checkbox" checked={alert} disabled={!!busy} onChange={(e) => setAlert(e.target.checked)} /> 자료 업로드 시 학생에게 알림
+          </label>
+          <button className="btn btn-sm" disabled={!!busy} aria-expanded={candidates !== null}
+            onClick={() => { if (candidates === null) void showReusable(); else setCandidates(null) }}>
+            이전 수업 자료 불러오기
+          </button>
+          {candidates !== null && (candidates.length === 0 ? <p className="muted">이전 수업 자료가 없어요</p> : (
+            <form className="row-gap" onSubmit={(e) => void reuse(e)}>
+              <select className="input" aria-label="이전 수업 자료" value={sourceId} disabled={!!busy} onChange={(e) => setSourceId(e.target.value)}>
+                <option value="">자료 선택</option>
+                {candidates.map((m) => <option key={m.id} value={m.id}>{m.sessionTitle} · {m.filename}</option>)}
+              </select>
+              <button className="btn btn-primary" disabled={!sourceId || !!busy}>{busy === 'reusing' ? '불러오는 중…' : '불러오기'}</button>
+            </form>
+          ))}
+        </>
       )}
       {error && <p className="error-text">{error}</p>}
       {list.length === 0 ? <p className="muted">아직 올린 자료가 없어요</p> : (

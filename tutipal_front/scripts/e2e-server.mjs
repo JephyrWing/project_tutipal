@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdtemp, readdir, realpath, rm } from 'node:fs/promises'
+import { createServer } from 'node:http'
+import { once } from 'node:events'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,6 +19,34 @@ if (jars.length !== 1) throw new Error('Build exactly one Spring bootJar before 
 const temporary = await mkdtemp(path.join(os.tmpdir(), 'tutipal-e2e-server-'))
 const java = process.env.JAVA_HOME
   ? path.join(process.env.JAVA_HOME, 'bin', process.platform === 'win32' ? 'java.exe' : 'java') : 'java'
+// Only PT-70's synthetic input reaches the stand-in. Other AI calls still fail as before.
+const materialVector = [1, ...Array(1023).fill(0)]
+const materialAi = createServer(async (request, response) => {
+  if (request.method !== 'POST' || !['/v1/embed', '/v1/chat'].includes(request.url)) {
+    response.writeHead(503).end()
+    return
+  }
+  try {
+    const chunks = []
+    for await (const chunk of request) chunks.push(chunk)
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    if (request.url === '/v1/embed' && body.texts?.length &&
+        body.texts.every(text => text.startsWith('PT70MATERIAL'))) {
+      response.writeHead(200, { 'Content-Type': 'application/json' })
+      response.end(JSON.stringify({ model: 'e2e:pt70', vectors: body.texts.map(() => materialVector) }))
+    } else if (request.url === '/v1/chat' && body.messages?.at(-1)?.content?.startsWith('PT70MATERIAL')) {
+      response.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
+      response.end(JSON.stringify({ delta: 'PT70 test response' }) + '\n')
+    } else {
+      response.writeHead(503).end()
+    }
+  } catch {
+    response.writeHead(400).end()
+  }
+})
+materialAi.listen(0, '127.0.0.1')
+await once(materialAi, 'listening')
+materialAi.unref()
 const child = spawn(java, ['-jar', path.join(libs, jars[0]), '--server.address=127.0.0.1', '--server.port=28080'], {
   cwd: temporary,
   stdio: 'inherit',
@@ -31,7 +61,7 @@ const child = spawn(java, ['-jar', path.join(libs, jars[0]), '--server.address=1
     DB_PW: process.env.E2E_DB_PASSWORD,
     DEV_LOGIN: 'true',
     SESSION_COOKIE_SECURE: 'false',
-    FAST_API_BASE_URL: 'http://127.0.0.1:9',
+    FAST_API_BASE_URL: `http://127.0.0.1:${materialAi.address().port}`,
     AI_INTERNAL_KEY: randomBytes(32).toString('hex'),
     LIVEKIT_INTERNAL_URL: 'http://127.0.0.1:9',
     LIVEKIT_API_KEY: 'disposable-e2e',
@@ -47,6 +77,7 @@ const child = spawn(java, ['-jar', path.join(libs, jars[0]), '--server.address=1
 for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => child.kill())
 child.once('error', error => { console.error(error.message); process.exitCode = 1 })
 child.once('exit', async code => {
+  materialAi.close()
   const resolved = await realpath(temporary)
   const allowedRoot = await realpath(os.tmpdir())
   if (path.dirname(resolved) === allowedRoot && path.basename(resolved).startsWith('tutipal-e2e-server-')) {

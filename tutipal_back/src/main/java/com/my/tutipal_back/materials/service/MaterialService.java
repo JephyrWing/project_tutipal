@@ -17,6 +17,7 @@ import org.springframework.web.multipart.MultipartFile;
 import com.my.tutipal_back.materials.entity.Material;
 import com.my.tutipal_back.materials.repository.MaterialRepository;
 import com.my.tutipal_back.materials.repository.MaterialRepository.MaterialRow;
+import com.my.tutipal_back.materials.repository.MaterialRepository.ReusableMaterial;
 import com.my.tutipal_back.sessions.service.StudySessionService;
 import com.my.tutipal_back.ai.client.AiClient;
 import com.my.tutipal_back.ai.client.AiSlots;
@@ -60,7 +61,7 @@ public class MaterialService {
     }
 
     @Transactional
-    public MaterialRow upload(Long userId, Long sessionId, MultipartFile file) {
+    public MaterialRow upload(Long userId, Long sessionId, MultipartFile file, boolean alert) {
         sessions.requireTeacherOf(userId, sessionId);
         sessions.requireActiveRole(userId, sessionId);
         String name = safeName(file.getOriginalFilename());
@@ -76,6 +77,30 @@ public class MaterialService {
         } catch (java.io.IOException e) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "파일을 읽지 못했어요");
         }
+        return store(userId, sessionId, name, data, alert);
+    }
+
+    public List<ReusableMaterial> reusable(Long userId, Long sessionId) {
+        sessions.requireTeacherOf(userId, sessionId);
+        sessions.requireActiveRole(userId, sessionId);
+        return materials.reusable(userId, sessionId);
+    }
+
+    @Transactional
+    public MaterialRow reuse(Long userId, Long sessionId, Long sourceId) {
+        sessions.requireTeacherOf(userId, sessionId);
+        sessions.requireActiveRole(userId, sessionId);
+        Material source = find(sourceId);
+        // 이전 수업은 종료됐어도 그 수업의 교사가 다시 사용할 수 있다.
+        sessions.requireTeacherOf(userId, source.getSessionId());
+        if (sessionId.equals(source.getSessionId())) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "다른 수업의 자료를 선택해 주세요");
+        }
+        // 대상 수업의 원본·청크를 따로 저장해 어느 쪽을 삭제해도 다른 수업에 영향이 없다.
+        return store(userId, sessionId, source.getFilename(), objects.get(source.getStorageKey()), false);
+    }
+
+    private MaterialRow store(Long userId, Long sessionId, String name, byte[] data, boolean alert) {
         String key = objects.put(data);
         org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
             new org.springframework.transaction.support.TransactionSynchronization() {
@@ -86,7 +111,7 @@ public class MaterialService {
         Material m = materials.save(new Material(sessionId, userId, name, key, data.length));
         Long id = m.getId();
         AfterCommit.run(() -> Thread.ofVirtual().name("material-index").start(() -> index(id)));
-        events.toSession(sessionId, "materials", id);
+        events.toSession(sessionId, alert ? "materialAlert" : "materials", id);
         return materials.row(id).orElseThrow();
     }
 
@@ -150,8 +175,9 @@ public class MaterialService {
             log.warn("material index failed: id={} {}", materialId, e.getClass().getSimpleName());
             jdbc.update("DELETE FROM material_chunks WHERE material_id = ?", materialId);
             materials.finish(materialId, Material.Status.FAILED, 0, "처리하지 못했어요. 다시 올려 주세요");
+        } finally {
+            events.toSession(m.getSessionId(), "materials", materialId);
         }
-        events.toSession(m.getSessionId(), "materials", materialId);
     }
 
 
