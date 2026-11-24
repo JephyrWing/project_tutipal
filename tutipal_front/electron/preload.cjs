@@ -16,6 +16,14 @@ contextBridge.exposeInMainWorld('desktop', {
   captureScreen: () => ipcRenderer.invoke('screen-capture'),
   // 4단계 화면공유: 다음 getDisplayMedia 에서 공유할 창 (빈 값 = 주 모니터), 학생 PC 그림 오버레이(목업 19)
   setShareSource: (id) => ipcRenderer.send('share-source', id),
+  helpShareSources: () => ipcRenderer.invoke('help-share-sources'),
+  prepareHelpShare: id => ipcRenderer.invoke('help-share-prepare', id),
+  setHelpShareVideoSize: (id, width, height) => ipcRenderer.send('help-share-size', id, width, height),
+  onHelpShareEnded: cb => {
+    const listener = (_event, reason) => { if (typeof reason === 'string') cb(reason) }
+    ipcRenderer.on('help-share-ended', listener)
+    return () => ipcRenderer.removeListener('help-share-ended', listener)
+  },
   showOverlay: (on) => ipcRenderer.send('overlay-show', on === true),
   sendOverlayDraw: (message) => ipcRenderer.send('overlay-draw', message),
   onOverlayDraw: (cb) => {

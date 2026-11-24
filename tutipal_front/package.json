@@ -10,6 +10,9 @@
     "node": ">=24.22.3 <25"
   },
   "scripts": {
+    "predev": "node scripts/build-window-target.mjs",
+    "prebuild": "node scripts/build-window-target.mjs",
+    "prestart": "node scripts/build-window-target.mjs",
     "postinstall": "install-electron",
     "dev": "node scripts/dev.mjs",
     "build": "vite build",
@@ -20,7 +23,10 @@
     "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
     "dist:mac": "npm run build && electron-builder --mac dmg --publish never",
     "dist:linux": "npm run build && electron-builder --linux AppImage --publish never",
-    "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/bridge.cjs && node --check electron/applogin.cjs && node --check electron/screen.cjs && node --check electron/share.cjs && node --check scripts/dev.mjs && node --check vite.config.js"
+    "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/bridge.cjs && node --check electron/applogin.cjs && node --check electron/screen.cjs && node --check electron/share.cjs && node --check scripts/dev.mjs && node --check vite.config.js && node --check electron/helpShareTarget.cjs && node --check electron/windowTarget.cjs && node --check electron/shareGeometry.cjs && node --check scripts/build-window-target.mjs",
+    "test:window-target": "node scripts/build-window-target.mjs && electron tests/native-window-target.cjs",
+    "test:share-ui": "node tests/help-share-ui.mjs",
+    "test:native-capture": "node scripts/build-window-target.mjs && electron tests/native-capture.cjs"
   },
   "dependencies": {
     "livekit-client": "2.24.1",
@@ -42,6 +48,9 @@
     "appId": "com.tutipal.desktop",
     "productName": "TUTIPAL",
     "asar": true,
+    "asarUnpack": [
+      "electron/native/bin/*.exe"
+    ],
     "directories": {
       "output": "release"
     },

@@ -139,3 +139,16 @@ test('a replacement controller cannot publish before the previous late capture i
   assert.deepEqual(calls, [true, 'old-stop', false, true])
   await fresh.dispose()
 })
+
+test('Main preparation is awaited and cancelled preparation cannot start display capture', async () => {
+  const gate=deferred(),calls=[]
+  const { control }=setup({ selectSource:()=>gate.promise, participant:{async setScreenShareEnabled(on){calls.push(on)}} })
+  const start=control.start()
+  await new Promise(resolve=>setImmediate(resolve))
+  assert.deepEqual(calls,[])
+  const stopped=control.stop()
+  gate.resolve()
+  assert.equal(await start,false)
+  await stopped
+  assert.equal(calls.includes(true),false)
+})

@@ -10,6 +10,13 @@ on:
       - 'tutipal_front/src/utils/helpScreenShare.js'
       - 'tutipal_front/src/utils/shareSourceCatalog.js'
       - 'tutipal_front/tests/*.test.mjs'
+      - 'tutipal_front/tests/native-window-target.cjs'
+      - 'tutipal_front/tests/help-share-ui.mjs'
+      - 'tutipal_front/electron/**'
+      - 'tutipal_front/src/components/HelpSharePicker*'
+      - 'tutipal_front/src/utils/helpShareSelection.js'
+      - 'tutipal_front/scripts/build-window-target.mjs'
+      - 'tutipal_front/package.json'
       - '.github/workflows/front-share-tests.yml'
   workflow_dispatch:
 
@@ -27,3 +34,19 @@ jobs:
       - name: Run lifecycle regressions
         working-directory: tutipal_front
         run: node --test tests/*.test.mjs
+  windows-share-target:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.3'
+      - name: Install locked dependencies
+        working-directory: tutipal_front
+        run: npm ci
+      - name: Verify native target tracking
+        working-directory: tutipal_front
+        run: npm run test:window-target
+      - name: Verify synthetic share picker UI
+        working-directory: tutipal_front
+        run: npm run test:share-ui
