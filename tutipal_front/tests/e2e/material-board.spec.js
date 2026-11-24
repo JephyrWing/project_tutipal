@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { test, expect, login, createRoom, joinRoom } from './fixtures.js'
 
 async function guarded(app, url, { method = 'GET', json, file } = {}) {
@@ -148,11 +149,19 @@ test('PT-70 자료 형식·독립 재사용·수업 권한·삭제 후 검색', 
   const copy = await copyOriginal()
   expect((await guarded(outsider, fileUrl(copy.id))).status).toBe(404)
   expect((await guarded(student, deleteUrl(copy.id), { method: 'DELETE' })).status).toBe(403)
-  const downloadEvent = student.page.waitForEvent('download')
+  const destination = join(student.profile, 'pt70-download.txt')
+  await student.application.evaluate(({ session }, savePath) => {
+    globalThis.pt70Download = null
+    session.defaultSession.once('will-download', (_event, item) => {
+      const filename = item.getFilename()
+      item.setSavePath(savePath)
+      item.once('done', (_event, state) => { globalThis.pt70Download = { filename, state } })
+    })
+  }, destination)
   await student.page.getByRole('link', { name: original.filename }).click()
-  const download = await downloadEvent
-  expect(download.suggestedFilename()).toBe(original.filename)
-  expect(await readFile(await download.path(), 'utf8')).toBe(contents)
+  await expect.poll(() => student.application.evaluate(() => globalThis.pt70Download))
+    .toEqual({ filename: original.filename, state: 'completed' })
+  expect(await readFile(destination, 'utf8')).toBe(contents)
   expect(await sources(student, target.id)).toContain(original.filename)
   await materialRow(teacher, original.filename).getByRole('button', { name: '삭제' }).click()
   await expect(materialRow(student, original.filename)).toHaveCount(0)
@@ -213,7 +222,7 @@ test('PT-70 공지·자료 알림 선택과 게시글·댓글 삭제 권한', as
   await tab(student, '자료').click()
   const materialAlert = teacher.page.getByRole('checkbox', { name: '자료 업로드 시 학생에게 알림' })
   await materialAlert.uncheck()
-  const silent = await upload(teacher, 'silent.md', 'PT70MATERIAL silent')
+  const silent = await upload(teacher, 'silent.md', 'PT70MATERIAL **silent markdown**')
   await expect(materialRow(student, silent.filename)).toContainText('완료')
   await expect(toast).toHaveCount(0)
   await tab(student, '공지').click()
