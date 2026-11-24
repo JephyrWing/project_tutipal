@@ -10,9 +10,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 import com.my.tutipal_back.learning.review.repository.ReviewStore;
 import com.my.tutipal_back.learning.review.repository.ReviewStore.Item;
+import com.my.tutipal_back.learning.review.dto.ReviewHistoryPage;
 import com.my.tutipal_back.ai.client.AiClient;
 import com.my.tutipal_back.common.exception.ApiException;
 
@@ -107,6 +110,17 @@ public class ReviewService {
 
     public List<Item> list(Long userId) {
         return store.list(userId);
+    }
+
+    /** 같은 응답의 전체 개수와 목록은 동일 DB 스냅샷에서 읽는다. */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public ReviewHistoryPage history(Long userId, int page, int size) {
+        if (page < 0 || size < 1 || size > 100) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "페이지는 0 이상, 페이지 크기는 1~100이어야 해요");
+        }
+        long total = store.count(userId);
+        return new ReviewHistoryPage(store.history(userId, size, (long) page * size), total,
+                page, size, (total + size - 1) / size);
     }
 
     public Item get(Long userId, Long id) {

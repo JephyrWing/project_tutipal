@@ -89,21 +89,30 @@ function ScreenTab() {
 
 function ReviewTab() {
   const [count, setCount] = useState(null)
+  const [error, setError] = useState('')
+  const [revision, setRevision] = useState(0)
   useEffect(() => {
-    reviewApi.items().then((l) => setCount(l.length), () => setCount(0))
-  }, [])
+    let active = true
+    setCount(null)
+    setError('')
+    reviewApi.history(0, 1).then((result) => { if (active) setCount(result.totalCount) }, (e) => {
+      if (active) setError(e instanceof Error ? e.message : '기록 개수를 불러오지 못했어요')
+    })
+    return () => { active = false }
+  }, [revision])
   return (
     <>
       <Head mood="listen" title="복습 기록" text="화면 분석이 켜져 있을 때 자주 보거나 오래 본 내용이 모여요." />
       <div className="setting-card">
         <Icon name="book" size={28} />
         <span>
-          <strong>모인 기록 {count ?? '…'}개</strong>
+          <strong>{error ? '기록 개수를 확인하지 못했어요' : count === null ? '기록 개수 확인 중…' : `모인 기록 ${count}개`}</strong>
           <span className="muted small">설명 듣기 · 하나씩 지우기는 복습 기록 화면에서</span>
         </span>
         <Link to="/review" className="btn btn-outline">복습 기록 보기</Link>
       </div>
-      <DeleteAll onDone={() => setCount(0)} />
+      {error && <div role="alert"><p className="error-text">{error}</p><button className="btn" onClick={() => setRevision((v) => v + 1)}>다시 불러오기</button></div>}
+      <DeleteAll onDone={() => setRevision((v) => v + 1)} />
     </>
   )
 }
@@ -203,18 +212,30 @@ function Withdraw() {
 function DeleteAll({ onDone }) {
   const [confirming, setConfirming] = useState(false)
   const [done, setDone] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
   async function run() {
-    await reviewApi.deleteAll()
-    setConfirming(false)
-    setDone(true)
-    onDone?.()
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      await reviewApi.deleteAll()
+      setConfirming(false)
+      setDone(true)
+      onDone?.()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '삭제하지 못했어요')
+    } finally {
+      setBusy(false)
+    }
   }
   if (confirming) {
     return (
       <div className="settings-danger row-gap">
         <span className="muted small">복습 기록을 모두 지울까요? 되돌릴 수 없어요</span>
-        <button className="btn btn-danger btn-sm" onClick={() => void run()}>삭제</button>
-        <button className="btn btn-sm" onClick={() => setConfirming(false)}>취소</button>
+        <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => void run()}>삭제</button>
+        <button className="btn btn-sm" disabled={busy} onClick={() => { setConfirming(false); setError('') }}>취소</button>
+        {error && <span className="error-text" role="alert">{error}</span>}
       </div>
     )
   }
