@@ -9,6 +9,7 @@ import Mascot from '../components/Mascot'
 import { createLiveRoomSession } from '../utils/liveRoomSession'
 import { createScreenShareSession } from '../utils/screenShareSession'
 import { createShareSourceCatalog } from '../utils/shareSourceCatalog'
+import HelpSharePicker from '../components/HelpSharePicker'
 
 const errText = (e, fallback) => (e instanceof Error ? e.message : fallback)
 
@@ -242,7 +243,7 @@ export function StudentLiveTab({ sessionId }) {
 
 // ---------------- 도움 요청 (방 B) ----------------
 
-/** 목업 17 학생: 도움 요청 보내기 + 진행 상태. 수락되면 내 화면(주 모니터)을 선생님에게 공유하고 그림을 오버레이로 받는다 */
+/** 수락 뒤 학생이 대상 선택·미리보기·동의를 거쳐 공유한다. */
 export function StudentHelp({ sessionId, reloadKey }) {
   const [mine, setMine] = useState(null)
   const [open, setOpen] = useState(false)
@@ -304,7 +305,7 @@ export function StudentHelp({ sessionId, reloadKey }) {
               placeholder="어디서 막혔는지 적어 주세요" autoFocus required />
             <label className="check-row">
               <input type="checkbox" checked={share} onChange={(e) => setShare(e.target.checked)} />
-              내 화면을 선생님에게 보여주기 <span className="muted small">(수락 후 직접 공유를 시작해요)</span>
+              화면 공유로 도움받기 <span className="muted small">(수락 후 공유할 창을 고르고 동의해요)</span>
             </label>
             {error && <p className="error-text">{error}</p>}
             <div className="consent-actions">
@@ -328,6 +329,12 @@ function HelpSession({ help, onEnd }) {
   const [consented, setConsented] = useState(false)
   const [sharing, setSharing] = useState(false)
   const [starting, setStarting] = useState(false)
+  const [selected, setSelected] = useState(null)
+  const [previewTrack, setPreviewTrack] = useState(null)
+  const selectedRef = useRef(null)
+  selectedRef.current = selected
+  const approvedSource = useRef(null)
+  const previewVideo = useRef(null)
   const shareControl = useRef(null)
   useHelpDrawing(help.id, (message) => desktop?.sendOverlayDraw(JSON.stringify(message)))
 
@@ -336,16 +343,25 @@ function HelpSession({ help, onEnd }) {
     setSharing(false)
     setStarting(false)
     setShareError('')
+    setSelected(null)
+    setPreviewTrack(null)
     if (!room) return
     const control = createScreenShareSession({
       participant: room.localParticipant,
       requiresConsent: true,
       prepare: () => {
         if (!help.shareScreen || room.state !== 'connected') return false
+        const source = selectedRef.current
+        if (desktop && !source) throw new Error('공유할 창을 먼저 골라 주세요')
+        approvedSource.current = source
       },
-      selectSource: () => desktop?.setShareSource(''), // 명시적으로 동의한 주 모니터 전체
+      selectSource: async () => {
+        if (!desktop) return
+        try { await desktop.prepareHelpShare(approvedSource.current.id) }
+        catch { throw new Error('선택한 창을 준비하지 못했어요. 창을 열고 다시 선택해 주세요') }
+      },
       clearSource: () => desktop?.setShareSource(null),
-      onTrack: () => {},
+      onTrack: setPreviewTrack,
       onSharing: setSharing,
       onError: (e) => setShareError(errText(e, '화면을 공유하지 못했어요')),
     })
@@ -358,8 +374,35 @@ function HelpSession({ help, onEnd }) {
 
   useEffect(() => {
     desktop?.showOverlay(sharing)
-    return () => desktop?.showOverlay(false)
   }, [sharing, desktop])
+  useEffect(() => () => desktop?.showOverlay(false), [desktop])
+
+  useEffect(() => desktop?.onHelpShareEnded(reason => {
+    void shareControl.current?.stop()
+    setSelected(null)
+    setConsented(false)
+    setShareError(reason)
+  }), [desktop])
+
+  useEffect(() => {
+    const video = previewVideo.current
+    if (!previewTrack || !video) return
+    previewTrack.attach(video)
+    const measure = () => {
+      const settings = previewTrack.mediaStreamTrack?.getSettings()
+      const width = video.videoWidth || settings?.width
+      const height = video.videoHeight || settings?.height
+      if (width && height && approvedSource.current) desktop?.setHelpShareVideoSize(approvedSource.current.id, width, height)
+    }
+    measure()
+    video.addEventListener('loadedmetadata', measure)
+    video.addEventListener('resize', measure)
+    return () => {
+      video.removeEventListener('loadedmetadata', measure)
+      video.removeEventListener('resize', measure)
+      previewTrack.detach(video)
+    }
+  }, [previewTrack, desktop])
 
   async function startSharing() {
     const control = shareControl.current
@@ -380,18 +423,21 @@ function HelpSession({ help, onEnd }) {
       </span>
       {help.shareScreen && !sharing && (
         <>
+          {desktop && <HelpSharePicker desktop={desktop} disabled={starting || !room} selected={selected}
+            onSelect={source => { setSelected(source); setConsented(false); setShareError('') }} onError={setShareError} />}
           <label className="check-row small">
-            <input type="checkbox" checked={consented} disabled={starting || !room}
+            <input type="checkbox" checked={consented} disabled={starting || !room || (!!desktop && !selected)}
               onChange={(e) => setConsented(e.target.checked)} />
-            주 모니터 전체를 선생님에게 보여주는 데 동의해요
+            {desktop ? `선택한 ${selected?.id.startsWith('screen:') ? '전체 화면' : '창'}을 선생님에게 보여주는 데 동의해요` : '브라우저에서 고를 화면을 공유하는 데 동의해요'}
           </label>
-          <button className="btn btn-sm btn-primary" disabled={!room || !consented || starting}
+          <button className="btn btn-sm btn-primary" disabled={!room || !consented || starting || (!!desktop && !selected)}
             onClick={() => void startSharing()}>{starting ? '공유 준비 중…' : '화면 공유 시작'}</button>
         </>
       )}
       {sharing && (
         <>
-          <span className="muted small">공유 중 · 주 모니터 전체</span>
+          <span className="muted small">공유 중 · {selected?.name ?? '선택한 화면'}</span>
+          <video className="help-local-preview" ref={previewVideo} autoPlay playsInline muted aria-label="현재 공유 중인 화면 미리보기" />
           <button className="btn btn-sm" onClick={() => void shareControl.current?.stop()}>화면 공유 중지</button>
         </>
       )}

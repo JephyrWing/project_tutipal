@@ -48,9 +48,10 @@ export function createScreenShareSession({ participant, prepare, onSharing, onTr
         if (disposed || attempt !== version || await prepare() === false) return false
         if (disposed || attempt !== version) return false
         requested = true
-        const publication = await enqueue(() => {
+        const publication = await enqueue(async () => {
           if (disposed || attempt !== version) return undefined
-          selectSource()
+          await selectSource()
+          if (disposed || attempt !== version) return undefined
           return participant.setScreenShareEnabled(true, { audio: false })
         })
         const next = publication?.track

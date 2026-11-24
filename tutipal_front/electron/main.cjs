@@ -5,7 +5,8 @@ const {
 } = require('electron')
 const { finishBrowserLogin, startBrowserLogin } = require('./applogin.cjs')
 const { capture, listSources, loadSettings, saveSettings } = require('./screen.cjs')
-const { chooseShareSource, forwardDraw, installDisplayMediaHandler, showOverlay } = require('./share.cjs')
+const { chooseShareSource, forwardDraw, installDisplayMediaHandler, showOverlay,
+  helpShareSources, prepareHelpShare, setHelpShareVideoSize } = require('./share.cjs')
 const { startBridge } = require('./bridge.cjs')
 
 /**
@@ -227,6 +228,14 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle('screen-capture', (event) => (fromOurPage(event) ? capture() : { status: 'off' }))
     // 4단계 화면공유: 공유할 창 고르기 → getDisplayMedia 허용, 학생 PC 그림 오버레이
     installDisplayMediaHandler(isOurPage)
+    ipcMain.handle('help-share-sources', event => fromOurPage(event) ? helpShareSources() : [])
+    ipcMain.handle('help-share-prepare', (event, sourceId) => {
+      if (!fromOurPage(event)) throw new Error('공유 요청을 허용하지 않아요')
+      return prepareHelpShare(sourceId, event.sender)
+    })
+    ipcMain.on('help-share-size', (event, sourceId, width, height) => {
+      if (fromOurPage(event)) setHelpShareVideoSize(event.sender, sourceId, width, height)
+    })
     ipcMain.on('share-source', (event, id) => {
       if (fromOurPage(event)) chooseShareSource(id)
     })
