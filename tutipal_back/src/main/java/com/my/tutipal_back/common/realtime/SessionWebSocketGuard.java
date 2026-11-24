@@ -1,5 +1,6 @@
 package com.my.tutipal_back.common.realtime;
 
+import java.security.Principal;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -45,6 +46,12 @@ public class SessionWebSocketGuard implements HandshakeInterceptor, WebSocketHan
             }
         };
     }
+
+    Principal subscriber(String socketId) {
+        WebSocketSession socket = socketId == null ? null : sockets.get(socketId);
+        return socket != null && valid(socket) ? socket.getPrincipal() : null;
+    }
+
     private boolean valid(WebSocketSession socket) {
         try {
             if(!(socket.getAttributes().get("httpSession") instanceof HttpSession session) || socket.getPrincipal()==null)return false;

@@ -154,8 +154,6 @@ public class StudySessionService {
     /**
      * FR-SES-07 학생이 방에서 나가기. 참가 기록이 지워지므로 이후 질문 · 챗봇 · 화면공유 요청이 404 로 막히고,
      * 이미 연결된 LiveKit 은 LiveKitProxy 주기 검사가 끊는다. 선생님은 나갈 수 없다 (방 닫기를 쓴다).
-     * ponytail: 이미 구독 중인 STOMP 세션 토픽은 다시 구독 검사를 하지 않아 "무엇이 바뀌었나(type, id)" 알림은 계속 받을 수 있다.
-     *   내용은 REST 권한 검사에서 막히므로 데이터는 새지 않는다. 알림 자체도 막아야 하면 Presence 의 STOMP 세션을 끊는다.
      */
     @Transactional
     public void leave(Long userId, Long sessionId) {
@@ -194,8 +192,13 @@ public class StudySessionService {
 
     /** STOMP 구독 검사용: 진행 중인 세션의 참가자면 역할, 아니면 empty. */
     public Optional<SessionRole> roleOf(Long userId, Long sessionId) {
+        return participantRole(userId, sessionId)
+                .filter(role -> sessions.findById(sessionId).filter(s -> !s.isEnded()).isPresent());
+    }
+
+    /** 알림 전달 시 참가자 권한을 확인한다. 남은 참가자는 방이 닫혔다는 알림을 받을 수 있다. */
+    public Optional<SessionRole> participantRole(Long userId, Long sessionId) {
         return participants.findBySessionIdAndUserId(sessionId, userId)
-                .filter(p -> sessions.findById(sessionId).filter(s -> !s.isEnded()).isPresent())
                 .map(SessionParticipant::getRole);
     }
 
