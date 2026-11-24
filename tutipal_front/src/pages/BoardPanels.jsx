@@ -17,9 +17,14 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
   const [candidates, setCandidates] = useState(null)
   const [sourceId, setSourceId] = useState('')
   const inputRef = useRef(null)
+  const listRequest = useRef(0)
 
   const load = useCallback(() => {
-    materials.list(sessionId).then(setList, (e) => setError(errText(e, '불러오지 못했어요')))
+    const request = ++listRequest.current
+    materials.list(sessionId).then(
+      (rows) => { if (request === listRequest.current) setList(rows) },
+      (e) => { if (request === listRequest.current) setError(errText(e, '불러오지 못했어요')) },
+    )
   }, [sessionId])
   useEffect(load, [load, reloadKey])
 
@@ -64,6 +69,19 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
     }
   }
 
+  async function requestIndex(id) {
+    setBusy('indexing')
+    setError('')
+    try {
+      await materials.index(id)
+    } catch (e) {
+      setError(errText(e, '색인을 요청하지 못했어요'))
+    } finally {
+      load()
+      setBusy(null)
+    }
+  }
+
   function onDrop(e) {
     e.preventDefault()
     setDrag(false)
@@ -80,7 +98,7 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
             <Mascot mood="happy" size={70} />
             <span>
               <strong>{busy === 'uploading' ? '올리는 중…' : '자료 업로드'}</strong>
-              <span className="muted small">txt · md · pdf, 10MB 이하. 끌어다 놓거나 눌러서 고르기. 학생 챗봇이 이 자료를 근거로 답해요</span>
+              <span className="muted small">txt · md · pdf, 10MB 이하. 색인이 완료되면 학생 챗봇이 자료를 근거로 사용할 수 있어요</span>
             </span>
             <input ref={inputRef} type="file" accept=".txt,.md,.pdf" multiple disabled={!!busy} onChange={(e) => void upload(e.target.files)} />
           </label>
@@ -112,12 +130,22 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
                 <td><a href={materials.fileUrl(m.id)} download>{m.filename}</a></td>
                 <td className="muted small">{kb(m.sizeBytes)} · {when(m.createdAt)}</td>
                 <td>
-                  {m.status === 'PROCESSING' && <span className="badge badge-warn">처리 중</span>}
+                  {m.status === 'PROCESSING' && <span className="badge badge-warn">{m.indexedAt ? '재색인 중' : '처리 중'}</span>}
                   {m.status === 'DONE' && <span className="badge badge-ok" title={`검색 조각 ${m.chunkCount}개`}>완료</span>}
-                  {m.status === 'FAILED' && <span className="badge badge-bad" title={m.error ?? ''}>실패</span>}
+                  {m.status === 'FAILED' && <span className="badge badge-bad">{m.indexedAt ? '재색인 실패' : '실패'}</span>}
                   {m.status === 'FAILED' && m.error && <span className="muted small"> {m.error}</span>}
+                  {m.indexedAt && m.status !== 'DONE' && <span className="muted small"> 기존 색인 보관</span>}
                 </td>
-                <td>{teacher && <button className="btn btn-sm" onClick={() => void materials.remove(m.id).then(load)}>삭제</button>}</td>
+                <td>{teacher && (
+                  <div className="row-gap">
+                    {(m.status === 'DONE' || m.indexRetryable) && (
+                      <button className="btn btn-sm" disabled={!!busy} onClick={() => void requestIndex(m.id)}>
+                        {m.status === 'DONE' ? '재색인' : '재시도'}
+                      </button>
+                    )}
+                    <button className="btn btn-sm" onClick={() => void materials.remove(m.id).then(load)}>삭제</button>
+                  </div>
+                )}</td>
               </tr>
             ))}
           </tbody>

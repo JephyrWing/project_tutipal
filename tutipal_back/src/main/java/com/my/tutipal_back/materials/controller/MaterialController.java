@@ -78,6 +78,12 @@ public class MaterialController {
         service.delete(userId(me), id);
     }
 
+    @PostMapping("/materials/{id}/index")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public MaterialRow requestIndex(@AuthenticationPrincipal OAuth2User me, @PathVariable Long id) {
+        return service.requestIndex(userId(me), id);
+    }
+
     private static Long userId(OAuth2User me) {
         return Long.valueOf(me.getName());
     }
