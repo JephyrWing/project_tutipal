@@ -41,6 +41,15 @@ async def test_embedding_validates_and_preserves_input_order(transport, provider
 
 
 @pytest.mark.parametrize("provider", [ollama_client, openai_client], ids=["ollama", "openai"])
+@pytest.mark.parametrize("status,temporary", [(403, False), (503, False), (504, True)])
+async def test_embedding_provider_failure_classification(transport, provider, status, temporary):
+    transport(httpx.Response(status))
+    with pytest.raises(ModelUnavailable) as error:
+        await provider.embed_texts(ModelSettings(openai_api_key="test-only"), ["x"])
+    assert ollama_client.confirmed_embedding_outage(error.value) is temporary
+
+
+@pytest.mark.parametrize("provider", [ollama_client, openai_client], ids=["ollama", "openai"])
 @pytest.mark.parametrize("bad", ["count", "dimension", "bool", "nan", "string"])
 async def test_embedding_rejects_invalid_vectors(transport, provider, bad):
     vector = [0.0] * (1023 if bad == "dimension" else 1024)

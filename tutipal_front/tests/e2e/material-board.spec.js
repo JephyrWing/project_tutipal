@@ -107,6 +107,53 @@ async function indexControl(options = {}) {
   return response.json()
 }
 
+test('PT-99 확인된 장애 자동 재시도 간격·상한·대기 중 다른 자료 처리', async ({ apps }) => {
+  test.setTimeout(120_000)
+  const { teacher, student } = await actors(apps)
+  const room = await createRoom(teacher, 'PT99 자동 재시도')
+  await enter(student, room)
+  await tab(teacher, '자료 · 공지').click()
+  const query = () => sources(student, room.id, 'PT99QUERY old')
+  const initial = (await indexControl({ outcome: 'temporary' })).documentCalls
+  async function attemptTime(offset, timeout = 17_000) {
+    await expect.poll(indexControl, { timeout }).toMatchObject({ documentCalls: initial + offset })
+    return (await indexControl()).lastDocumentCallAt
+  }
+
+  try {
+    const material = await upload(teacher, 'pt99-auto-retry.pdf', pdf('PT99MATERIAL auto retry sample'), 'application/pdf')
+    const row = materialRow(teacher, material.filename)
+    const first = await attemptTime(1)
+    await expect(row).toContainText('처리 중')
+    await expect(row.getByRole('button', { name: '재시도' })).toHaveCount(0)
+    expect(await query()).toBeUndefined()
+
+    const other = await upload(teacher, 'pt99-unblocked.txt', 'PT70MATERIAL processed during retry wait')
+    await expect(materialRow(teacher, other.filename)).toContainText('완료')
+    expect((await indexControl()).documentCalls).toBe(initial + 1)
+
+    const second = await attemptTime(2)
+    expect(second - first).toBeGreaterThanOrEqual(10_000)
+    await expect(row).toContainText('처리 중')
+    const third = await attemptTime(3, 37_000)
+    expect(third - second).toBeGreaterThanOrEqual(30_000)
+    await expect(row).toContainText('실패')
+    expect(await query()).toBeUndefined()
+
+    await row.getByRole('button', { name: '재시도' }).click()
+    const manual = await attemptTime(4)
+    await indexControl({ outcome: 'success' })
+    const recovered = await attemptTime(5)
+    expect(recovered - manual).toBeGreaterThanOrEqual(10_000)
+    await expect(row).toContainText('완료')
+    const files = await guarded(teacher, `/api/sessions/${room.id}/materials`)
+    expect(files.data.find(file => file.id === material.id)).toMatchObject({ status: 'DONE', chunkCount: 1 })
+    expect(JSON.parse(await query()).items).toEqual([material.filename + ' p.1'])
+  } finally {
+    await indexControl({ outcome: 'success' })
+  }
+})
+
 test('PT-99 부분 처리 서버 재기동·중복 재색인·실패 색인 보존', async ({ apps }) => {
   test.setTimeout(180_000)
   const { teacher, student, outsider } = await actors(apps)
