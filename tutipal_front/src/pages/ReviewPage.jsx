@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { explainQuestion, reviewApi } from '../api/review'
 import Icon from '../components/Icon'
@@ -21,10 +21,28 @@ export default function ReviewPage() {
   const [actionError, setActionError] = useState('')
   const [confirming, setConfirming] = useState(false)
   const [error, setError] = useState('')
+  const explaining = useRef(false)
+  const alive = useRef(true)
+  const [explainId, setExplainId] = useState(null)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   const pending = loading || (!error && loadedPage !== page)
 
-  const explain = useCallback((summary) => {
-    navigate(`/chat?ask=${encodeURIComponent(explainQuestion(summary))}`)
+  const explain = useCallback(async (id) => {
+    if (explaining.current) return
+    explaining.current = true
+    setBusy(true)
+    setExplainId(id)
+    setActionError('')
+    try {
+      // Recheck ownership/existence even when the list already contains a summary.
+      const item = await reviewApi.item(id)
+      if (alive.current) navigate(`/chat?ask=${encodeURIComponent(explainQuestion(item.summary))}`, { replace: true })
+    } catch (e) {
+      if (alive.current) setActionError(e instanceof Error ? e.message : '기록을 불러오지 못했어요')
+    } finally {
+      explaining.current = false
+      if (alive.current) setBusy(false)
+    }
   }, [navigate])
 
   const load = () => setRevision((v) => v + 1)
@@ -52,17 +70,14 @@ export default function ReviewPage() {
 
   // 위젯의 "설명 듣기"(?explain=id) → 바로 챗봇으로
   useEffect(() => {
-    let active = true
     const id = Number(params.get('explain'))
-    if (id) reviewApi.item(id).then((it) => { if (active) explain(it.summary) }, (e) => {
-      if (active) setActionError(e instanceof Error ? e.message : '기록을 불러오지 못했어요')
-    })
-    return () => { active = false }
+    if (Number.isSafeInteger(id) && id > 0) void explain(id)
   }, [params, explain])
 
   async function remove(id) {
     if (busy) return
     setBusy(true)
+    setExplainId(null)
     setActionError('')
     try {
       if (id === undefined) await reviewApi.deleteAll()
@@ -97,7 +112,9 @@ export default function ReviewPage() {
             <button className="btn btn-outline-danger" onClick={() => setConfirming(true)} disabled={busy || pending || !!error || !totalCount}>🗑 기록 삭제</button>
           )}
         </header>
-        {actionError && <p className="error-text" role="alert">{actionError}</p>}
+        {actionError && <div role="alert"><p className="error-text">{actionError}</p>
+          {explainId !== null && <button className="btn" disabled={busy} onClick={() => void explain(explainId)}>설명 다시 시도</button>}
+        </div>}
         {pending && <p role="status">복습 기록을 불러오는 중이에요…</p>}
         {!pending && error && <div role="alert"><p className="error-text">{error}</p><button className="btn" onClick={load}>다시 불러오기</button></div>}
         {!pending && !error && <>
@@ -108,7 +125,7 @@ export default function ReviewPage() {
             <span className="post-icon"><Icon name={looksLikeCode(it.summary) ? 'code' : 'book'} size={24} /></span>
             <span className="review-text">{it.summary}<br /><time className="muted small" dateTime={it.lastSeen}>최근 본 날짜: {new Date(it.lastSeen).toLocaleString('ko-KR')}</time></span>
             <span className="badge">{it.seenCount}번 봄 · 누적 {Math.floor(it.seenSeconds / 60)}분 {it.seenSeconds % 60}초</span>
-            <button className="btn btn-outline" disabled={busy} onClick={() => explain(it.summary)}>▶ 설명 듣기</button>
+            <button className="btn btn-outline" disabled={busy} onClick={() => void explain(it.id)}>▶ 설명 듣기</button>
             <button className="btn-link small" disabled={busy} onClick={() => void remove(it.id)} aria-label="이 기록 지우기">✕</button>
           </div>
         ))}

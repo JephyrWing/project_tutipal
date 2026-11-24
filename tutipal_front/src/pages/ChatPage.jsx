@@ -45,6 +45,7 @@ export function ChatPanel({ topic, onTopicChange, sessionId, initialAsk, onAsked
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   const abortRef = useRef(null)
+  const sending = useRef(false)
   const endRef = useRef(null)
 
   useEffect(() => {
@@ -54,24 +55,29 @@ export function ChatPanel({ topic, onTopicChange, sessionId, initialAsk, onAsked
   // 주제 · 세션이 바뀌면 새 대화
   useEffect(() => {
     abortRef.current?.abort()
+    abortRef.current = null
+    sending.current = false
+    setStreaming(false)
     setBubbles([])
   }, [topic, sessionId])
 
   useEffect(() => () => abortRef.current?.abort(), [])
 
-  const asked = useRef(false)
+  const asked = useRef(null)
   useEffect(() => {
-    if (!initialAsk || asked.current) return
-    asked.current = true
+    if (!initialAsk) { asked.current = null; return }
+    if (asked.current === initialAsk || sending.current) return
+    asked.current = initialAsk
     void send(initialAsk.slice(0, MAX_CONTENT))
     onAsked?.()
   })
 
-  async function send(text) {
+  async function send(text, prior = bubbles) {
     const question = text.trim()
-    if (!question || streaming) return
+    if (!question || sending.current) return
+    sending.current = true
     const history = [
-      ...bubbles
+      ...prior
         .filter((b) => !b.error && b.content)
         // 서버는 한 줄에 8000자까지 받음 → 긴 답변은 앞부분만 기록으로 보냄
         .map(({ role, content }) => ({ role, content: content.slice(0, MAX_CONTENT) })),
@@ -84,6 +90,7 @@ export function ChatPanel({ topic, onTopicChange, sessionId, initialAsk, onAsked
     abortRef.current = controller
     try {
       await streamChat(topic.trim() || DEFAULT_TOPIC, history.slice(-20), (delta) => {
+        if (abortRef.current !== controller || controller.signal.aborted) return
         setBubbles((prev) => {
           const next = [...prev]
           const last = next[next.length - 1]
@@ -91,6 +98,7 @@ export function ChatPanel({ topic, onTopicChange, sessionId, initialAsk, onAsked
           return next
         })
       }, controller.signal, sessionId, (sources) => {
+        if (abortRef.current !== controller || controller.signal.aborted) return
         setBubbles((prev) => {
           const next = [...prev]
           next[next.length - 1] = { ...next[next.length - 1], sources }
@@ -98,19 +106,22 @@ export function ChatPanel({ topic, onTopicChange, sessionId, initialAsk, onAsked
         })
       })
     } catch (e) {
-      if (!controller.signal.aborted) {
+      if (abortRef.current === controller) {
         setBubbles((prev) => {
           const next = [...prev]
           next[next.length - 1] = {
             role: 'assistant',
-            content: e instanceof Error ? e.message : '답변하지 못했어요',
+            content: controller.signal.aborted ? '답변을 중지했어요' : e instanceof Error ? e.message : '답변하지 못했어요',
             error: true,
           }
           return next
         })
       }
     } finally {
-      setStreaming(false)
+      if (abortRef.current === controller) {
+        sending.current = false
+        setStreaming(false)
+      }
     }
   }
 
@@ -178,6 +189,8 @@ export function ChatPanel({ topic, onTopicChange, sessionId, initialAsk, onAsked
         <div ref={endRef} />
       </div>
 
+      {!streaming && last?.error && bubbles.at(-2)?.role === 'user' &&
+        <button className="btn" onClick={() => void send(bubbles.at(-2).content, bubbles.slice(0, -2))}>답변 다시 시도</button>}
       <form className="chat-input" onSubmit={onSubmit}>
         <textarea
           value={input}
