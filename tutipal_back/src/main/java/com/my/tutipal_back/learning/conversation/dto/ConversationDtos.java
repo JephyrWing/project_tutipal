@@ -2,8 +2,10 @@ package com.my.tutipal_back.learning.conversation.dto;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 
@@ -18,9 +20,27 @@ public final class ConversationDtos {
                                 @Positive(message = "수업 번호가 올바르지 않아요") Long sessionId) {
     }
 
+    /**
+     * clientMessageId: UUID the screen makes per question and keeps for a resend of the same text (idempotency key).
+     * Optional for older callers; without it every request is a new turn.
+     */
     public record MessageRequest(@NotBlank(message = "질문을 입력해 주세요")
-                                 @Size(max = 8000, message = "질문은 8000자까지 쓸 수 있어요") String content) {
+                                 @Size(max = 8000, message = "질문은 8000자까지 쓸 수 있어요") String content,
+                                 @Pattern(regexp = UUID_PATTERN, message = "clientMessageId 형식이 올바르지 않아요")
+                                 String clientMessageId) {
+
+        public MessageRequest(String content) {
+            this(content, null);
+        }
+
+        /** Parsed key (validated by the pattern above), or null when not sent. */
+        public UUID clientMessageIdValue() {
+            return clientMessageId == null ? null : UUID.fromString(clientMessageId);
+        }
     }
+
+    private static final String UUID_PATTERN =
+            "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
 
     public record MemoryRequest(@NotBlank(message = "기억할 내용을 입력해 주세요")
                                 @Size(max = 1000, message = "기억은 1000자까지 쓸 수 있어요") String text) {

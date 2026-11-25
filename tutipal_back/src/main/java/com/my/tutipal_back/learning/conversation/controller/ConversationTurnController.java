@@ -30,8 +30,10 @@ import com.my.tutipal_back.learning.conversation.service.ConversationTurnService
  *
  * <p>Events: sources {"items"} (if materials were found) → delta {"t"} … → agent (Agent path) → saved
  * {"userMessageId","assistantMessageId"} → done; on failure error {"message"} and nothing is saved.
- * Rejections before the stream (400/403/404/410/429) are JSON {status, message} (quota 429 is the shared
- * ProblemDetail). The SSE plumbing (client-gone detection, ping comments) mirrors TutorController, which is owned by
+ * Rejections before the stream (400/403/404/409/410/429) are JSON {status, message} (quota 429 is the shared
+ * ProblemDetail). With a clientMessageId already saved in the conversation, the same question is answered from
+ * storage (one delta with the stored answer, then saved with the stored ids and done; no model call, no quota) and
+ * a different question is 409 JSON. The SSE plumbing (client-gone detection, ping comments) mirrors TutorController, which is owned by
  * PT-113 right now; merge the two after PT-113 lands.
  */
 @RestController
@@ -58,7 +60,8 @@ public class ConversationTurnController {
     public SseEmitter send(@AuthenticationPrincipal OAuth2User me, @PathVariable long id,
                            @Valid @RequestBody ConversationDtos.MessageRequest request) {
         long userId = Long.parseLong(me.getName());
-        ConversationTurnService.OpenedTurn turn = turns.open(userId, id, request.content());
+        ConversationTurnService.OpenedTurn turn = turns.open(userId, id, request.content(),
+                request.clientMessageIdValue());
         SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
         AtomicBoolean gone = new AtomicBoolean(false);
         emitter.onTimeout(() -> gone.set(true));

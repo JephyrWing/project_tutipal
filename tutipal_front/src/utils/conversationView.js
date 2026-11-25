@@ -62,6 +62,8 @@ export function initialDetailState() {
     nextBefore: null,
     hasMore: false,
     input: '',
+    // { question, clientMessageId } of a turn that ended before saved: resending the same text reuses the id
+    retry: null,
     pending: null,
     notice: null,
     redirectTo: null,
@@ -93,6 +95,7 @@ function missing(state) {
     ...state,
     status: 'missing',
     pending: null,
+    retry: null,
     notice: { kind: 'missing', text: MISSING_TEXT },
     redirectTo: listPathFor(state.conversation),
   }
@@ -121,8 +124,21 @@ export function noticeFor(error) {
   return { kind: 'error', text: messageOf(error, '답변하지 못했어요') }
 }
 
-export function turnStarted(state, question) {
-  return { ...state, pending: { question, answer: '' }, input: '', notice: null }
+/** New idempotency key for a question (UUID v4). */
+export function newClientMessageId() {
+  return globalThis.crypto.randomUUID()
+}
+
+/**
+ * The key to send with this question: the failed turn's key when the text is unchanged (the server may have saved
+ * it already and only the saved event was lost; it then replays instead of storing it twice), otherwise a new one.
+ */
+export function clientMessageIdFor(state, question, makeId = newClientMessageId) {
+  return state.retry && state.retry.question === question ? state.retry.clientMessageId : makeId()
+}
+
+export function turnStarted(state, question, clientMessageId = clientMessageIdFor(state, question)) {
+  return { ...state, pending: { question, answer: '', clientMessageId }, input: '', retry: null, notice: null }
 }
 
 export function turnDelta(state, delta) {
@@ -144,17 +160,34 @@ export function turnSaved(state, saved, now = new Date().toISOString()) {
     messageCount: (state.conversation.messageCount ?? 0) + 2,
     lastMessageAt: now,
   }
-  return { ...state, conversation, messages: uniqueById([...state.messages, ...added]), pending: null }
+  return { ...state, conversation, messages: uniqueById([...state.messages, ...added]), pending: null, retry: null }
 }
 
-/** Nothing was saved: drop the partial answer and give the question back. */
+/** Key kept for a resend of the pending question (null after 409: that key belongs to another text). */
+function retryOf(state, error) {
+  if (!state.pending) return state.retry
+  if (error?.status === 409) return null
+  const { question, clientMessageId } = state.pending
+  return clientMessageId ? { question, clientMessageId } : null
+}
+
+/**
+ * Not saved as far as the screen knows: drop the partial answer and give the question back with its key, so
+ * resending it unchanged is idempotent if the server did save it (saved event lost).
+ */
 export function turnFailed(state, error) {
   if (error?.status === 404) return missing(state)
-  return { ...state, pending: null, input: state.pending?.question ?? state.input, notice: noticeFor(error) }
+  return {
+    ...state,
+    pending: null,
+    input: state.pending?.question ?? state.input,
+    retry: retryOf(state, error),
+    notice: noticeFor(error),
+  }
 }
 
 export function turnStopped(state) {
-  return { ...state, pending: null, input: state.pending?.question ?? state.input, notice: null }
+  return { ...state, pending: null, input: state.pending?.question ?? state.input, retry: retryOf(state), notice: null }
 }
 
 export function isInputLocked(state) {

@@ -17,6 +17,7 @@ import SubjectPicker from '../components/SubjectPicker'
 import {
   CONVERSATIONS_PATH,
   MEMORY_MAX,
+  clientMessageIdFor,
   confirmAndDelete,
   conversationTitle,
   detailFailed,
@@ -256,13 +257,15 @@ function ConversationDetail({ id }) {
     sending.current = true
     const controller = new AbortController()
     abortRef.current = controller
-    setState((s) => turnStarted(s, question))
+    // 같은 글을 다시 보내면 실패한 턴의 전송 번호를 그대로 쓴다 (저장됐는데 saved 만 못 받은 경우 중복 저장 방지)
+    const clientMessageId = clientMessageIdFor(state, question)
+    setState((s) => turnStarted(s, question, clientMessageId))
     try {
       const result = await sendMessage(id, question, {
         onDelta: (t) => {
           if (abortRef.current === controller && !controller.signal.aborted) setState((s) => turnDelta(s, t))
         },
-      }, controller.signal)
+      }, controller.signal, clientMessageId)
       if (!alive.current || abortRef.current !== controller) return
       if (result.saved) setState((s) => turnSaved(s, result.saved))
       else setState((s) => turnFailed(s, new Error('답변을 저장하지 못했어요')))

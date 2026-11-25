@@ -1,13 +1,16 @@
 package com.my.tutipal_back.learning.conversation.service;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -25,7 +28,8 @@ import com.my.tutipal_back.sessions.service.StudySessionService;
  *
  * <ol>
  *   <li>{@link #open} on the request thread: question 1..8000, per-user turn guard (429), ownership (404),
- *       session participant / active / student (404 / 410 / 403), then tutor.openChat (CHAT quota 429).
+ *       session participant / active / student (404 / 410 / 403), a question already saved under the same
+ *       clientMessageId (replay, or 409 for a different text), then tutor.openChat (CHAT quota 429).
  *       Every rejection happens before the SSE stream opens and releases the guard.</li>
  *   <li>{@link #run} on the streaming thread: tutor.chat inside the conversation binding, so the Agent context gets
  *       the stored history / summary / memories. The pair is saved only when the answer completed.</li>
@@ -59,31 +63,55 @@ public class ConversationTurnService {
         this.summarizer = summarizer;
     }
 
-    /** A turn that passed every check and holds a quota reservation and the user's turn slot. */
+    /**
+     * A turn that passed every check and holds the user's turn slot. A new turn also holds a quota reservation; a
+     * replay (the question was already saved under the same clientMessageId) holds none and never calls the model.
+     */
     public static final class OpenedTurn {
 
         private final long userId;
         private final long conversationId;
         private final String question;
+        private final UUID clientMessageId;
         private final ConversationService.PreparedTurn prepared;
+        /** null for a replay. */
         private final OpenedChat opened;
+        /** The stored pair to send again; null for a new turn. */
+        private final ConversationStore.SavedPair replay;
         private final AtomicBoolean finished = new AtomicBoolean(false);
 
-        private OpenedTurn(long userId, long conversationId, String question,
-                           ConversationService.PreparedTurn prepared, OpenedChat opened) {
+        private OpenedTurn(long userId, long conversationId, String question, UUID clientMessageId,
+                           ConversationService.PreparedTurn prepared, OpenedChat opened,
+                           ConversationStore.SavedPair replay) {
             this.userId = userId;
             this.conversationId = conversationId;
             this.question = question;
+            this.clientMessageId = clientMessageId;
             this.prepared = prepared;
             this.opened = opened;
+            this.replay = replay;
         }
 
         public long conversationId() {
             return conversationId;
         }
+
+        /** True when the answer is replayed from storage (no model call, no quota). */
+        public boolean isReplay() {
+            return replay != null;
+        }
     }
 
     public OpenedTurn open(long userId, long conversationId, String content) {
+        return open(userId, conversationId, content, null);
+    }
+
+    /**
+     * Same checks; then, before the quota and the model, a question already saved under clientMessageId in this
+     * conversation is replayed (same text) or rejected with 409 (different text). Ownership and session checks
+     * still come first, so someone else's conversation is 404 whatever the key.
+     */
+    public OpenedTurn open(long userId, long conversationId, String content, UUID clientMessageId) {
         String question = content == null ? "" : content.strip();
         if (question.isEmpty() || question.length() > ConversationService.MAX_QUESTION_LENGTH) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "질문은 1~8000자로 써 주세요");
@@ -98,8 +126,16 @@ public class ConversationTurnService {
             if (sessionId != null && sessions.requireActiveRole(userId, sessionId) == SessionRole.TEACHER) {
                 throw new ApiException(HttpStatus.FORBIDDEN, "수업 AI 대화는 학생만 쓸 수 있어요");
             }
+            if (clientMessageId != null) {
+                Optional<ConversationStore.SavedPair> saved = conversations.findSaved(userId, conversationId,
+                        clientMessageId, question);
+                if (saved.isPresent()) {
+                    return new OpenedTurn(userId, conversationId, question, clientMessageId, prepared, null,
+                            saved.get());
+                }
+            }
             OpenedChat opened = tutor.openChat(userId, prepared.request());
-            return new OpenedTurn(userId, conversationId, question, prepared, opened);
+            return new OpenedTurn(userId, conversationId, question, clientMessageId, prepared, opened, null);
         } catch (RuntimeException | Error e) {
             running.remove(userId);
             throw e;
@@ -113,6 +149,11 @@ public class ConversationTurnService {
      */
     public ConversationDtos.Saved run(OpenedTurn turn, Consumer<List<String>> onSources, Consumer<String> onDelta,
                                       Consumer<AgentDtos.AgentEvent> onAgent, Runnable heartbeat) {
+        if (turn.replay != null) {
+            // already saved by an earlier request whose saved event was lost: send the stored answer once
+            onDelta.accept(turn.replay.assistant().content());
+            return saved(turn.replay);
+        }
         StringBuilder answer = new StringBuilder();
         binding.run(turn.prepared.bound(), () -> tutor.chat(turn.userId, turn.prepared.request(), turn.opened,
                 onSources, delta -> {
@@ -125,8 +166,28 @@ public class ConversationTurnService {
         if (answer.toString().isBlank()) {
             throw new ApiException(HttpStatus.BAD_GATEWAY, EMPTY_ANSWER);
         }
-        ConversationStore.SavedPair pair = conversations.savePair(turn.userId, turn.conversationId, turn.question,
-                answer.toString());
+        return saved(save(turn, answer.toString()));
+    }
+
+    /**
+     * savePair serializes requests with the same key on the conversation row lock. If the unique index still
+     * fires (the transaction was rolled back, message_count untouched), the pair the other request stored is the
+     * result: the screen gets the normal saved / done.
+     */
+    private ConversationStore.SavedPair save(OpenedTurn turn, String answer) {
+        try {
+            return conversations.savePair(turn.userId, turn.conversationId, turn.question, answer,
+                    turn.clientMessageId);
+        } catch (DuplicateKeyException e) {
+            if (turn.clientMessageId == null) {
+                throw e;
+            }
+            return conversations.findSaved(turn.userId, turn.conversationId, turn.clientMessageId, turn.question)
+                    .orElseThrow(() -> e);
+        }
+    }
+
+    private static ConversationDtos.Saved saved(ConversationStore.SavedPair pair) {
         return new ConversationDtos.Saved(String.valueOf(pair.user().id()), String.valueOf(pair.assistant().id()));
     }
 
@@ -139,14 +200,16 @@ public class ConversationTurnService {
             return;
         }
         try {
-            turn.opened.release();
+            if (turn.opened != null) {
+                turn.opened.release();
+            }
         } catch (RuntimeException e) {
             log.warn("conversation turn release failed: conversation={} reason={}", turn.conversationId,
                     e.getClass().getSimpleName());
         } finally {
             running.remove(turn.userId);
         }
-        if (saved) {
+        if (saved && turn.replay == null) {
             try {
                 summarizer.summarizeIfNeeded(turn.conversationId);
             } catch (RuntimeException e) {

@@ -25,7 +25,8 @@ GAP-12 / FR-TUT-05 / NFR-SEC-11의 구현 원본. `docs/AI_WORKFLOW_CONTRACT.md`
 - `POST /api/conversations {topic?, sessionId?}` → 201 + Location. 개인 대화는 topic(1~30자) 필수, 수업 대화는 진행 중인 수업의 학생만(참가자 아님 404, 종료 410, 선생님 403)이며 수업 주제를 쓴다. 빈 대화는 제목 없이("새 대화") 목록에 보인다.
 - `GET /api/conversations/{id}` → `{id, topic, title, sessionId, messageCount, createdAt, lastMessageAt, summary:{text,updatedAt}|null, memories:[{id,text,createdAt}]}`.
 - `GET /api/conversations/{id}/messages?before=&limit=50` → 최신 페이지부터, 페이지 안은 오래된 순 `{items:[{id,role,content,createdAt}], nextBefore, hasMore}`. limit 1~100.
-- `POST /api/conversations/{id}/messages {content 1..8000}` → SSE `sources` → `delta {t}` … → `agent` → `saved {userMessageId, assistantMessageId}` → `done`, 실패 시 `error {message}`. 스트림 전 거절(400/403/404/410/429)은 JSON `{status, message}`(한도 429는 공통 ProblemDetail). 같은 사용자의 대화 턴이 진행 중이면 429. 스트림 중 대화가 지워지면 `error "대화가 삭제되어 저장하지 않았어요"`.
+- `POST /api/conversations/{id}/messages {content 1..8000, clientMessageId?}` → SSE `sources` → `delta {t}` … → `agent` → `saved {userMessageId, assistantMessageId}` → `done`, 실패 시 `error {message}`. 스트림 전 거절(400/403/404/409/410/429)은 JSON `{status, message}`(한도 429는 공통 ProblemDetail). 같은 사용자의 대화 턴이 진행 중이면 429. 스트림 중 대화가 지워지면 `error "대화가 삭제되어 저장하지 않았어요"`.
+- 중복 저장 방지(`clientMessageId`, UUID, HELP_CHAT과 같은 방식): 화면은 질문마다 새 UUID를 만들고, `saved` 전에 끊기거나 실패·중지된 질문을 **글자 그대로** 다시 보내면 같은 값을 쓴다(글을 고치면 새 값, 409면 버림). 서버는 소유·수업 확인(404/410/403) 뒤, 한도·모델 호출 전에 그 대화의 질문 행에서 이 값을 찾는다. 같은 질문이면 모델을 부르지 않고 SSE로 저장된 답을 다시 보낸다(`delta` 1개(저장된 답 전체) → `saved {저장된 ids}` → `done`, CHAT 한도·요약 없음). 다른 질문이면 409 JSON. 값은 질문 행 `client_message_id`에 저장되고 부분 UNIQUE `(conversation_id, client_message_id)`다. 같은 값으로 두 요청이 모두 모델까지 간 경우(다중 서버)에도 `savePair`가 대화 행 잠금 뒤 다시 찾아 이미 있으면 그 쌍을 돌려주고, 그래도 UNIQUE에 걸리면 되돌린 뒤 저장된 쌍을 `saved`로 보낸다(쌍·`message_count` 한 번만). 값이 없는 요청은 예전처럼 매번 새 턴이다.
 - `POST /api/conversations/{id}/memories {text 1..1000}` → 201 `{id,text,createdAt}`. 범위당 20개 초과 409. `DELETE /api/conversations/{id}/memories/{memoryId}` → 204.
 - `DELETE /api/conversations/{id}` → 204.
 - 남의 대화·없는 대화는 조회·이어가기·삭제·기억 저장/삭제 모두 404이며 DB·한도·모델 호출이 일어나지 않는다. 끝난 수업의 대화도 주인은 보고 지울 수 있다(이어가기만 410).
@@ -48,7 +49,7 @@ PT-113(Draft)이 `TutorService` · `TutorController` · `ChatRequest` 주변을 
 
 - 이 방식은 `TutorService`가 컨텍스트를 호출 스레드에서 동기로 조립한다는 전제에 기대며, `ConversationTurnAgentIntegrationTest`(실제 TutorService 연결)가 유일한 보호 장치다.
 - PT-113 병합 뒤 후속: `ChatRequest`에 conversationId를 실어 ThreadLocal 제거, `ConversationTurnController`와 `TutorController`의 SSE 처리 통합, `src/api/sse.js`와 `tutor.js` 파서 통합, ChatPage · SessionPage · 위젯의 자동 저장과 진입 링크, 계약 6.5의 기억 생성 기준 갱신.
-- 알려진 차이: 실패한 턴도 답변 조각이 나온 뒤면 CHAT 한도는 차감된다(PT-97 규칙) — 저장은 안 됨. 빈 대화 행 수에 상한이 없다(후속). 기억 20개 상한은 범위 단위 advisory 잠금(`pg_advisory_xact_lock`)으로 세운다. 상세 화면은 이 대화의 기억만 보여 주므로 범위 전체 기억 목록 화면은 후속이다. 턴 중복 방지·요약 자리는 서버 메모리 기준이라 다중 서버 잠금은 없다.
+- 알려진 차이: 실패한 턴도 답변 조각이 나온 뒤면 CHAT 한도는 차감된다(PT-97 규칙) — 저장은 안 됨. 저장 직후 연결이 끊긴 턴은 화면에 실패로 보이지만 저장은 됐다: 같은 글을 다시 보내면 위 재생으로 한 번만 보이고, 글을 고쳐 보내거나 화면을 새로 고쳐 입력이 사라지면 새 턴이 된다(그때는 목록·새로 고침에서 앞 쌍이 보인다). 재생도 턴 자리를 잠깐 쓰므로 앞 턴이 아직 정리 중이면 429일 수 있다. 빈 대화 행 수에 상한이 없다(후속). 기억 20개 상한은 범위 단위 advisory 잠금(`pg_advisory_xact_lock`)으로 세운다. 상세 화면은 이 대화의 기억만 보여 주므로 범위 전체 기억 목록 화면은 후속이다. 턴 중복 방지·요약 자리는 서버 메모리 기준이라 다중 서버 잠금은 없다.
 
 ## 검증 경계
 

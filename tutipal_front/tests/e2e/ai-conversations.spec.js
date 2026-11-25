@@ -128,6 +128,19 @@ test('PT106 personal conversation: save, reload, continue with stored history, i
   expect((await api(owner, `${base}/memories/${memory.body.id}`, 'DELETE')).status).toBe(204)
   expect((await api(owner, base)).body.memories).toEqual([])
 
+  // Resend after a lost saved event: the same clientMessageId replays the stored pair (no second row, no model
+  // call); a different text under that key is 409. Polled because the turn slot frees just after the stream ends.
+  const key = '00000000-0000-4000-8000-000000000106'
+  const keyed = { content: 'PT106 같은 질문', clientMessageId: key }
+  await expect.poll(async () => (await api(owner, `${base}/messages`, 'POST', keyed, sse)).status).toBe(200)
+  await expect.poll(async () => (await api(owner, `${base}/messages`)).body?.items?.length).toBe(6)
+  let replayed
+  await expect.poll(async () => (replayed = await api(owner, `${base}/messages`, 'POST', keyed, sse)).status).toBe(200)
+  expect(String(replayed.body)).toContain('PT106 reply n=5')
+  expect((await api(owner, `${base}/messages`)).body.items).toHaveLength(6)
+  await expect.poll(async () => (await api(owner, `${base}/messages`, 'POST',
+    { content: 'PT106 다른 질문', clientMessageId: key }, sse)).status).toBe(409)
+
   // Delete through the screen: messages go with it (ON DELETE CASCADE)
   await owner.page.reload()
   owner.page.once('dialog', dialog => void dialog.accept())

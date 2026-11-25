@@ -55,12 +55,16 @@ export function deleteMemory(id, memoryId) {
  * Continues a conversation. Resolves with { text, saved } once the server stored the pair (saved event): normally
  * at done, but also when the stream is cut or stopped after saved (the pair is already stored, resending would
  * duplicate it). Rejects with the SSE error message, the cut-stream message, or an ApiRequestError before the stream.
+ *
+ * clientMessageId (UUID, see conversationView.clientMessageIdFor): idempotency key. If the pair was saved but the
+ * saved event was lost, resending the same text with the same key replays the stored answer (delta → saved → done)
+ * instead of storing it again; a different text under a used key is 409. The page always sends one.
  */
-export async function sendMessage(id, content, handlers = {}, signal) {
+export async function sendMessage(id, content, handlers = {}, signal, clientMessageId) {
   const res = await fetch(`${path(id)}/messages`, {
     method: 'POST',
     headers: { ...json, Accept: 'text/event-stream', ...await csrfHeader(signal) },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(clientMessageId ? { content, clientMessageId } : { content }),
     signal,
   })
   if (!res.ok || !res.body) throw await toApiError(res)

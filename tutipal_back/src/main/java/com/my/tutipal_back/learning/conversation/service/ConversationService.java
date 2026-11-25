@@ -10,6 +10,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -37,6 +38,7 @@ public class ConversationService {
 
     public static final String DELETED_WHILE_STREAMING = "대화가 삭제되어 저장하지 않았어요";
     static final String NOT_FOUND = "대화를 찾을 수 없어요";
+    static final String CLIENT_ID_REUSED = "이미 다른 질문에 쓴 전송 번호예요. 화면을 새로 고친 뒤 다시 보내 주세요";
 
     static final int DEFAULT_LIST_LIMIT = 20;
     static final int MAX_LIST_LIMIT = 50;
@@ -203,10 +205,46 @@ public class ConversationService {
      */
     @Transactional
     public ConversationStore.SavedPair savePair(long userId, long conversationId, String question, String answer) {
+        return savePair(userId, conversationId, question, answer, null);
+    }
+
+    /**
+     * Same, with the screen's idempotency key stored on the question. If the key was already saved in this
+     * conversation (a concurrent request with the same key got here first) the stored pair is returned and nothing
+     * is inserted; a different question under the same key is 409. Runs after the row lock, so two such requests
+     * are serialized here; the partial UNIQUE index is the last guard.
+     */
+    @Transactional
+    public ConversationStore.SavedPair savePair(long userId, long conversationId, String question, String answer,
+                                                UUID clientMessageId) {
         ConversationStore.Conversation c = store.lockOwned(userId, conversationId)
                 .orElseThrow(() -> new ApiException(HttpStatus.GONE, DELETED_WHILE_STREAMING));
+        if (clientMessageId != null) {
+            Optional<ConversationStore.SavedPair> existing = store.findPairByClientMessageId(c.id(), clientMessageId);
+            if (existing.isPresent()) {
+                return sameQuestion(existing.get(), question);
+            }
+        }
         return store.insertPair(c.id(), question, cut(answer, MAX_ANSWER_LENGTH), cut(question.strip(), TITLE_LENGTH),
-                clock.instant());
+                clock.instant(), clientMessageId);
+    }
+
+    /**
+     * The pair already saved under this key in the caller's conversation (404 if not the caller's). Present only
+     * when the stored question equals {@code question}; a different question under the same key is 409.
+     */
+    @Transactional(readOnly = true)
+    public Optional<ConversationStore.SavedPair> findSaved(long userId, long conversationId, UUID clientMessageId,
+                                                           String question) {
+        ConversationStore.Conversation c = owned(userId, conversationId);
+        return store.findPairByClientMessageId(c.id(), clientMessageId).map(pair -> sameQuestion(pair, question));
+    }
+
+    private static ConversationStore.SavedPair sameQuestion(ConversationStore.SavedPair pair, String question) {
+        if (!pair.user().content().equals(question)) {
+            throw new ApiException(HttpStatus.CONFLICT, CLIENT_ID_REUSED);
+        }
+        return pair;
     }
 
     // ------------------------------------------------------------------ summary

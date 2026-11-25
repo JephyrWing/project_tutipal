@@ -3,6 +3,7 @@ package com.my.tutipal_back.learning.conversation.repository;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 /**
  * PT-106 AI 대화 저장소 (V21: ai_conversations, ai_conversation_messages, ai_conversation_summaries, ai_memories).
@@ -79,7 +80,19 @@ public interface ConversationStore {
      * 질문 · 답변 한 쌍을 저장하고 message_count +2, last_message_at = now. title 은 아직 없을 때만 채운다.
      * 호출자가 대화 행을 잠근 상태여야 한다. 대화가 없으면 FK 위반(DataIntegrityViolationException).
      */
-    SavedPair insertPair(long conversationId, String question, String answer, String title, Instant now);
+    default SavedPair insertPair(long conversationId, String question, String answer, String title, Instant now) {
+        return insertPair(conversationId, question, answer, title, now, null);
+    }
+
+    /**
+     * clientMessageId 가 있으면 질문 행에 저장한다. 같은 대화에 같은 값이 이미 있으면 부분 UNIQUE 위반
+     * (DuplicateKeyException) 이며 트랜잭션은 되돌려진다 (message_count 도 그대로).
+     */
+    SavedPair insertPair(long conversationId, String question, String answer, String title, Instant now,
+                         UUID clientMessageId);
+
+    /** 이 대화에서 clientMessageId 로 저장된 질문과 바로 다음 답변. 없으면 empty. */
+    Optional<SavedPair> findPairByClientMessageId(long conversationId, UUID clientMessageId);
 
     /** superseded_at IS NULL AND invalidated_at IS NULL 인 요약 (최대 1개, 부분 UNIQUE). */
     Optional<Summary> activeSummary(long conversationId);

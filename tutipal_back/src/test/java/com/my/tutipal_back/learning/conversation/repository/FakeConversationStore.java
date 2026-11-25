@@ -10,14 +10,17 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.TreeMap;
+import java.util.UUID;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 
 /**
  * PT-106 in-memory ConversationStore for service / web tests (JUnit has no DB).
  * Mimics the V21 schema rules the services rely on: ON DELETE CASCADE from a conversation to its messages,
  * summaries and memories, FK failure when writing into a deleted conversation, and the partial UNIQUE index
- * (at most one active summary per conversation). Every lock / delete / pair insert is recorded in {@link #calls}.
+ * (at most one active summary per conversation; one user message per clientMessageId).
+ * Every lock / delete / pair insert is recorded in {@link #calls}.
  */
 public class FakeConversationStore implements ConversationStore {
 
@@ -25,6 +28,8 @@ public class FakeConversationStore implements ConversationStore {
     private final Map<Long, Message> messages = new TreeMap<>();
     private final Map<Long, Summary> summaries = new TreeMap<>();
     private final Map<Long, Memory> memories = new TreeMap<>();
+    /** message id → clientMessageId (user rows saved with a key). */
+    private final Map<Long, UUID> clientIds = new TreeMap<>();
     private long nextConversation = 1;
     private long nextMessage = 1;
     private long nextSummary = 1;
@@ -209,13 +214,19 @@ public class FakeConversationStore implements ConversationStore {
 
     @Override
     public synchronized SavedPair insertPair(long conversationId, String question, String answer, String title,
-                                             Instant now) {
+                                             Instant now, UUID clientMessageId) {
         calls.add("insertPair:" + conversationId);
         Conversation c = conversations.get(conversationId);
         if (c == null) {
             throw new DataIntegrityViolationException("ai_conversation_messages.conversation_id FK");
         }
+        if (clientMessageId != null && keyedQuestion(conversationId, clientMessageId).isPresent()) {
+            throw new DuplicateKeyException("uk_ai_conversation_messages_client_id");
+        }
         long userId = nextMessage++;
+        if (clientMessageId != null) {
+            clientIds.put(userId, clientMessageId);
+        }
         long assistantId = nextMessage++;
         Message user = new Message(userId, conversationId, "user", question, now);
         Message assistant = new Message(assistantId, conversationId, "assistant", answer, now);
@@ -224,6 +235,29 @@ public class FakeConversationStore implements ConversationStore {
         conversations.put(conversationId, new Conversation(c.id(), c.userId(), c.sessionId(), c.topic(),
                 c.title() == null ? title : c.title(), c.messageCount() + 2, c.createdAt(), now));
         return new SavedPair(user, assistant);
+    }
+
+    @Override
+    public synchronized Optional<SavedPair> findPairByClientMessageId(long conversationId, UUID clientMessageId) {
+        calls.add("findPairByClientMessageId:" + conversationId);
+        return keyedQuestion(conversationId, clientMessageId).flatMap(user -> messages.values().stream()
+                .filter(m -> m.conversationId() == conversationId && m.id() > user.id())
+                .findFirst()
+                .filter(next -> next.role().equals("assistant"))
+                .map(next -> new SavedPair(user, next)));
+    }
+
+    /** The user message stored with this key in the conversation (the partial UNIQUE index of V21). */
+    private Optional<Message> keyedQuestion(long conversationId, UUID clientMessageId) {
+        return messages.values().stream()
+                .filter(m -> m.conversationId() == conversationId && m.role().equals("user")
+                        && clientMessageId.equals(clientIds.get(m.id())))
+                .findFirst();
+    }
+
+    /** clientMessageId of a stored message, if it had one. */
+    public synchronized Optional<UUID> clientMessageIdOf(long messageId) {
+        return Optional.ofNullable(clientIds.get(messageId));
     }
 
     @Override

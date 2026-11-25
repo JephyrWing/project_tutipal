@@ -8,6 +8,7 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -125,18 +126,38 @@ public class JdbcConversationStore implements ConversationStore {
     }
 
     @Override
-    public SavedPair insertPair(long conversationId, String question, String answer, String title, Instant now) {
-        Message user = insertMessage(conversationId, "user", question, now);
-        Message assistant = insertMessage(conversationId, "assistant", answer, now);
+    public SavedPair insertPair(long conversationId, String question, String answer, String title, Instant now,
+                                UUID clientMessageId) {
+        Message user = insertMessage(conversationId, "user", question, now, clientMessageId);
+        Message assistant = insertMessage(conversationId, "assistant", answer, now, null);
         jdbc.update("UPDATE ai_conversations SET message_count = message_count + 2, last_message_at = ?,"
                 + " title = COALESCE(title, ?) WHERE id = ?", time(now), title, conversationId);
         return new SavedPair(user, assistant);
     }
 
-    private Message insertMessage(long conversationId, String role, String content, Instant now) {
-        return jdbc.queryForObject("INSERT INTO ai_conversation_messages (conversation_id, role, content, created_at)"
-                        + " VALUES (?, ?, ?, ?) RETURNING " + MESSAGE_COLUMNS,
-                JdbcConversationStore::message, conversationId, role, content, time(now));
+    private Message insertMessage(long conversationId, String role, String content, Instant now,
+                                  UUID clientMessageId) {
+        return jdbc.queryForObject("INSERT INTO ai_conversation_messages"
+                        + " (conversation_id, role, content, created_at, client_message_id)"
+                        + " VALUES (?, ?, ?, ?, ?) RETURNING " + MESSAGE_COLUMNS,
+                JdbcConversationStore::message, conversationId, role, content, time(now), clientMessageId);
+    }
+
+    /**
+     * The keyed question and the next message of the conversation. A pair is inserted under the conversation row
+     * lock, so the next message is its answer.
+     */
+    @Override
+    public Optional<SavedPair> findPairByClientMessageId(long conversationId, UUID clientMessageId) {
+        List<Message> rows = jdbc.query("SELECT " + MESSAGE_COLUMNS + " FROM ai_conversation_messages"
+                        + " WHERE conversation_id = ? AND id >= (SELECT id FROM ai_conversation_messages"
+                        + " WHERE conversation_id = ? AND client_message_id = ? AND role = 'user')"
+                        + " ORDER BY id LIMIT 2",
+                JdbcConversationStore::message, conversationId, conversationId, clientMessageId);
+        if (rows.size() < 2 || !"user".equals(rows.get(0).role()) || !"assistant".equals(rows.get(1).role())) {
+            return Optional.empty();
+        }
+        return Optional.of(new SavedPair(rows.get(0), rows.get(1)));
     }
 
     @Override
