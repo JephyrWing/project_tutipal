@@ -1,5 +1,6 @@
 package com.my.tutipal_back.learning.tutor.controller;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -9,6 +10,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -28,6 +31,10 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import com.my.tutipal_back.ai.client.AiClient;
 import com.my.tutipal_back.ai.client.AiSlots;
+import com.my.tutipal_back.ai.quota.AiFeature;
+import com.my.tutipal_back.ai.quota.AiQuota;
+import com.my.tutipal_back.ai.quota.AiQuotaFixtures;
+import com.my.tutipal_back.ai.quota.MutableClock;
 import com.my.tutipal_back.common.exception.ApiException;
 import com.my.tutipal_back.common.exception.GlobalExceptionHandler;
 import com.my.tutipal_back.learning.tutor.service.TutorService;
@@ -40,6 +47,8 @@ class TutorChatAccessWebTest {
     private final RagSearchService rag = mock(RagSearchService.class);
     private final AiClient ai = mock(AiClient.class);
     private final AiSlots slots = mock(AiSlots.class);
+    private final AiQuota quota = AiQuotaFixtures.quota(1, Duration.ofHours(1),
+            new MutableClock(Instant.parse("2026-11-25T00:00:00Z")));
     private MockMvc mvc;
 
     @BeforeEach
@@ -47,7 +56,7 @@ class TutorChatAccessWebTest {
         var principal = new DefaultOAuth2User(List.of(new SimpleGrantedAuthority("ROLE_USER")), Map.of("id", "2"), "id");
         var login = UsernamePasswordAuthenticationToken.authenticated(principal, null, principal.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(login);
-        mvc = MockMvcBuilders.standaloneSetup(new TutorController(new TutorService(ai, sessions, rag, slots)))
+        mvc = MockMvcBuilders.standaloneSetup(new TutorController(new TutorService(ai, sessions, rag, slots, quota)))
                 .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();
@@ -73,5 +82,6 @@ class TutorChatAccessWebTest {
                 .andExpect(request().asyncNotStarted());
 
         verifyNoInteractions(rag, ai, slots);
+        assertThat(AiQuotaFixtures.hasRoom(quota, 2L, AiFeature.CHAT)).isTrue();
     }
 }

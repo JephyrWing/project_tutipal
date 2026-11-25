@@ -1,11 +1,18 @@
-/** One widget's capture/analysis/recording lifetime. No image is retained here. */
-export function createScreenAnalysis({ capture, describe, observe, onAnswer, onSuggestion, onGone, onError, now = Date.now }) {
+import { quotaWaitMs } from './quotaRetry.js'
+
+/**
+ * One widget's capture/analysis/recording lifetime. No image is retained here.
+ * onPaused() is called whenever an automatic summary is skipped because the quota pause is still running.
+ */
+export function createScreenAnalysis({ capture, describe, observe, onAnswer, onSuggestion, onGone, onError, onPaused = () => {}, now = Date.now }) {
   let revision = 0
   let running = false
   let deleting = false
   let busy = false
   let retry = true
   let lastSeen = now()
+  // Automatic summaries pause until the server quota frees up (429, timed on this clock). Questions are never paused.
+  let autoPausedUntil = 0
 
   function invalidate() {
     revision++
@@ -19,6 +26,8 @@ export function createScreenAnalysis({ capture, describe, observe, onAnswer, onS
       if (running !== value) { running = value; invalidate() }
     },
     reset() { invalidate() },
+    /** Epoch ms until which automatic summaries are paused by the server quota (0 = not paused). */
+    autoPausedUntil() { return now() < autoPausedUntil ? autoPausedUntil : 0 },
     deletion(value) { deleting = value; invalidate() },
     async look(question) {
       if (!running || deleting || busy) return
@@ -27,7 +36,8 @@ export function createScreenAnalysis({ capture, describe, observe, onAnswer, onS
       const current = () => running && !deleting && revision === ownRevision
       const record = async (summary) => {
         if (!current()) return
-        const seconds = Math.max(0, Math.round((now() - lastSeen) / 1000))
+        // Time spent paused by the quota is not counted as observed learning time.
+        const seconds = Math.max(0, Math.round((now() - Math.max(lastSeen, autoPausedUntil)) / 1000))
         lastSeen = now()
         try {
           const prior = await observe(null, seconds)
@@ -48,6 +58,8 @@ export function createScreenAnalysis({ capture, describe, observe, onAnswer, onS
           onGone(cap.status === 'gone')
           return
         }
+        // Capture above still runs while paused so a closed window is noticed; only describe is skipped.
+        if (!question && now() < autoPausedUntil) { onPaused(); return }
         if (!question && !cap.changed && !retry) {
           await record(null)
           return
@@ -63,6 +75,8 @@ export function createScreenAnalysis({ capture, describe, observe, onAnswer, onS
         if (!current()) return
         retry = true
         lastSeen = now() // Failed analysis is not counted as observed learning time.
+        const wait = question ? null : quotaWaitMs(error, now())
+        if (wait !== null) autoPausedUntil = now() + wait
         onError(error, !!question)
       } finally {
         busy = false

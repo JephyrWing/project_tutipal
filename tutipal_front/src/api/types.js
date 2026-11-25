@@ -39,6 +39,25 @@
  */
 
 /**
+ * com.my.tutipal_back.ai.quota.AiFeature — AI 호출 한도를 따로 세는 기능 (PT-97)
+ * @typedef {'SCREEN_AUTO' | 'SCREEN_MANUAL' | 'CHAT' | 'QUIZ_GENERATE'} AiFeature
+ */
+
+/**
+ * GlobalExceptionHandler 의 AI 사용 한도 초과 응답 (PT-97). HTTP 429, Content-Type application/problem+json,
+ * Retry-After 헤더(초)도 함께 온다. 기존 ApiError 처럼 message 를 읽어도 되도록 message === detail.
+ * 쓰는 쪽은 ApiRequestError.retryAt(Date, 표시용) · retryAfterMs(잠금 · 멈춤 시간, 로컬 시계 기준) · feature 로 받는다 (client.js).
+ * @typedef {Object} AiQuotaProblem
+ * @property {429} status
+ * @property {string} title
+ * @property {string} detail 사용자 안내 문구 (시각 대신 "약 N분 뒤", HH:mm 은 화면이 retryAt 으로 만든다)
+ * @property {string} message detail 과 같은 값
+ * @property {AiFeature} feature
+ * @property {string} retryAt 다시 쓸 수 있는 시각, UTC ISO-8601 (예 "2026-11-25T01:00:00Z")
+ * @property {number} retryAfterSeconds 1 이상, Retry-After 헤더와 같은 값
+ */
+
+/**
  * com.my.tutipal_back.sessions.entity.SessionRole — 세션 안 역할
  * @typedef {'TEACHER' | 'STUDENT'} SessionRole
  */

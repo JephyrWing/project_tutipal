@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { formatRetryTime, isQuotaError } from '../api/client'
 import { quizzes } from '../api/quizzes'
 import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
+import { useRetryLock } from '../utils/useRetryLock'
 
 const errText = (e, fallback) => (e instanceof Error ? e.message : fallback)
 
@@ -109,6 +111,8 @@ function QuizForm({ sessionId, aiMode, onCreated, onClose }) {
   const [busy, setBusy] = useState('')
   const [status, setStatus] = useState('')
   const [draftState, setDraftState] = useState('empty')
+  /** AI 문제 만들기 한도(429)를 다 쓰면 기다릴 시간 동안(대화상자가 열려 있는 동안) "AI로 문제 만들기" 를 막는다. 직접 출제 · 보내기는 그대로. */
+  const [aiLock, lockAi] = useRetryLock()
   const kept = choices.map((value, index) => ({ value: value.trim(), index })).filter(({ value }) => value)
   const newAnswer = kept.findIndex(({ index }) => index === answerIndex)
   const validQuestion = question.trim() !== '' && (type === 'CHOICE'
@@ -131,6 +135,7 @@ function QuizForm({ sessionId, aiMode, onCreated, onClose }) {
   }
 
   async function generate() {
+    if (aiLock) return
     setDraftState('empty')
     setBusy('ai')
     setStatus('AI가 문제를 만들고 있어요…')
@@ -143,7 +148,12 @@ function QuizForm({ sessionId, aiMode, onCreated, onClose }) {
       setDraftState('review')
       setStatus('문제와 정답을 확인하고 초안을 승인해 주세요.')
     } catch (e) {
-      setStatus(errText(e, 'AI 가 문제를 만들지 못했어요'))
+      if (isQuotaError(e)) {
+        lockAi(e)
+        setStatus(`AI 문제 만들기 한도를 다 썼어요. ${formatRetryTime(e.retryAt)} 이후 다시 만들 수 있어요`)
+      } else {
+        setStatus(errText(e, 'AI 가 문제를 만들지 못했어요'))
+      }
     } finally {
       setBusy('')
     }
@@ -180,7 +190,7 @@ function QuizForm({ sessionId, aiMode, onCreated, onClose }) {
           </div>
           {aiMode && <div className="ai-gen">
             <input value={hint} disabled={!!busy} onChange={(e) => setHint(e.target.value)} maxLength={200} placeholder="수업 내용 (예: 자바 반복문)" aria-label="AI 문제 힌트" />
-            <button type="button" className="btn btn-outline" onClick={() => void generate()} disabled={busy !== ''}>
+            <button type="button" className="btn btn-outline" onClick={() => void generate()} disabled={busy !== '' || !!aiLock}>
               ✦ {busy === 'ai' ? '만드는 중…' : 'AI로 문제 만들기'}
             </button>
           </div>}

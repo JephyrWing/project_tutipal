@@ -70,3 +70,75 @@ test('question does not persist its answer or consume required automatic retry',
   const { engine, seen } = setup(); await engine.look('질문')
   assert.equal(seen.records.length, 0); await engine.look(); assert.equal(seen.descriptions, 2)
 })
+const quotaError = (retryAt) => Object.assign(new Error('limit'), { status: 429, retryAt: new Date(retryAt) })
+test('429 on automatic summary pauses automatic describe until retryAt, then resumes', async () => {
+  let clock = 1000; let calls = 0
+  const quota = quotaError(61_000)
+  const { engine, seen } = setup({
+    now: () => clock,
+    describe: async () => { if (++calls === 1) throw quota; return 'resumed' },
+  })
+  await engine.look(); assert.equal(calls, 1); assert.deepEqual(seen.errors, [quota])
+  assert.equal(engine.autoPausedUntil(), 61_000)
+  clock = 30_000; await engine.look(); assert.equal(calls, 1); assert.equal(seen.records.length, 0)
+  assert.equal(seen.captures, 2) // Capture still runs so a closed window is noticed while paused.
+  clock = 61_000; assert.equal(engine.autoPausedUntil(), 0)
+  await engine.look(); assert.equal(calls, 2); assert.deepEqual(seen.answers, ['resumed'])
+  assert.deepEqual(seen.records[0], [null, 0]) // Paused time is not counted as observed learning time.
+})
+test('closed window is still detected while automatic summaries are paused', async () => {
+  let clock = 1000; let status = 'ok'
+  const { engine, seen } = setup({
+    now: () => clock,
+    capture: async () => ({ status, image: 'synthetic', changed: true }),
+    describe: async () => { throw quotaError(61_000) },
+  })
+  await engine.look(); clock = 5000; status = 'gone'
+  await engine.look(); assert.deepEqual(seen.gone, [true])
+})
+test('question still works while automatic summaries are paused by quota', async () => {
+  let clock = 1000; let calls = 0
+  const { engine, seen } = setup({
+    now: () => clock,
+    describe: async (_, q) => { if (++calls === 1) throw quotaError(61_000); return q ? 'answer' : 'summary' },
+  })
+  await engine.look(); clock = 5000
+  await engine.look('질문'); assert.equal(calls, 2); assert.deepEqual(seen.answers, ['answer'])
+  await engine.look(); assert.equal(calls, 2)
+})
+test('429 on a question does not pause automatic summaries', async () => {
+  let calls = 0
+  const { engine, seen } = setup({ describe: async (_, q) => { calls++; if (q) throw quotaError(10 ** 12); return 'summary' } })
+  await engine.look('질문'); assert.equal(engine.autoPausedUntil(), 0)
+  await engine.look(); assert.equal(calls, 2); assert.deepEqual(seen.answers, ['summary'])
+})
+test('503 on automatic summary keeps the silent retry and never pauses', async () => {
+  let calls = 0
+  const busy = Object.assign(new Error('busy'), { status: 503 })
+  const { engine } = setup({ describe: async () => { if (++calls === 1) throw busy; return 'ok' } })
+  await engine.look(); assert.equal(engine.autoPausedUntil(), 0)
+  await engine.look(); assert.equal(calls, 2)
+})
+test('quota pause is timed on the local clock even when it is far from the server retryAt', async () => {
+  for (const skewMs of [15 * 60_000, -15 * 60_000]) {
+    let clock = Date.parse('2026-11-25T00:00:00Z') + skewMs; let calls = 0
+    // Server says retryAt 00:10 (server time), i.e. 600 s after the response.
+    const quota = Object.assign(new Error('limit'), { status: 429, retryAt: new Date('2026-11-25T00:10:00Z'), retryAfterMs: 600_000 })
+    const { engine } = setup({ now: () => clock, describe: async () => { if (++calls === 1) throw quota; return 'resumed' } })
+    await engine.look(); assert.equal(calls, 1)
+    for (let i = 0; i < 19; i++) { clock += 30_000; await engine.look() }
+    assert.equal(calls, 1, `no re-request during the 10 min pause (skew ${skewMs})`)
+    clock += 30_000; await engine.look()
+    assert.equal(calls, 2, `resumes right after 10 min (skew ${skewMs})`)
+  }
+})
+test('each automatic tick skipped by the quota pause reports onPaused so the notice can come back', async () => {
+  let clock = 1000; let paused = 0
+  const { engine } = setup({
+    now: () => clock, onPaused: () => { paused++ },
+    describe: async (_, q) => { if (!q) throw quotaError(61_000); return 'answer' },
+  })
+  await engine.look(); assert.equal(paused, 0)
+  clock = 5000; await engine.look('질문'); assert.equal(paused, 0)
+  clock = 45_000; await engine.look(); assert.equal(paused, 1)
+})
