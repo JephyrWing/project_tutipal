@@ -20,6 +20,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import com.my.tutipal_back.learning.tutor.dto.ChatRequest;
 import com.my.tutipal_back.learning.tutor.service.TutorService;
 import com.my.tutipal_back.ai.client.AiUnavailableException;
+import com.my.tutipal_back.ai.quota.AiQuotaTicket;
 import com.my.tutipal_back.common.exception.ApiException;
 
 @RestController
@@ -46,7 +47,8 @@ public class TutorController {
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chat(@AuthenticationPrincipal OAuth2User me, @Valid @RequestBody ChatRequest request) {
         Long userId = Long.valueOf(me.getName());
-        tutor.requireChatAccess(userId, request.sessionId());
+        // 권한 확인 + CHAT 한도 예약은 스트림을 열기 전에: 거절은 SSE 가 아니라 HTTP 403/410/429 로 나간다
+        AiQuotaTicket ticket = tutor.openChat(userId, request);
         SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
         AtomicBoolean gone = new AtomicBoolean(false);
         emitter.onTimeout(() -> gone.set(true));
@@ -54,24 +56,30 @@ public class TutorController {
         emitter.onCompletion(() -> gone.set(true));
 
         // 답변이 끝날 때까지 기다리는 일이라 가상 스레드 하나에 맡긴다
-        Thread.ofVirtual().name("tutor-chat").start(() -> {
-            try {
-                tutor.chat(userId, request, sources -> send(emitter, "sources", Map.of("items", sources)), delta -> {
-                    if (gone.get()) {
-                        throw new ClientGone();       // 다음 조각에서 멈춤 → AI 스트림 닫힘 → GPU 자리 반납
-                    }
-                    send(emitter, "delta", Map.of("t", delta));
-                });
-                send(emitter, "done", Map.of());
-                emitter.complete();
-            } catch (ClientGone e) {
-                quietComplete(emitter);
-            } catch (ApiException | AiUnavailableException e) {
-                finishWithError(emitter, e.getMessage());
-            } catch (RuntimeException e) {
-                finishWithError(emitter, "답변 중 문제가 생겼어요");
-            }
-        });
+        try {
+            Thread.ofVirtual().name("tutor-chat").start(() -> {
+                try {
+                    tutor.chat(userId, request, ticket,
+                            sources -> send(emitter, "sources", Map.of("items", sources)), delta -> {
+                                if (gone.get()) {
+                                    throw new ClientGone();   // 다음 조각에서 멈춤 → AI 스트림 닫힘 → GPU 자리 반납
+                                }
+                                send(emitter, "delta", Map.of("t", delta));
+                            });
+                    send(emitter, "done", Map.of());
+                    emitter.complete();
+                } catch (ClientGone e) {
+                    quietComplete(emitter);
+                } catch (ApiException | AiUnavailableException e) {
+                    finishWithError(emitter, e.getMessage());
+                } catch (RuntimeException e) {
+                    finishWithError(emitter, "답변 중 문제가 생겼어요");
+                }
+            });
+        } catch (RuntimeException | Error e) {
+            ticket.releaseIfUnused();                 // 스레드를 못 띄웠으면 모델을 안 불렀으니 예약 반납
+            throw e;
+        }
 
         // 모델을 처음 올리는 동안 조각이 한참 안 올 수 있음 → 주기적으로 주석 한 줄(": ping")을 보내
         // Cloudflare Tunnel(100초 무응답 시 끊음) 같은 중간 장치가 연결을 닫지 않게 한다. 화면은 주석을 무시.

@@ -73,6 +73,21 @@ app:
     internal-key: ${AI_INTERNAL_KEY:}
     max-concurrent: ${AI_MAX_CONCURRENT:2}
     wait-for-slot: 30s
+    # 사용자 x 기능별 AI 호출 한도 (슬라이딩 윈도, 서버 메모리). PT-97 정책 승인 대기 (임시값)
+    quota:
+      screen-auto:
+        limit: 120
+        window: 1h
+      screen-manual:
+        limit: 30
+        window: 1h
+      chat:
+        limit: 60
+        window: 1h
+      quiz-generate:
+        limit: 20
+        window: 1h
+      cleanup-interval: 10m
   livekit:
     api-key: ${LIVEKIT_API_KEY:}
     api-secret: ${LIVEKIT_API_SECRET:}
