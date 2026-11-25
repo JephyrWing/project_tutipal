@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ApiRequestError } from '../api/client'
+import { ApiRequestError, formatRetryTime, isQuotaError } from '../api/client'
 import { reviewApi } from '../api/review'
 import { screenApi } from '../api/screen'
 import { createScreenAnalysis } from '../utils/screenAnalysis'
@@ -29,6 +29,13 @@ export default function WidgetPage() {
   const [suggestion, setSuggestion] = useState(null)
 
   const analysis = useRef(null)
+  /** 화면 요약 한도(429)로 멈춘 동안 보여 줄 다시 시작 시각 (표시용). */
+  const autoQuotaAt = useRef(null)
+  const showAutoPaused = () => {
+    const at = autoQuotaAt.current ?? new Date(analysis.current.autoPausedUntil())
+    setMood('curious')
+    setText(`화면 요약 한도를 다 썼어요. ${formatRetryTime(at)} 이후에 다시 살펴볼게요`)
+  }
   if (!analysis.current) analysis.current = createScreenAnalysis({
     capture: () => desktop.captureScreen(),
     describe: async (image, question) => (await screenApi.describe(image, question)).text,
@@ -39,8 +46,21 @@ export default function WidgetPage() {
       setGone(closed)
       if (closed) { setMood('curious'); setText('보던 창이 닫혔어요. 볼 창을 다시 골라 주세요.') }
     },
+    // 멈춘 동안 다음 주기(창을 다시 고른 뒤 · 질문 답을 보여 준 뒤 포함)마다 안내를 다시 띄운다
+    onPaused: showAutoPaused,
     onError: (error, asked) => {
       if (!asked && error instanceof ApiRequestError && error.status === 503) return
+      if (isQuotaError(error)) {
+        // 자동 요약은 엔진이 기다릴 시간만큼 멈췄다가 스스로 다시 시작하고, 질문 한도는 자동 요약에 영향을 주지 않는다.
+        if (!asked) {
+          autoQuotaAt.current = error.retryAt
+          showAutoPaused()
+          return
+        }
+        setMood('curious')
+        setText(`질문 한도를 다 썼어요. ${formatRetryTime(error.retryAt)} 이후 다시 물어봐 주세요`)
+        return
+      }
       setMood('curious')
       setText(error instanceof ApiRequestError && error.status === 401
         ? '메인 창에서 로그인하면 화면을 같이 볼 수 있어요.'
