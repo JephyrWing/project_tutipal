@@ -50,8 +50,8 @@ public class MaterialController {
     @PostMapping("/sessions/{sessionId}/materials/reuse/{sourceId}")
     @ResponseStatus(HttpStatus.CREATED)
     public MaterialRow reuse(@AuthenticationPrincipal OAuth2User me, @PathVariable Long sessionId,
-                             @PathVariable Long sourceId) {
-        return service.reuse(userId(me), sessionId, sourceId);
+                             @PathVariable Long sourceId, @RequestParam(defaultValue = "false") boolean alert) {
+        return service.reuse(userId(me), sessionId, sourceId, alert);
     }
 
     @GetMapping("/sessions/{sessionId}/materials")
