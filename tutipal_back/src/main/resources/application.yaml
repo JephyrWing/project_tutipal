@@ -97,6 +97,16 @@ app:
         limit: 20
         window: 1h
       cleanup-interval: 10m
+    # PT-106 저장 AI 대화. retention-days 0 = 자동 삭제 끔 (보관 기간 PT-13 미정: 사용자 삭제 · 탈퇴 때까지 보관)
+    conversations:
+      retention-days: ${AI_CONVERSATION_RETENTION_DAYS:0}
+      retention-batch-size: 500
+      # 활성 요약 뒤 메시지 중 최신 keep-recent 개를 뺀 수가 threshold 이상이면 오래된 것부터 최대 max-input 개 요약
+      summary:
+        threshold: 20
+        keep-recent: 6
+        max-input: 40
+        slot-wait: 5s
   livekit:
     api-key: ${LIVEKIT_API_KEY:}
     api-secret: ${LIVEKIT_API_SECRET:}
