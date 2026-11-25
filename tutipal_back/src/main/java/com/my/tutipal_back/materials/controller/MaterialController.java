@@ -50,8 +50,8 @@ public class MaterialController {
     @PostMapping("/sessions/{sessionId}/materials/reuse/{sourceId}")
     @ResponseStatus(HttpStatus.CREATED)
     public MaterialRow reuse(@AuthenticationPrincipal OAuth2User me, @PathVariable Long sessionId,
-                             @PathVariable Long sourceId) {
-        return service.reuse(userId(me), sessionId, sourceId);
+                             @PathVariable Long sourceId, @RequestParam(defaultValue = "false") boolean alert) {
+        return service.reuse(userId(me), sessionId, sourceId, alert);
     }
 
     @GetMapping("/sessions/{sessionId}/materials")
@@ -76,6 +76,12 @@ public class MaterialController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@AuthenticationPrincipal OAuth2User me, @PathVariable Long id) {
         service.delete(userId(me), id);
+    }
+
+    @PostMapping("/materials/{id}/index")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public MaterialRow requestIndex(@AuthenticationPrincipal OAuth2User me, @PathVariable Long id) {
+        return service.requestIndex(userId(me), id);
     }
 
     private static Long userId(OAuth2User me) {

@@ -10,6 +10,7 @@ import { createLiveRoomSession } from '../utils/liveRoomSession'
 import { createScreenShareSession } from '../utils/screenShareSession'
 import { createShareSourceCatalog } from '../utils/shareSourceCatalog'
 import HelpSharePicker from '../components/HelpSharePicker'
+import HelpChat from '../components/HelpChat'
 
 const errText = (e, fallback) => (e instanceof Error ? e.message : fallback)
 
@@ -284,7 +285,7 @@ export function StudentHelp({ sessionId, reloadKey }) {
   return (
     <>
       {mine?.status === 'ACCEPTED' ? (
-        <HelpSession help={mine} onEnd={() => void cancel()} />
+        <HelpSession help={mine} refreshKey={reloadKey} onEnd={() => void cancel()} />
       ) : mine?.status === 'PENDING' ? (
         <span className="help-chip">
           <span className="badge badge-warn">도움 요청 대기 중</span>
@@ -320,7 +321,7 @@ export function StudentHelp({ sessionId, reloadKey }) {
 }
 
 /** 학생 쪽 진행 중인 1:1: 화면 올리기 + 받은 그림을 오버레이로 */
-function HelpSession({ help, onEnd }) {
+function HelpSession({ help, refreshKey, onEnd }) {
   const desktop = window.desktop
   const getInfo = useCallback(() => screenshare.helpToken(help.id), [help.id])
   const connection = useRoom(getInfo)
@@ -417,7 +418,7 @@ function HelpSession({ help, onEnd }) {
   }
 
   return (
-    <span className="help-chip" style={{ flexWrap: 'wrap' }}>
+    <div className="help-chip" style={{ flexWrap: 'wrap' }}>
       <span className={`badge ${error || shareError || !room ? 'badge-warn' : 'badge-live'}`}>
         <span className="dot" /> {error || shareError ? '도움 연결 오류' : room ? '선생님과 연결됨' : '도움 연결 중'}
       </span>
@@ -445,7 +446,8 @@ function HelpSession({ help, onEnd }) {
       <ConnectionNotice {...connection} />
       {shareError && <span className="error-text small">{shareError}</span>}
       {!desktop && <span className="muted small">(그림 설명은 앱에서 보여요)</span>}
-    </span>
+      <HelpChat helpId={help.id} refreshKey={refreshKey} partnerName="선생님" />
+    </div>
   )
 }
 
@@ -479,7 +481,7 @@ export function TeacherHelpTab({ sessionId, reloadKey }) {
   }
 
   if (viewing) {
-    return <HelpViewer help={viewing} onClose={() => setViewing(null)} onEnd={() => void act(() => screenshare.end(viewing.id))} />
+    return <HelpViewer help={viewing} refreshKey={reloadKey} onClose={() => setViewing(null)} onEnd={() => void act(() => screenshare.end(viewing.id))} />
   }
 
   return (
@@ -515,7 +517,7 @@ export function TeacherHelpTab({ sessionId, reloadKey }) {
 }
 
 /** 목업 26: 학생 화면 + 펜 · 형광펜 · 지우개 · 색. 그림은 Spring 업무 API/STOMP로 전달한다. */
-function HelpViewer({ help, onClose, onEnd }) {
+function HelpViewer({ help, refreshKey, onClose, onEnd }) {
   const [track, setTrack] = useState(null)
   const getInfo = useCallback(() => screenshare.helpToken(help.id), [help.id])
   const connection = useRoom(getInfo, setTrack)
@@ -617,6 +619,7 @@ function HelpViewer({ help, onClose, onEnd }) {
         </span>
       </div>
       <p className="muted small">{help.message}</p>
+      <HelpChat helpId={help.id} refreshKey={refreshKey} partnerName={help.name} />
       <ConnectionNotice {...connection} />
       {drawingError && <p className="error-text">{drawingError}</p>}
       <div className="viewer-body">

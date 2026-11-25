@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from app.clients.ollama_client import ModelUnavailable, TIMEOUT
+from app.clients.ollama_client import EmbeddingTemporarilyUnavailable, ModelUnavailable, TIMEOUT
 from app.core.settings import ModelSettings
 
 
@@ -100,6 +100,8 @@ async def embed_texts(settings: ModelSettings, texts: list[str]) -> tuple[str, l
     async with asyncio.timeout(125), httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=5.0), trust_env=False) as client:
         async with client.stream("POST", f"{_base_url(settings)}/embeddings", headers=headers, json=payload) as response:
             if response.status_code != 200:
+                if response.status_code in {502, 504}:
+                    raise EmbeddingTemporarilyUnavailable("embedding gateway unavailable")
                 raise ModelUnavailable("OpenAI embedding unavailable")
             raw = bytearray()
             async for part in response.aiter_bytes():

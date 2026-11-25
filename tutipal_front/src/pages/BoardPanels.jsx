@@ -6,6 +6,7 @@ import Mascot from '../components/Mascot'
 const errText = (e, fallback) => (e instanceof Error ? e.message : fallback)
 const when = (iso) => new Date(iso).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 const kb = (n) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))}KB` : `${(n / 1024 / 1024).toFixed(1)}MB`)
+const materialStatus = { PROCESSING: '처리 중', DONE: '완료', FAILED: '실패' }
 
 /** 목업 28: 자료 (선생님 업로드 · 삭제, 모두 내려받기). 올린 자료는 세션 챗봇이 근거로 쓴다 */
 export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
@@ -16,10 +17,16 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
   const [alert, setAlert] = useState(false)
   const [candidates, setCandidates] = useState(null)
   const [sourceId, setSourceId] = useState('')
+  const [reuseAlert, setReuseAlert] = useState(false)
   const inputRef = useRef(null)
+  const listRequest = useRef(0)
 
   const load = useCallback(() => {
-    materials.list(sessionId).then(setList, (e) => setError(errText(e, '불러오지 못했어요')))
+    const request = ++listRequest.current
+    materials.list(sessionId).then(
+      (rows) => { if (request === listRequest.current) setList(rows) },
+      (e) => { if (request === listRequest.current) setError(errText(e, '불러오지 못했어요')) },
+    )
   }, [sessionId])
   useEffect(load, [load, reloadKey])
 
@@ -43,6 +50,7 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
     try {
       setCandidates(await materials.reusable(sessionId))
       setSourceId('')
+      setReuseAlert(false)
     } catch (e) {
       setError(errText(e, '이전 수업 자료를 불러오지 못했어요'))
     }
@@ -54,12 +62,25 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
     setBusy('reusing')
     setError('')
     try {
-      await materials.reuse(sessionId, sourceId)
+      await materials.reuse(sessionId, sourceId, reuseAlert)
       setCandidates(null)
       load()
     } catch (err) {
       setError(errText(err, '자료를 불러오지 못했어요'))
     } finally {
+      setBusy(null)
+    }
+  }
+
+  async function requestIndex(id) {
+    setBusy('indexing')
+    setError('')
+    try {
+      await materials.index(id)
+    } catch (e) {
+      setError(errText(e, '색인을 요청하지 못했어요'))
+    } finally {
+      load()
       setBusy(null)
     }
   }
@@ -80,7 +101,7 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
             <Mascot mood="happy" size={70} />
             <span>
               <strong>{busy === 'uploading' ? '올리는 중…' : '자료 업로드'}</strong>
-              <span className="muted small">txt · md · pdf, 10MB 이하. 끌어다 놓거나 눌러서 고르기. 학생 챗봇이 이 자료를 근거로 답해요</span>
+              <span className="muted small">txt · md · pdf, 10MB 이하. 색인이 완료되면 학생 챗봇이 자료를 근거로 사용할 수 있어요</span>
             </span>
             <input ref={inputRef} type="file" accept=".txt,.md,.pdf" multiple disabled={!!busy} onChange={(e) => void upload(e.target.files)} />
           </label>
@@ -95,8 +116,14 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
             <form className="row-gap" onSubmit={(e) => void reuse(e)}>
               <select className="input" aria-label="이전 수업 자료" value={sourceId} disabled={!!busy} onChange={(e) => setSourceId(e.target.value)}>
                 <option value="">자료 선택</option>
-                {candidates.map((m) => <option key={m.id} value={m.id}>{m.sessionTitle} · {m.filename}</option>)}
+                {candidates.map((m) => <option key={m.id} value={m.id}>
+                  {m.sessionTitle} · {m.filename}{materialStatus[m.status] ? ` · ${materialStatus[m.status]}` : ''}
+                </option>)}
               </select>
+              <label className="check-row">
+                <input type="checkbox" checked={reuseAlert} disabled={!!busy} onChange={(e) => setReuseAlert(e.target.checked)}
+                  aria-label="자료 불러오기 시 학생에게 알림" /> 학생에게 알림
+              </label>
               <button className="btn btn-primary" disabled={!sourceId || !!busy}>{busy === 'reusing' ? '불러오는 중…' : '불러오기'}</button>
             </form>
           ))}
@@ -112,12 +139,22 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
                 <td><a href={materials.fileUrl(m.id)} download>{m.filename}</a></td>
                 <td className="muted small">{kb(m.sizeBytes)} · {when(m.createdAt)}</td>
                 <td>
-                  {m.status === 'PROCESSING' && <span className="badge badge-warn">처리 중</span>}
+                  {m.status === 'PROCESSING' && <span className="badge badge-warn">{m.indexedAt ? '재색인 중' : '처리 중'}</span>}
                   {m.status === 'DONE' && <span className="badge badge-ok" title={`검색 조각 ${m.chunkCount}개`}>완료</span>}
-                  {m.status === 'FAILED' && <span className="badge badge-bad" title={m.error ?? ''}>실패</span>}
+                  {m.status === 'FAILED' && <span className="badge badge-bad">{m.indexedAt ? '재색인 실패' : '실패'}</span>}
                   {m.status === 'FAILED' && m.error && <span className="muted small"> {m.error}</span>}
+                  {m.indexedAt && m.status !== 'DONE' && <span className="muted small"> 기존 색인 보관</span>}
                 </td>
-                <td>{teacher && <button className="btn btn-sm" onClick={() => void materials.remove(m.id).then(load)}>삭제</button>}</td>
+                <td>{teacher && (
+                  <div className="row-gap">
+                    {(m.status === 'DONE' || m.indexRetryable) && (
+                      <button className="btn btn-sm" disabled={!!busy} onClick={() => void requestIndex(m.id)}>
+                        {m.status === 'DONE' ? '재색인' : '재시도'}
+                      </button>
+                    )}
+                    <button className="btn btn-sm" onClick={() => void materials.remove(m.id).then(load)}>삭제</button>
+                  </div>
+                )}</td>
               </tr>
             ))}
           </tbody>
