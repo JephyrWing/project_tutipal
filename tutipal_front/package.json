@@ -25,10 +25,11 @@
     "verify:release": "node scripts/verify-release.mjs",
     "predist:win:release": "node --check electron/serverConfig.cjs && node --check scripts/build-release.mjs && node --check scripts/verify-release.mjs",
     "verify:win": "node scripts/verify-win-package.mjs",
+    "test:win-integrity": "node scripts/test-win-integrity.mjs",
     "preverify:win": "node --check scripts/verify-win-package.mjs",
     "dist:mac": "npm run build && electron-builder --mac dmg --publish never",
     "dist:linux": "npm run build && electron-builder --linux AppImage --publish never",
-    "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/bridge.cjs && node --check electron/applogin.cjs && node --check electron/screen.cjs && node --check electron/share.cjs && node --check scripts/dev.mjs && node --check vite.config.js && node --check electron/helpShareTarget.cjs && node --check electron/windowTarget.cjs && node --check electron/shareGeometry.cjs && node --check scripts/build-window-target.mjs && node --check electron/serverConfig.cjs && node --check scripts/build-release.mjs && node --check scripts/verify-release.mjs",
+    "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/bridge.cjs && node --check electron/applogin.cjs && node --check electron/screen.cjs && node --check electron/share.cjs && node --check scripts/dev.mjs && node --check vite.config.js && node --check electron/helpShareTarget.cjs && node --check electron/windowTarget.cjs && node --check electron/shareGeometry.cjs && node --check scripts/build-window-target.mjs && node --check electron/serverConfig.cjs && node --check scripts/build-release.mjs && node --check scripts/verify-release.mjs && node --check scripts/test-win-integrity.mjs",
     "test:window-target": "node scripts/build-window-target.mjs && electron tests/native-window-target.cjs",
     "test:share-ui": "node tests/help-share-ui.mjs",
     "test:native-capture": "node scripts/build-window-target.mjs && electron tests/native-capture.cjs"
