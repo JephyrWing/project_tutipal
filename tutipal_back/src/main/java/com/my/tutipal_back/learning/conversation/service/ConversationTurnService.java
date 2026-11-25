@@ -119,6 +119,9 @@ public class ConversationTurnService {
                     onDelta.accept(delta);
                     append(answer, delta);
                 }, onAgent, heartbeat));
+        // Stop / disconnect right after the last delta trips nothing inside tutor.chat: check once more before
+        // saving, so a stopped turn is never stored (the heartbeat throws when the screen has gone).
+        heartbeat.run();
         if (answer.toString().isBlank()) {
             throw new ApiException(HttpStatus.BAD_GATEWAY, EMPTY_ANSWER);
         }
