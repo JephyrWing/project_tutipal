@@ -52,6 +52,26 @@ Jira PT-89(AI-007 효과 평가)와 PT-88(AI-006 주관식 채점 QLoRA)의 평�
   .\.venv\Scripts\python.exe -m eval.leakcheck --train <train_aug.jsonl> --sealed <sealed.jsonl> --report results/leakcheck
   ```
 
+### 채점 학습 데이터 (저장소 밖)
+
+- QLoRA 학습에는 `tutipal_datasets/derived/grading_c/train_aug.jsonl`을 쓴다. `train.jsonl`, `train_clean.jsonl`은 중간 산출물이다.
+- 만드는 코드는 `data_tools/`에 있다(2026-11-25 저장소로 옮김). `tutipal_ai/training`에서 아래 순서로 실행하고, 출력 폴더는 git 저장소 밖 로컬 드라이브 경로여야 한다. 어느 git 작업 트리 안이든(이 저장소, 워크트리의 원래 체크아웃, `C:\CODE-SPACE`처럼 상위 폴더 저장소 포함), UNC·장치 경로(`\\server\share`, `\\?\...`), 빈 값이면 아무것도 쓰지 않고 종료 코드 2. 판정은 대상과 위 폴더들의 `.git` 표식으로 하고(git이 없어도 동작), git이 있으면 `git rev-parse --show-toplevel`로 한 번 더 확인한다. 판정할 수 없으면 거부한다.
+
+  ```powershell
+  # 1. 생성(로컬 Ollama 필요): 번역 모델 + 작성 모델 → train.jsonl
+  .\.venv\Scripts\python.exe -m data_tools.build_grading_c --out <grading_c> --datasets-dir <datasets> --eval-set eval/grading_set.jsonl
+  # 2. 정리(LLM 없음): 모순·중복·문제당 상한 → train_clean.jsonl, dropped.csv, translation_review.csv
+  .\.venv\Scripts\python.exe -m data_tools.clean_grading_c --dir <grading_c> --datasets-dir <datasets> --eval-set eval/grading_set.jsonl
+  # 3. 검수 반영 + 누수 제거 + 꼼수 보강 → train_aug.jsonl, aug_stats.json, aug_bases.csv
+  .\.venv\Scripts\python.exe -m data_tools.augment_tricks --dir <grading_c> --eval-set eval/grading_set.jsonl [--reviewed-bases <aug_bases_review.csv>]
+  ```
+
+  `--quizai`는 기본으로 저장소의 `tutipal_back/.../QuizAi.java`를 읽어 `GRADE_SYSTEM`(원본은 `eval/run_eval.py` 하나)과 대조한다. `build_grading_train`(초기 생성기)과 `compare_hybrid`(번역 조합 비교)는 참고용이다. 생성기 3종은 원천 데이터에서 뽑은 문항이 없으면 출력 폴더를 만들기 전에, 학습 행이 0개면 기존 결과를 덮기 전에 종료 코드 2로 끝난다. `clean_grading_c`는 학습 행·평가 세트가 비었거나 정리 후 남은 행이 없으면 종료 코드 2로 끝난다. 두 단계 모두 결과 파일을 임시 파일에 다 쓴 뒤 한꺼번에 바꿔 넣는다.
+- `augment_tricks`가 하는 일: 라벨 검수 결과(`review_true_*.csv`, `aug_bases_review.csv`)를 코드 상수로 반영한다. 질문에 정답 표시가 새던 SciEntsBank 검수 14건 중 13건(질문 11개)의 괄호 표시를 고치고(`QUESTION_FIXES`, 괄호 안에 두 선택지가 다 있는 1건은 다시 보니 누출이 아니어서 고치지 않음 `QUESTION_REVIEWED_NO_LEAK`), 나쁜 정답 행(`EXCLUDE_ROWS`, BAD·WEAK_CORE 31개)과 모범 답안·질문이 깨진 문제 전체(`EXCLUDE_QUESTIONS_OF`, MA_BAD 32개 문제)를 뺀다. 그다음 누수 검사 실패 행과 번역이 깨진 행을 빼고, 꼼수 답안을 꼼수 비율 15% 이하·문제당 2개 이하로 보강한다. 바탕 답안 선택은 seed 기반 해시 순서라 입력 순서와 무관하다. 고른 바탕 답안은 `aug_bases.csv`, `--reviewed-bases`를 주면 검수표에 없는 새 바탕 답안만 `aug_bases_new_for_review.csv`에 남긴다. 바탕 답안 검수에서 뺀 답안은 `BAD_BASES`(1차 4개 + 검수표 15개 + 2차 검수 6개).
+- `augment_tricks` 입력: JSONL은 UTF-8(BOM 허용, `eval.leakcheck`와 같음), 줄마다 JSON 객체이고 필수 필드가 있어야 한다. 학습 행이나 평가 세트가 비었거나, 형식·필드가 틀렸거나, `--per-kind`가 음수면 `파일:줄` 메시지와 함께 종료 코드 2로 끝나고 아무것도 쓰지 않는다. 입력(검수·누수 제외 뒤)의 꼼수 행이 이미 15%를 넘으면 행을 몰래 버리지 않고 비율을 알린 뒤 종료 코드 2로 끝난다(이때도 아무것도 쓰지 않음). CSV(`--reviewed-bases`)도 BOM을 허용하고 `base_id` 열이 있어야 한다. 결과 파일은 모두 만든 뒤 임시 파일 + 바꿔 넣기로 쓰므로 쓰기 도중 실패해도 기존 파일이 남는다.
+- 2026-11-25 재생성(seed 20261125): 입력 993행 → 질문 수정 45행, 검수 제외 146행(행 단위 24, 문제 단위 122), 누수 제외 27행, 깨진 번역 9행, 보강 82행(종류별 41) → **893행**(정답 259, 꼼수 133행 14.9%). leakcheck(dev) 실패 0. 이전 결과(1050행)는 `derived/grading_c/prev_20261125/`에 있다. 새 바탕 답안 43개는 검수를 마쳤다(신규 중 제외 4개 + 1차에서 유지했던 2개를 제외로 변경 → `BAD_BASES` 25개, 아래 2차 재생성).
+- 2026-11-25 2차 재생성: 새 바탕 답안 검수(`aug_bases_new_review.csv`)에서 제외 6개를 `BAD_BASES`에 넣고 다시 만들었다. 행 수·비율은 그대로(**893행**, 정답 259, 꼼수 133행 14.9%, leakcheck(dev) 실패 0)이고 바탕 답안 6개만 바뀌었다(4개는 이미 검수한 답안, 처음 보는 답안 2개는 `aug_bases_new_for_review.csv`에서 2026-11-25 검수: MohlerASAG-E11.Q05.A26 OK, MohlerASAG-E12.Q06.A00 WEAK 유지). 검수한 바탕 답안 전체 목록은 `derived/grading_c/reviewed_bases_all.csv`(139개), 이전 결과는 `derived/grading_c/prev_20261125b/`.
+
 ## 준비
 
 ```powershell
@@ -112,3 +132,7 @@ docker build -t tutipal-eval-sandbox:1 -f eval/sandbox.Dockerfile eval
 
 - 채점 평가 세트(`eval/grading_set.jsonl`)와 한국어 질문(`eval/ko_questions.jsonl`): 이 프로젝트에서 직접 작성했다. 실제 학생 답안은 포함하지 않는다.
 - KodCode-V1(코딩 평가): CC BY-NC 4.0, 비영리 포트폴리오 용도로만 사용. Xu et al., arXiv 2503.02951. 풀이와 테스트는 gpt-4o-0513이 생성했다.
+- SciEntsBank(`nkazi/SciEntsBank`, 채점 학습 데이터): CC BY 4.0. Dzikovska et al., SemEval-2013 Task 7 (https://aclanthology.org/S13-2045), https://huggingface.co/datasets/nkazi/SciEntsBank. 한국어로 번역·수정했다(LLM 번역, 질문의 정답 표시 제거 등 검수 반영).
+- Mohler ASAG(`nkazi/MohlerASAG`, 채점 학습 데이터): CC BY 4.0. Mohler, Bunescu & Mihalcea, ACL 2011 (https://aclanthology.org/P11-1076), https://huggingface.co/datasets/nkazi/MohlerASAG. 한국어로 번역·수정했다.
+- SAF communication networks(`Short-Answer-Feedback/saf_communication_networks_english`, 채점 학습 데이터): CC BY 4.0. Filighera et al., ACL 2022 (https://aclanthology.org/2022.acl-long.587). 한국어로 번역·수정했다.
+- 위 세 데이터의 번역본은 저장소에 넣지 않는다(`tutipal_datasets/derived/`). 저장소에는 검수 결과의 행 id와 질문 수정용 짧은 번역 문구(`data_tools/augment_tricks.py`의 `QUESTION_FIXES`)만 있다.
