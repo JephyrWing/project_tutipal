@@ -1,4 +1,17 @@
 server:
+  # 운영에서는 cloudflared가 HTTPS를 끝내고 http로 넘긴다. X-Forwarded-Proto를 믿어야
+  # OAuth redirect_uri가 https로 만들어진다. Tomcat RemoteIpValve 기본 internal-proxies는
+  # 사설·loopback 주소 전체라서, cloudflared뿐 아니라 같은 Docker 네트워크의 fastapi(model)·
+  # livekit(realtime)과 호스트 127.0.0.1에서 온 헤더도 믿는다. 앱에는 IP 기반 판단이 없어
+  # 현재는 허용한다. 신뢰 범위를 cloudflared로 좁히는 internal-proxies 설정은 후속 보강 과제다.
+  forward-headers-strategy: native
+  tomcat:
+    remoteip:
+      # 호스트·포트는 X-Forwarded-Host/Port 대신 cloudflared가 넘기는 원래 Host 헤더(공개 도메인)로
+      # 정한다. 클라이언트가 보낸 X-Forwarded-Host가 Cloudflare를 통과해도 redirect_uri가 바뀌지 않는다.
+      # 빈 값이면 RemoteIpValve가 해당 헤더를 읽지 않는다(ProdForwardedHeadersTest로 확인).
+      host-header: ""
+      port-header: ""
   servlet:
     session:
       cookie:

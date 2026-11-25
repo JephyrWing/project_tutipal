@@ -1,6 +1,8 @@
 FROM python:3.12.6-slim
 WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+# PT-85: LangSmith/LangChain tracing would export request bodies; the app refuses to start if any of these is true.
+ENV LANGSMITH_TRACING=false LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING_V2=false LANGCHAIN_TRACING=false
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 COPY requirements.txt requirements.lock.txt ./

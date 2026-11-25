@@ -79,6 +79,9 @@ app:
     internal-key: ${AI_INTERNAL_KEY:}
     max-concurrent: ${AI_MAX_CONCURRENT:2}
     wait-for-slot: 30s
+    # PT-85 학생 · 개인 학습 Agent (/v1/agent/chat). 기본 false = 모든 역할이 기존 /v1/chat 경로. FastAPI 배포 확인 후 true
+    agent:
+      enabled: ${AI_AGENT_ENABLED:false}
     # 사용자 x 기능별 AI 호출 한도 (슬라이딩 윈도, 서버 메모리). PT-97 정책 승인 대기 (임시값)
     quota:
       screen-auto:
