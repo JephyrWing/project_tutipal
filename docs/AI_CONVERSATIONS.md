@@ -14,8 +14,9 @@ GAP-12 / FR-TUT-05 / NFR-SEC-11의 구현 원본. `docs/AI_WORKFLOW_CONTRACT.md`
 - 범위(scope): 수업 대화는 `{"kind":"session","sessionId"}`, 개인 대화는 `{"kind":"personal"}`. 기억은 같은 범위끼리만 쓰인다(수업 10의 기억은 수업 11·개인 대화에 안 들어감).
 - 실패·중지·연결 끊김·도중 삭제된 턴은 아무것도 저장하지 않는다(부분 답변 저장 없음). 답변은 최대 32000자까지 저장한다.
 - 요약 규칙(`app.ai.conversations.summary.*`): 활성 요약 뒤 메시지 중 최신 6개를 뺀 수가 20 이상이면 가장 오래된 것부터 최대 40개를 이전 요약과 함께 요약한다(첫 요약은 26번째 메시지 뒤). 요약은 원본 범위(`from_message_id`~`to_message_id`)를 저장하고, 새 요약이 생기면 이전 것은 `superseded_at`으로 남는다(활성 요약은 부분 UNIQUE로 대화당 1개).
-- 요약은 대화당 동시에 1개, AiSlots 자리를 짧게(기본 5초)만 기다리고 못 얻으면 건너뛴다. CHAT 한도를 쓰지 않고, Agent 경로가 꺼져 있으면 만들지 않는다. 실패하면 이전 요약을 유지하고 로그에는 대화 id와 오류 종류만 남긴다. 저장 직전에 활성 요약이 바뀌었거나 대화가 지워졌으면 결과를 버린다.
-- FastAPI `/v1/agent/summarize`: 내부 키 전용, 알 수 없는 필드 422, 메시지 1~40개(각 8000자), `previousSummary` ≤4000. 빈 출력 502 `empty_summary`, 모델 실패 503 `llm_unavailable`. 입력·출력 본문은 로그에 남기지 않는다. 메시지 글은 자료로만 다루고 그 안의 지시를 따르지 않는다.
+- 요약 입력은 메시지 최대 40개이면서 글자 합계 `max-input-chars`(12000) 이내다(첫 메시지는 항상 포함, 나머지는 다음 요약으로). FastAPI는 받은 입력을 Agent와 같은 토큰 추정으로 약 2400토큰(이전 요약 600토큰 포함)에 다시 맞춘다.
+- 요약은 대화당 동시에 1개, 서버 전체 `max-concurrent`개(운영 설정 1, 코드 기본 2)까지만 돈다. 자리가 없으면 기다리지 않고 건너뛴다. AiSlots 자리도 짧게(기본 5초)만 기다리고 못 얻으면 건너뛴다. CHAT 한도를 쓰지 않고, Agent 경로가 꺼져 있으면 만들지 않는다. 실패하면 이전 요약을 유지하고 로그에는 대화 id와 오류 종류만 남긴다. 저장 직전에 활성 요약이 바뀌었거나 대화가 지워졌으면 결과를 버린다.
+- FastAPI `/v1/agent/summarize`: 내부 키 전용, 알 수 없는 필드 422, 메시지 1~40개(각 8000자), `previousSummary` ≤4000. 빈 출력 502 `empty_summary`, 모델·스트림의 어떤 실패도 503 `llm_unavailable`. 입력·출력 본문은 로그에 남기지 않는다. 시스템 지시문에는 고정 문구만 두고, 이전 요약과 메시지는 user 메시지 안의 JSON 문자열로 보내서 그 안의 태그·화자 표시가 경계를 넘지 못한다.
 
 ## HTTP (Spring, 로그인 필요, id는 문자열)
 
@@ -33,7 +34,8 @@ GAP-12 / FR-TUT-05 / NFR-SEC-11의 구현 원본. `docs/AI_WORKFLOW_CONTRACT.md`
 - 대화 삭제: 대화 행을 `FOR UPDATE`로 잠근 뒤 `DELETE FROM ai_conversations` 한 번. 메시지·요약·그 대화에서 저장한 기억은 `ON DELETE CASCADE`로 함께 지워진다. 다음 턴부터는 다시 조회하므로 지운 대화의 요약·기억이 Agent 요청에 들어가지 않는다.
 - 기억 삭제: 즉시 물리 삭제, 다음 턴부터 제외.
 - 탈퇴·수업 삭제: `user_id`·`session_id` FK가 `ON DELETE CASCADE`라 `AccountCleanup`에 별도 DELETE를 추가하지 않았다.
-- 남은 위험: 삭제 커밋 직전에 이미 컨텍스트를 조립한 턴은 지운 요약을 한 번 쓸 수 있다(그 턴의 저장은 막힘). 단일 메시지 삭제(요약 `invalidated_at`)는 이번 범위가 아니다(컬럼만 준비).
+- 남은 위험: 턴이 열린 뒤 대화가 지워지면 Agent 경로는 저장 이력·요약을 쓰지 않는다(같은 범위의 다른 기억은 씀). Agent가 꺼진 기존 경로는 턴을 열 때 만든 `ChatRequest.messages` 사본을 그대로 쓴다(그 턴의 저장은 막힘).
+- 요약이 밀린 경우(자리 없음·모델 실패·Agent를 나중에 켬): 활성 요약 끝과 최근 39개 사이의 메시지는 요약에도 이력에도 들어가지 않는다. 다음 요약이 따라잡을 때까지의 차이이며 리코 테스트(AC-1·AC-19)가 이 창 계산을 고정하고 있다. 단일 메시지 삭제(요약 `invalidated_at`)는 이번 범위가 아니다(컬럼만 준비).
 
 ## 보관 기간 (미정)
 
@@ -45,7 +47,7 @@ PT-113(Draft)이 `TutorService` · `TutorController` · `ChatRequest` 주변을 
 
 - 이 방식은 `TutorService`가 컨텍스트를 호출 스레드에서 동기로 조립한다는 전제에 기대며, `ConversationTurnAgentIntegrationTest`(실제 TutorService 연결)가 유일한 보호 장치다.
 - PT-113 병합 뒤 후속: `ChatRequest`에 conversationId를 실어 ThreadLocal 제거, `ConversationTurnController`와 `TutorController`의 SSE 처리 통합, `src/api/sse.js`와 `tutor.js` 파서 통합, ChatPage · SessionPage · 위젯의 자동 저장과 진입 링크, 계약 6.5의 기억 생성 기준 갱신.
-- 알려진 차이: 실패한 턴도 답변 조각이 나온 뒤면 CHAT 한도는 차감된다(PT-97 규칙) — 저장은 안 됨. 빈 대화 행이 쌓일 수 있다. 다중 서버 잠금은 없다(턴 중복 방지·요약 동시 1개는 서버 메모리 기준).
+- 알려진 차이: 실패한 턴도 답변 조각이 나온 뒤면 CHAT 한도는 차감된다(PT-97 규칙) — 저장은 안 됨. 빈 대화 행 수에 상한이 없다(후속). 기억 20개 상한은 범위 단위 advisory 잠금(`pg_advisory_xact_lock`)으로 세운다. 상세 화면은 이 대화의 기억만 보여 주므로 범위 전체 기억 목록 화면은 후속이다. 턴 중복 방지·요약 자리는 서버 메모리 기준이라 다중 서버 잠금은 없다.
 
 ## 검증 경계
 
