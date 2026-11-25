@@ -13,13 +13,17 @@ import com.my.tutipal_back.learning.tutor.service.ConversationMemory;
  * PT-106 implementation of the PT-85 ConversationMemory port (contract 6.7). Being a {@code @Component}, it replaces
  * NoStoredConversationMemory (registered only when no other bean exists).
  *
- * <p>Bound turn (POST /api/conversations/{id}/messages): server-built history, the summary bound at turn start
+ * <p>Bound turn (POST /api/conversations/{id}/messages): the stored history read at recall time (the last 39
+ * messages after the bound summary's range, each cut to 8000, in one live-filtered query), the summary bound at
+ * turn start
  * (re-queried every time, so an invalidated or deleted one is dropped; the assembler filters invalidated ones), and
  * the newest 20 memories of the same (user, scope). Unbound turn (/api/tutor/chat) or a user / scope mismatch:
  * the screen history and nothing stored, without touching the store. No cache: every recall re-queries.
  *
  * <p>Fail-closed: if the bound conversation was deleted after the turn opened, its history and summary are not
- * used (empty history, no summary); memories of the same scope from other conversations still are. The legacy path
+ * used (empty history, no summary); live memories of the same scope from other conversations still are. Every
+ * read is a single live-filtered statement, so a delete committing between them cannot let the deleted
+ * conversation's rows through. The legacy path
  * (agent disabled) uses the ChatRequest.messages snapshot taken when the turn opened and is not affected by this.
  */
 @Component
@@ -51,10 +55,16 @@ public class StoredConversationMemory implements ConversationMemory {
                 .filter(s -> s.conversationId() == b.conversationId())
                 .map(s -> new StoredSummary(SUMMARY_PREFIX + s.id(), b.userId(), scope, s.text(), s.invalidatedAt()))
                 .orElse(null);
+        List<AgentDtos.ContextMessage> history = !exists ? List.of()
+                : store.recentMessagesAfter(b.conversationId(), b.afterMessageId(), ConversationService.MAX_HISTORY)
+                        .stream()
+                        .map(m -> new AgentDtos.ContextMessage(m.role(),
+                                ConversationService.cut(m.content(), ConversationService.MAX_HISTORY_MESSAGE_LENGTH)))
+                        .toList();
         List<StoredMemory> memories = store.memories(b.userId(), scope.sessionId(), MAX_MEMORIES).stream()
                 .map(m -> new StoredMemory(MEMORY_PREFIX + m.id(), m.userId(), scopeOf(m), m.text(), null))
                 .toList();
-        return new Recall(exists ? b.history() : List.of(), summary, memories);
+        return new Recall(history, summary, memories);
     }
 
     private static AgentDtos.Scope scopeOf(ConversationStore.Memory memory) {

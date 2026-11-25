@@ -211,13 +211,13 @@ class ConversationRound1Test {
         ConversationStore.Summary summary = store.seedSummary(gone.id(), "지운 요약", 1, 2, NOW);
         ConversationStore.Conversation kept = store.seedConversation(2L, null, "수학", NOW);
         ConversationStore.Memory memory = store.seedMemory(2L, null, kept.id(), "남는 기억", NOW);
+        store.seedMessage(gone.id(), "user", "지운 대화 원문", NOW);
         store.deleteConversation(gone.id());
         ConversationBinding binding = new ConversationBinding();
         StoredConversationMemory port = new StoredConversationMemory(store, binding);
-        List<AgentDtos.ContextMessage> history = List.of(new AgentDtos.ContextMessage("user", "지운 대화 원문"));
 
         ConversationMemory.Recall[] recall = new ConversationMemory.Recall[1];
-        binding.run(new ConversationBinding.Bound(2L, AgentDtos.Scope.personal(), gone.id(), summary.id(), history),
+        binding.run(new ConversationBinding.Bound(2L, AgentDtos.Scope.personal(), gone.id(), summary.id(), 0L),
                 () -> recall[0] = port.recall(2L, AgentDtos.Scope.personal(), "질문", List.of()));
 
         assertThat(recall[0].messages()).isEmpty();

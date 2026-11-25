@@ -36,12 +36,13 @@ GAP-12 / FR-TUT-05 / NFR-SEC-11의 구현 원본. `docs/AI_WORKFLOW_CONTRACT.md`
 사용자가 지우는 대화·기억은 **soft delete**다(PM 결정, 2026-11-25). 물리 삭제는 유예 기간 뒤 정리 작업이 한다.
 
 - 대화 삭제: 살아 있는 대화 행을 `FOR UPDATE`로 잠근 뒤 `UPDATE ai_conversations SET deleted_at = now` 한 번. 그 순간부터 모든 사람에게 없는 대화와 같다: 목록·상세·메시지·이어가기·재생·기억 저장/삭제가 404이고, 그 대화의 메시지·요약·기억은 어떤 조회에도 나오지 않는다. 저장소의 모든 조회가 `deleted_at IS NULL`(메시지·요약·기억은 부모 대화가 살아 있는지 `EXISTS`)로 거르므로 `StoredConversationMemory`의 이력·요약·기억(`memories(userId, scope)`도 지운 대화의 기억은 뺌), 요약기의 입력·저장(`saveSummary`가 잠글 행이 없어 버림)에 들어가지 않는다. 스트리밍 중에 지워지면 `savePair`가 잠글 행을 못 찾아 기존 `error "대화가 삭제되어 저장하지 않았어요"`로 끝난다.
-- 기억 삭제: `UPDATE ai_memories SET deleted_at = now`. 즉시 상세·다음 턴 기억·20개 상한에서 빠진다(계약 6.6의 `deletedAt IS NULL`). 지운 대화의 기억도 상한에 세지 않는다.
+- 기억 삭제: 살아 있는 대화 행을 `FOR UPDATE`로 잠근 뒤(동시에 들어온 대화 삭제는 먼저 끝났으면 404, 아니면 이 트랜잭션을 기다림) `UPDATE ai_memories SET deleted_at = now`. UPDATE 자체도 부모 대화가 살아 있어야 하며 0행이면 404. 즉시 상세·다음 턴 기억·20개 상한에서 빠진다(계약 6.6의 `deletedAt IS NULL`). 지운 대화의 기억도 상한에 세지 않는다.
 - 물리 삭제(유예): `app.ai.conversations.deleted-purge-days`(환경변수 `AI_CONVERSATION_DELETED_PURGE_DAYS`) 기본 **30일 — PT-13 결정 전 임시값**. 1시간마다 `deleted_at < 지금 - N일`인 대화(메시지·요약·기억은 `ON DELETE CASCADE`)와 기억을 `retention-batch-size`(500)개씩 지운다. 지금 잠긴 행은 `FOR UPDATE SKIP LOCKED`로 건너뛰고, 바깥 `DELETE`가 `deleted_at < ?`를 다시 확인한다. **값은 1 이상만 허용**하고 0·음수는 시작할 때 설정 오류로 막는다("0 = 삭제 즉시 물리 삭제"는 삭제 경로가 둘이 되어 지원하지 않음).
 - 인덱스(V21): 목록 `(user_id, session_id, last_message_at DESC, id DESC) WHERE deleted_at IS NULL`, 기억 범위 `(user_id, session_id, created_at DESC, id DESC) WHERE deleted_at IS NULL`, 정리 대상 `(deleted_at, id) WHERE deleted_at IS NOT NULL`(대화·기억 각각). 보관 기간용 `last_message_at` 인덱스는 지운 행도 포함한다.
 - 탈퇴·수업 삭제: 그대로 물리 삭제다. `user_id`·`session_id` FK가 `ON DELETE CASCADE`라 `AccountCleanup`에 별도 DELETE를 추가하지 않았다.
 - 계약 문서: `docs/AI_WORKFLOW_CONTRACT.md` 6.6의 "대화 삭제 → 메시지·요약 삭제" 문구는 PR #60 병합 뒤 "soft delete 후 유예 기간 뒤 물리 삭제"로 고쳐야 한다(이 PR에서는 계약 문서를 고치지 않음).
-- 남은 위험: 턴이 열린 뒤 대화가 지워지면 Agent 경로는 저장 이력·요약을 쓰지 않는다(같은 범위의 다른 기억은 씀). Agent가 꺼진 기존 경로는 턴을 열 때 만든 `ChatRequest.messages` 사본을 그대로 쓴다(그 턴의 저장은 막힘). 요약기는 자리(요약 자리·AiSlots)를 얻은 뒤 모델 호출 직전에 대화가 살아 있는지 다시 확인하고 지워졌으면 건너뛴다. 그 확인과 모델 호출 사이(또는 호출 도중)에 지워지면 그 대화의 메시지가 요약 모델에 한 번 갈 수 있다(결과는 저장 직전 확인에서 버려짐) — 남은 아주 짧은 창이다.
+- 남은 위험: 턴이 열린 뒤 대화가 지워지면 Agent 경로는 저장 이력·요약을 쓰지 않는다(같은 범위의 살아 있는 다른 대화의 기억은 씀). `StoredConversationMemory`는 턴 시작 때 사본을 쓰지 않고 recall 시점에 이력(묶인 요약 범위 뒤 최근 39개, 각 8000자)·요약·기억을 각각 한 번의 live 필터 조회로 다시 읽으므로, 조회 사이에 삭제가 끝나도 지운 대화의 행은 들어가지 않는다. 남는 창은 조회가 끝난 뒤 삭제가 끝난 경우뿐이다(이미 읽은 데이터가 그 턴의 Agent 요청 하나에 들어감, 저장은 막힘). 같은 `clientMessageId` 재생은 SSE로 보내기 직전에 live 경로로 저장된 쌍을 다시 읽고, 그사이 지워졌으면 `delta`·`saved` 없이 `error "대화를 찾을 수 없어요"`(지운 대화를 물었을 때와 같은 404 의미)로 끝난다.
+ Agent가 꺼진 기존 경로는 턴을 열 때 만든 `ChatRequest.messages` 사본을 그대로 쓴다(그 턴의 저장은 막힘). 요약기는 자리(요약 자리·AiSlots)를 얻은 뒤 모델 호출 직전에 대화가 살아 있는지 다시 확인하고 지워졌으면 건너뛴다. 그 확인과 모델 호출 사이(또는 호출 도중)에 지워지면 그 대화의 메시지가 요약 모델에 한 번 갈 수 있다(결과는 저장 직전 확인에서 버려짐) — 남은 아주 짧은 창이다.
 - 요약이 밀린 경우(자리 없음·모델 실패·Agent를 나중에 켬): 활성 요약 끝과 최근 39개 사이의 메시지는 요약에도 이력에도 들어가지 않는다. 다음 요약이 따라잡을 때까지의 차이이며 리코 테스트(AC-1·AC-19)가 이 창 계산을 고정하고 있다. 단일 메시지 삭제(요약 `invalidated_at`)는 이번 범위가 아니다(컬럼만 준비).
 
 ## 보관 기간 (미정)

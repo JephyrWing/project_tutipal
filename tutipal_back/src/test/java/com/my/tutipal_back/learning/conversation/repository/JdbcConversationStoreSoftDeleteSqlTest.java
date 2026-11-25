@@ -132,6 +132,7 @@ class JdbcConversationStoreSoftDeleteSqlTest {
         assertThat(sql).singleElement().satisfies(s -> assertThat(s)
                 .startsWith("update ai_memories set deleted_at = ?")
                 .contains("id = ?").contains("conversation_id = ?").contains("deleted_at is null")
+                .contains("live.id = ai_memories.conversation_id and live.deleted_at is null")
                 .doesNotContain("delete from"));
         assertThat(args()).contains(3L, 7L);
     }

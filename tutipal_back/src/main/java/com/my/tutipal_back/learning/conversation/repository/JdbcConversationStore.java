@@ -250,7 +250,8 @@ public class JdbcConversationStore implements ConversationStore {
     @Override
     public boolean softDeleteMemory(long conversationId, long memoryId, Instant now) {
         return jdbc.update("UPDATE ai_memories SET deleted_at = ? WHERE id = ? AND conversation_id = ?"
-                + " AND deleted_at IS NULL", time(now), memoryId, conversationId) > 0;
+                + " AND deleted_at IS NULL AND" + String.format(LIVE_PARENT, "ai_memories"), time(now), memoryId,
+                conversationId) > 0;
     }
 
     /**

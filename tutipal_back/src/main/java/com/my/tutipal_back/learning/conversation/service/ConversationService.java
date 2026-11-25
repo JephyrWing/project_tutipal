@@ -164,10 +164,15 @@ public class ConversationService {
         return memory(saved);
     }
 
-    /** Soft delete (deleted_at): excluded at once from recall, detail and the cap; purged with the grace period. */
+    /**
+     * Soft delete (deleted_at): excluded at once from recall, detail and the cap; purged with the grace period.
+     * Locks the live conversation row first, so a concurrent conversation delete either commits before (404 here)
+     * or waits for this transaction; the UPDATE also requires a live parent (0 rows = 404).
+     */
     @Transactional
     public void deleteMemory(long userId, long conversationId, long memoryId) {
-        ConversationStore.Conversation c = owned(userId, conversationId);
+        ConversationStore.Conversation c = store.lockOwned(userId, conversationId)
+                .orElseThrow(ConversationService::notFound);
         if (!store.softDeleteMemory(c.id(), memoryId, clock.instant())) {
 
             throw new ApiException(HttpStatus.NOT_FOUND, "기억을 찾을 수 없어요");
@@ -191,18 +196,16 @@ public class ConversationService {
         long after = active.map(ConversationStore.Summary::toMessageId).orElse(0L);
         List<ConversationStore.Message> recent = store.recentMessagesAfter(c.id(), after, MAX_HISTORY);
         List<ChatRequest.Message> messages = new ArrayList<>(recent.size() + 1);
-        List<AgentDtos.ContextMessage> history = new ArrayList<>(recent.size());
         for (ConversationStore.Message m : recent) {
             String content = cut(m.content(), MAX_HISTORY_MESSAGE_LENGTH);
             messages.add(new ChatRequest.Message(m.role(), content));
-            history.add(new AgentDtos.ContextMessage(m.role(), content));
         }
         messages.add(new ChatRequest.Message("user", question));
         ChatRequest request = new ChatRequest(c.topic(), List.copyOf(messages), c.sessionId(), null, null);
         AgentDtos.Scope scope = c.sessionId() == null ? AgentDtos.Scope.personal()
                 : AgentDtos.Scope.session(c.sessionId());
         ConversationBinding.Bound bound = new ConversationBinding.Bound(userId, scope, c.id(),
-                active.map(ConversationStore.Summary::id).orElse(null), history);
+                active.map(ConversationStore.Summary::id).orElse(null), after);
         return new PreparedTurn(request, bound);
     }
 

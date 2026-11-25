@@ -340,7 +340,7 @@ class ConversationControllerWebTest {
         ConversationBinding binding = new ConversationBinding();
         StoredConversationMemory memory = new StoredConversationMemory(store, binding);
         ConversationMemory.Recall[] recall = new ConversationMemory.Recall[1];
-        binding.run(new ConversationBinding.Bound(ME, AgentDtos.Scope.personal(), c.id(), summary.id(), List.of()),
+        binding.run(new ConversationBinding.Bound(ME, AgentDtos.Scope.personal(), c.id(), summary.id(), 0L),
                 () -> recall[0] = memory.recall(ME, AgentDtos.Scope.personal(), "질문", List.of()));
 
         assertThat(recall[0].summary()).isNull();
@@ -426,7 +426,7 @@ class ConversationControllerWebTest {
         ConversationBinding binding = new ConversationBinding();
         StoredConversationMemory memory = new StoredConversationMemory(store, binding);
         ConversationMemory.Recall[] recall = new ConversationMemory.Recall[1];
-        binding.run(new ConversationBinding.Bound(ME, AgentDtos.Scope.personal(), c.id(), null, List.of()),
+        binding.run(new ConversationBinding.Bound(ME, AgentDtos.Scope.personal(), c.id(), null, 0L),
                 () -> recall[0] = memory.recall(ME, AgentDtos.Scope.personal(), "질문", List.of()));
         assertThat(recall[0].memories()).extracting(ConversationMemory.StoredMemory::id)
                 .containsExactly("m_" + kept.id());

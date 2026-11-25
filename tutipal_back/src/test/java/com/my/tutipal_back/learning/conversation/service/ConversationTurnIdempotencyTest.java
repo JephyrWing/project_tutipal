@@ -87,6 +87,28 @@ class ConversationTurnIdempotencyTest {
         turns.finish(turns.open(ME, c.id(), "다른 질문", UUID.randomUUID()), false);
     }
 
+    /** Deleted between open() and the replay: re-read at send time, 404 "대화를 찾을 수 없어요", no delta / saved. */
+    @Test
+    void replayOfAConversationDeletedAfterOpenSendsNothing() {
+        FakeConversationStore store = new FakeConversationStore();
+        ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
+        store.insertPair(c.id(), "질문", "저장된 답", "질문", NOW, KEY);
+        ConversationTurnService turns = turnsOn(store);
+        ConversationTurnService.OpenedTurn turn = turns.open(ME, c.id(), "질문", KEY);
+        store.softDeleteConversation(c.id(), NOW);
+
+        List<String> deltas = new ArrayList<>();
+        assertThatThrownBy(() -> run(turns, turn, deltas))
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
+                    assertThat(e.getMessage()).isEqualTo("대화를 찾을 수 없어요");
+                });
+        turns.finish(turn, false);
+
+        assertThat(deltas).isEmpty();
+        verifyNoInteractions(tutor, summarizer);
+    }
+
     @Test
     void differentTextUnderAUsedKeyIs409BeforeTheQuota() {
         FakeConversationStore store = new FakeConversationStore();

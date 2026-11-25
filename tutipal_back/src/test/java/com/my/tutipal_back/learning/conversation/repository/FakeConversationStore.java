@@ -405,7 +405,9 @@ public class FakeConversationStore implements ConversationStore {
     public synchronized boolean softDeleteMemory(long conversationId, long memoryId, Instant now) {
         calls.add("deleteMemory:" + memoryId);
         Memory m = memories.get(memoryId);
-        if (m == null || m.conversationId() != conversationId || deletedMemories.containsKey(memoryId)) {
+        // like the UPDATE: a live memory of a live conversation only
+        if (m == null || m.conversationId() != conversationId || deletedMemories.containsKey(memoryId)
+                || !live(conversationId)) {
             return false;
         }
         deletedMemories.put(memoryId, now);

@@ -15,7 +15,7 @@ import com.my.tutipal_back.ai.dto.AgentDtos;
 class ConversationBindingTest {
 
     private static final ConversationBinding.Bound BOUND = new ConversationBinding.Bound(2L,
-            AgentDtos.Scope.session(10L), 7L, 5L, List.of(new AgentDtos.ContextMessage("user", "저장된 질문")));
+            AgentDtos.Scope.session(10L), 7L, 5L, 12L);
 
     private final ConversationBinding binding = new ConversationBinding();
 

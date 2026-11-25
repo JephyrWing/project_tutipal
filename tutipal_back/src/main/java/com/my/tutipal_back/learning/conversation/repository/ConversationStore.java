@@ -122,7 +122,7 @@ public interface ConversationStore {
 
     Memory insertMemory(long userId, Long sessionId, long conversationId, String text, Instant now);
 
-    /** 이 대화의 살아 있는 기억이면 deleted_at = now 로 지우고 true. */
+    /** 살아 있는 대화의 살아 있는 기억이면 deleted_at = now 로 지우고 true (대화가 지워졌으면 false). */
     boolean softDeleteMemory(long conversationId, long memoryId, Instant now);
 
     /**

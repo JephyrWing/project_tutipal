@@ -150,9 +150,14 @@ public class ConversationTurnService {
     public ConversationDtos.Saved run(OpenedTurn turn, Consumer<List<String>> onSources, Consumer<String> onDelta,
                                       Consumer<AgentDtos.AgentEvent> onAgent, Runnable heartbeat) {
         if (turn.replay != null) {
-            // already saved by an earlier request whose saved event was lost: send the stored answer once
-            onDelta.accept(turn.replay.assistant().content());
-            return saved(turn.replay);
+            // already saved by an earlier request whose saved event was lost: send the stored answer once. Re-read it
+            // through the live-filtered path right before sending, so a conversation deleted since open() sends
+            // nothing: error "대화를 찾을 수 없어요" (404 semantics, the same as asking a deleted conversation).
+            ConversationStore.SavedPair pair = conversations.findSaved(turn.userId, turn.conversationId,
+                    turn.clientMessageId, turn.question)
+                    .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, ConversationService.NOT_FOUND));
+            onDelta.accept(pair.assistant().content());
+            return saved(pair);
         }
         StringBuilder answer = new StringBuilder();
         binding.run(turn.prepared.bound(), () -> tutor.chat(turn.userId, turn.prepared.request(), turn.opened,

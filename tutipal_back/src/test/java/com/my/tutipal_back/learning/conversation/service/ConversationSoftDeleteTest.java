@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Supplier;
 
@@ -117,12 +118,13 @@ class ConversationSoftDeleteTest {
     @Test
     void recallBoundToADeletedConversationGetsNothingOfIt() {
         ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
+        store.seedMessages(c.id(), 4, NOW);
         ConversationStore.Summary summary = store.seedSummary(c.id(), "지운 요약", 1, 2, NOW);
         store.seedMemory(ME, null, c.id(), "지운 대화 기억", NOW);
         conversations.delete(ME, c.id());
 
         ConversationMemory.Recall recall = recall(new ConversationBinding.Bound(ME, AgentDtos.Scope.personal(),
-                c.id(), summary.id(), List.of(new AgentDtos.ContextMessage("user", "지운 원문"))));
+                c.id(), summary.id(), 0L));
 
         assertThat(recall.messages()).isEmpty();
         assertThat(recall.summary()).isNull();
@@ -139,7 +141,7 @@ class ConversationSoftDeleteTest {
         conversations.delete(ME, gone.id());
 
         ConversationMemory.Recall recall = recall(new ConversationBinding.Bound(ME, AgentDtos.Scope.session(SESSION),
-                kept.id(), null, List.of()));
+                kept.id(), null, 0L));
 
         assertThat(recall.memories()).extracting(ConversationMemory.StoredMemory::id)
                 .containsExactly("m_" + keptMemory.id());
@@ -190,7 +192,7 @@ class ConversationSoftDeleteTest {
         assertThat(store.allMemories()).extracting(ConversationStore.Memory::id).contains(gone.id());
         assertThat(conversations.detail(ME, c.id()).memories()).extracting(m -> m.id())
                 .containsExactly(String.valueOf(kept.id()));
-        assertThat(recall(new ConversationBinding.Bound(ME, AgentDtos.Scope.personal(), c.id(), null, List.of()))
+        assertThat(recall(new ConversationBinding.Bound(ME, AgentDtos.Scope.personal(), c.id(), null, 0L))
                 .memories()).extracting(ConversationMemory.StoredMemory::id).containsExactly("m_" + kept.id());
         assertStatus(() -> conversations.deleteMemory(ME, c.id(), gone.id()), HttpStatus.NOT_FOUND);
     }
@@ -223,5 +225,51 @@ class ConversationSoftDeleteTest {
 
         assertThat(store.countMemories(ME, SESSION)).isZero();
         assertThat(conversations.saveMemory(ME, other.id(), "삭제 뒤 저장").text()).isEqualTo("삭제 뒤 저장");
+    }
+
+    // ------------------------------------------------------------------ memory delete vs conversation delete
+
+    /** Memory delete takes the live conversation lock before the UPDATE (a conversation delete serializes on it). */
+    @Test
+    void memoryDeleteLocksTheLiveConversationBeforeTheUpdate() {
+        ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
+        ConversationStore.Memory m = store.seedMemory(ME, null, c.id(), "기억", NOW);
+
+        conversations.deleteMemory(ME, c.id(), m.id());
+
+        assertThat(store.calls).containsSubsequence("lockOwned:" + c.id(), "deleteMemory:" + m.id());
+        assertThat(store.memoryDeletedAt(m.id())).contains(NOW);
+    }
+
+    /** Conversation delete committed first: the lock finds no live row, 404, the memory is untouched. */
+    @Test
+    void memoryDeleteAfterTheConversationDeleteIs404() {
+        ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
+        ConversationStore.Memory m = store.seedMemory(ME, null, c.id(), "기억", NOW);
+        conversations.delete(ME, c.id());
+
+        assertStatus(() -> conversations.deleteMemory(ME, c.id(), m.id()), HttpStatus.NOT_FOUND);
+
+        assertThat(store.memoryDeletedAt(m.id())).isEmpty();
+    }
+
+    /** Conversation delete landing after the ownership read: the UPDATE needs a live parent, so still 404. */
+    @Test
+    void memoryDeleteRacingAConversationDeleteIs404AndUpdatesNothing() {
+        FakeConversationStore racing = new FakeConversationStore() {
+            @Override
+            public synchronized Optional<Conversation> lockOwned(long userId, long conversationId) {
+                Optional<Conversation> live = super.lockOwned(userId, conversationId);
+                softDeleteConversation(conversationId, NOW);
+                return live;
+            }
+        };
+        ConversationService service = new ConversationService(racing, sessions, clock);
+        ConversationStore.Conversation c = racing.seedConversation(ME, null, "수학", NOW);
+        ConversationStore.Memory m = racing.seedMemory(ME, null, c.id(), "기억", NOW);
+
+        assertStatus(() -> service.deleteMemory(ME, c.id(), m.id()), HttpStatus.NOT_FOUND);
+
+        assertThat(racing.memoryDeletedAt(m.id())).isEmpty();
     }
 }

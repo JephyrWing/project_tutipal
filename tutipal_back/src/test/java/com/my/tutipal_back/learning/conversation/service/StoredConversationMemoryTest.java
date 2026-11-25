@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import java.util.List;
+import java.util.Optional;
 
 import org.junit.jupiter.api.Test;
 
@@ -25,8 +26,6 @@ class StoredConversationMemoryTest {
     private static final AgentDtos.Scope SESSION = AgentDtos.Scope.session(10L);
     private static final List<AgentDtos.ContextMessage> SCREEN =
             List.of(new AgentDtos.ContextMessage("user", "화면 질문"), new AgentDtos.ContextMessage("assistant", "화면 답"));
-    private static final List<AgentDtos.ContextMessage> SERVER =
-            List.of(new AgentDtos.ContextMessage("user", "서버 질문"), new AgentDtos.ContextMessage("assistant", "서버 답"));
 
     private final FakeConversationStore store = new FakeConversationStore();
     private final ConversationBinding binding = new ConversationBinding();
@@ -70,9 +69,11 @@ class StoredConversationMemoryTest {
         ConversationStore.Memory newer = store.seedMemory(ME, 10L, c.id(), "새 기억", NOW.plusSeconds(5));
 
         ConversationMemory.Recall recall = recallBound(
-                new ConversationBinding.Bound(ME, SESSION, c.id(), summary.id(), SERVER), ME, SESSION);
+                new ConversationBinding.Bound(ME, SESSION, c.id(), summary.id(), summary.toMessageId()), ME, SESSION);
 
-        assertThat(recall.messages()).isEqualTo(SERVER);
+        // the stored messages after the bound summary's range, read at recall time (not the screen history)
+        assertThat(recall.messages()).containsExactly(new AgentDtos.ContextMessage("user", "m3"),
+                new AgentDtos.ContextMessage("assistant", "m4"));
         assertThat(recall.summary().id()).isEqualTo("s_" + summary.id());
         assertThat(recall.summary().ownerUserId()).isEqualTo(ME);
         assertThat(recall.summary().scope()).isEqualTo(SESSION);
@@ -95,7 +96,7 @@ class StoredConversationMemoryTest {
         }
 
         ConversationMemory.Recall recall = recallBound(
-                new ConversationBinding.Bound(ME, AgentDtos.Scope.personal(), c.id(), null, SERVER), ME,
+                new ConversationBinding.Bound(ME, AgentDtos.Scope.personal(), c.id(), null, 0L), ME,
                 AgentDtos.Scope.personal());
 
         assertThat(recall.memories()).hasSize(20);
@@ -111,7 +112,7 @@ class StoredConversationMemoryTest {
         ConversationStore.Memory mine = store.seedMemory(ME, null, personal.id(), "개인 기억", NOW);
 
         ConversationMemory.Recall recall = recallBound(
-                new ConversationBinding.Bound(ME, AgentDtos.Scope.personal(), personal.id(), null, SERVER), ME,
+                new ConversationBinding.Bound(ME, AgentDtos.Scope.personal(), personal.id(), null, 0L), ME,
                 AgentDtos.Scope.personal());
 
         assertThat(recall.memories()).extracting(ConversationMemory.StoredMemory::id).containsExactly("m_" + mine.id());
@@ -128,7 +129,7 @@ class StoredConversationMemoryTest {
         store.seedMemory(ME, 10L, c.id(), "기억", NOW);
 
         ConversationMemory.Recall recall = recallBound(
-                new ConversationBinding.Bound(ME, SESSION, c.id(), summary.id(), SERVER), 3L, SESSION);
+                new ConversationBinding.Bound(ME, SESSION, c.id(), summary.id(), 2L), 3L, SESSION);
 
         assertThat(recall.messages()).isEqualTo(SCREEN);
         assertThat(recall.summary()).isNull();
@@ -141,7 +142,7 @@ class StoredConversationMemoryTest {
         ConversationStore.Conversation c = store.seedConversation(ME, 10L, "파이썬", NOW);
         ConversationStore.Summary summary = store.seedSummary(c.id(), "요약", 1, 2, NOW);
         store.seedMemory(ME, 10L, c.id(), "기억", NOW);
-        ConversationBinding.Bound bound = new ConversationBinding.Bound(ME, SESSION, c.id(), summary.id(), SERVER);
+        ConversationBinding.Bound bound = new ConversationBinding.Bound(ME, SESSION, c.id(), summary.id(), 2L);
 
         for (AgentDtos.Scope asked : List.of(AgentDtos.Scope.session(11L), AgentDtos.Scope.personal())) {
             ConversationMemory.Recall recall = recallBound(bound, ME, asked);
@@ -159,7 +160,7 @@ class StoredConversationMemoryTest {
         ConversationStore.Summary foreign = store.seedSummary(other.id(), "남의 요약", 1, 2, NOW);
 
         ConversationMemory.Recall recall = recallBound(
-                new ConversationBinding.Bound(ME, SESSION, c.id(), foreign.id(), SERVER), ME, SESSION);
+                new ConversationBinding.Bound(ME, SESSION, c.id(), foreign.id(), 0L), ME, SESSION);
 
         assertThat(recall.summary()).isNull();
     }
@@ -171,7 +172,7 @@ class StoredConversationMemoryTest {
         store.seedSummary(c.id(), "더 새 요약", 3, 4, NOW.plusSeconds(1));
 
         ConversationMemory.Recall recall = recallBound(
-                new ConversationBinding.Bound(ME, SESSION, c.id(), bound.id(), SERVER), ME, SESSION);
+                new ConversationBinding.Bound(ME, SESSION, c.id(), bound.id(), 2L), ME, SESSION);
 
         assertThat(recall.summary().id()).isEqualTo("s_" + bound.id());
         assertThat(recall.summary().text()).isEqualTo("묶인 요약");
@@ -184,7 +185,7 @@ class StoredConversationMemoryTest {
         store.removeSummary(bound.id());
 
         ConversationMemory.Recall recall = recallBound(
-                new ConversationBinding.Bound(ME, SESSION, c.id(), bound.id(), SERVER), ME, SESSION);
+                new ConversationBinding.Bound(ME, SESSION, c.id(), bound.id(), 2L), ME, SESSION);
 
         assertThat(recall.summary()).isNull();
     }
@@ -192,16 +193,18 @@ class StoredConversationMemoryTest {
     @Test
     void invalidatedSummaryNeverReachesTheAgentContext() {
         ConversationStore.Conversation c = store.seedConversation(ME, 10L, "파이썬", NOW);
+        store.seedMessages(c.id(), 4, NOW);
         ConversationStore.Summary bound = store.seedSummary(c.id(), "무효 요약", 1, 2, NOW);
         store.invalidate(bound.id(), NOW);
         AgentContextAssembler assembler = new AgentContextAssembler(memory);
 
         AgentDtos.Context[] context = new AgentDtos.Context[1];
-        binding.run(new ConversationBinding.Bound(ME, SESSION, c.id(), bound.id(), SERVER),
+        binding.run(new ConversationBinding.Bound(ME, SESSION, c.id(), bound.id(), 2L),
                 () -> context[0] = assembler.assemble(ME, SESSION, "질문", SCREEN, null));
 
         assertThat(context[0].summary()).isNull();
-        assertThat(context[0].messages()).isEqualTo(SERVER);
+        assertThat(context[0].messages()).containsExactly(new AgentDtos.ContextMessage("user", "m3"),
+                new AgentDtos.ContextMessage("assistant", "m4"));
     }
 
     @Test
@@ -211,10 +214,53 @@ class StoredConversationMemoryTest {
         store.seedMemory(ME, 10L, c.id(), "기억", NOW);
 
         ConversationMemory.Recall recall = recallBound(
-                new ConversationBinding.Bound(ME, SESSION, c.id(), summary.id(), SERVER), ME, SESSION);
+                new ConversationBinding.Bound(ME, SESSION, c.id(), summary.id(), 2L), ME, SESSION);
 
         assertThat(recall.summary().id()).matches("^s_[0-9]+$").matches("^[A-Za-z0-9_-]{1,64}$");
         assertThat(recall.memories()).extracting(ConversationMemory.StoredMemory::id)
                 .allMatch(id -> id.matches("^m_[0-9]+$"));
+    }
+
+    /** Read at recall time with the turn's window rule: the last 39 messages after the bound range, each cut to 8000. */
+    @Test
+    void boundHistoryIsTheLast39StoredMessagesAfterTheWindowEachCutTo8000() {
+        ConversationStore.Conversation c = store.seedConversation(ME, 10L, "파이썬", NOW);
+        List<ConversationStore.Message> stored = store.seedMessages(c.id(), 44, NOW);
+        store.seedMessage(c.id(), "assistant", "x".repeat(9000), NOW);
+
+        ConversationMemory.Recall recall = recallBound(
+                new ConversationBinding.Bound(ME, SESSION, c.id(), null, stored.get(1).id()), ME, SESSION);
+
+        assertThat(recall.messages()).hasSize(39);
+        assertThat(recall.messages().getFirst().content()).isEqualTo("m7");
+        assertThat(recall.messages().getLast().content()).isEqualTo("x".repeat(8000));
+    }
+
+    /** A delete committing right after the liveness check: every later read is live-filtered, nothing of it leaks. */
+    @Test
+    void deleteCommittingAfterTheLivenessCheckLeaksNothing() {
+        FakeConversationStore racing = new FakeConversationStore() {
+            @Override
+            public synchronized Optional<Conversation> findOwned(long userId, long conversationId) {
+                Optional<Conversation> live = super.findOwned(userId, conversationId);
+                softDeleteConversation(conversationId, NOW);
+                return live;
+            }
+        };
+        ConversationStore.Conversation c = racing.seedConversation(ME, 10L, "파이썬", NOW);
+        racing.seedMessages(c.id(), 4, NOW);
+        ConversationStore.Summary summary = racing.seedSummary(c.id(), "지운 요약", 1, 2, NOW);
+        racing.seedMemory(ME, 10L, c.id(), "지운 대화 기억", NOW);
+        ConversationBinding racingBinding = new ConversationBinding();
+        StoredConversationMemory port = new StoredConversationMemory(racing, racingBinding);
+
+        ConversationMemory.Recall[] out = new ConversationMemory.Recall[1];
+        racingBinding.run(new ConversationBinding.Bound(ME, SESSION, c.id(), summary.id(), 0L),
+                () -> out[0] = port.recall(ME, SESSION, "질문", SCREEN));
+
+        assertThat(racing.deletedAt(c.id())).isPresent();
+        assertThat(out[0].messages()).isEmpty();
+        assertThat(out[0].summary()).isNull();
+        assertThat(out[0].memories()).isEmpty();
     }
 }

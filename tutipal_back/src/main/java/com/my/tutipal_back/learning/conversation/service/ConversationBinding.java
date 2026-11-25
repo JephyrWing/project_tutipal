@@ -1,6 +1,5 @@
 package com.my.tutipal_back.learning.conversation.service;
 
-import java.util.List;
 import java.util.Optional;
 
 import org.springframework.stereotype.Component;
@@ -21,14 +20,11 @@ public class ConversationBinding {
 
     /**
      * userId / scope: the turn's owner and Agent scope (recall with anything else uses nothing stored).
-     * summaryId: active summary when the turn started (re-queried at recall). history: server-built prior messages.
+     * summaryId: active summary when the turn started (re-queried at recall). afterMessageId: the history window
+     * start (that summary's to_message_id, 0 without one); recall reads the messages after it from the store.
      */
     public record Bound(long userId, AgentDtos.Scope scope, long conversationId, Long summaryId,
-                        List<AgentDtos.ContextMessage> history) {
-
-        public Bound {
-            history = history == null ? List.of() : List.copyOf(history);
-        }
+                        long afterMessageId) {
     }
 
     private final ThreadLocal<Bound> current = new ThreadLocal<>();
