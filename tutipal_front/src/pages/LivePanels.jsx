@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { screenshare } from '../api/screenshare'
 import { request } from '../api/client'
 import { useHelpDrawing } from '../api/realtime'
+import { HELP_MESSAGE_MAX } from '../utils/helpDraft'
 import { applyDraw, COLORS, hitStrokes, renderDraw } from '../draw'
 import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
@@ -244,25 +245,88 @@ export function StudentLiveTab({ sessionId }) {
 
 // ---------------- 도움 요청 (방 B) ----------------
 
-/** 수락 뒤 학생이 대상 선택·미리보기·동의를 거쳐 공유한다. */
-export function StudentHelp({ sessionId, reloadKey }) {
+/**
+ * 수락 뒤 학생이 대상 선택·미리보기·동의를 거쳐 공유한다.
+ * draft {text, seq}: 챗봇이 도움 요청을 추천한 답변에서 학생이 버튼을 누르면 넘어온다 (PT-113).
+ * 메시지 칸을 AI 요약으로 채워 모달만 연다. 요청은 학생이 고치거나 지운 뒤 "요청 보내기"를 눌러야만 나간다.
+ */
+export function StudentHelp({ sessionId, reloadKey, draft }) {
   const [mine, setMine] = useState(null)
   const [open, setOpen] = useState(false)
   const [message, setMessage] = useState('')
   const [share, setShare] = useState(true)
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
+  const [fromDraft, setFromDraft] = useState(false)
+  /** 이 수업의 내 도움 요청 목록 상태: loading → ok | failed. ok 일 때만 열린 요청 유무를 알 수 있으므로 초안 모달을 연다 */
+  const [listState, setListState] = useState('loading')
+  const handledDraft = useRef(0)
+  /** 조회 실패 상태에서 초안이 오면 그 초안마다 한 번만 목록을 다시 조회한다 (무한 재시도 방지) */
+  const retriedDraft = useRef(0)
+  const [retryKey, setRetryKey] = useState(0)
+  const active = mine?.status === 'PENDING' || mine?.status === 'ACCEPTED'
+
+  // 다른 수업으로 바뀌면 이전 수업의 요청 상태 · 모달 · 초안을 버린다
+  useEffect(() => {
+    setListState('loading')
+    setMine(null)
+    setOpen(false)
+    setMessage('')
+    setFromDraft(false)
+    setNote('')
+  }, [sessionId])
 
   useEffect(() => {
+    if (listState === 'loading' || !draft || draft.seq === handledDraft.current) return
+    if (draft.sessionId !== sessionId) {
+      handledDraft.current = draft.seq
+      return
+    }
+    if (listState === 'failed' && retriedDraft.current !== draft.seq) {
+      retriedDraft.current = draft.seq
+      setListState('loading')
+      setRetryKey((k) => k + 1)
+      return
+    }
+    handledDraft.current = draft.seq
+    if (listState === 'failed') {
+      setNote('도움 요청 상태를 확인하지 못했어요. 잠시 후 다시 눌러 주세요')
+      return
+    }
+    if (active) {
+      setNote('이미 보낸 도움 요청이 있어요. 선생님 답을 기다려 주세요')
+      return
+    }
+    setMessage(Array.from(draft.text).slice(0, HELP_MESSAGE_MAX).join(''))
+    setFromDraft(true)
+    setError('')
+    setOpen(true)
+  }, [draft, listState, active, sessionId])
+
+  // 초안 모달이 열려 있는 사이 열린 요청이 확인되면(다른 창에서 보냄 등) 모달을 닫고 안내만 한다
+  useEffect(() => {
+    if (open && fromDraft && active) {
+      setOpen(false)
+      setNote('이미 보낸 도움 요청이 있어요. 선생님 답을 기다려 주세요')
+    }
+  }, [open, fromDraft, active])
+
+  useEffect(() => {
+    let current = true // 수업이 바뀐 뒤 늦게 온 이전 수업 응답은 버린다
     screenshare.listHelp(sessionId).then((l) => {
+      if (!current) return
       const next = l[0] ?? null
       // 대기 중이던 요청이 사라짐 = 선생님이 "나중에" (내가 취소한 경우는 cancel() 이 먼저 mine 을 비움)
       setMine((prev) => {
         if (prev?.status === 'PENDING' && !next) setNote('선생님이 조금 뒤에 볼게요. 잠시 후 다시 요청해 주세요')
         return next
       })
-    }, () => undefined)
-  }, [sessionId, reloadKey])
+      setListState('ok')
+    }, () => {
+      if (current) setListState((s) => (s === 'ok' ? s : 'failed'))
+    })
+    return () => { current = false }
+  }, [sessionId, reloadKey, retryKey])
 
   async function onSubmit(e) {
     e.preventDefault()
@@ -292,7 +356,11 @@ export function StudentHelp({ sessionId, reloadKey }) {
           <button className="btn btn-sm" onClick={() => void cancel()}>취소</button>
         </span>
       ) : (
-        <button className="btn btn-sm" onClick={() => setOpen(true)}>✋ 도움 요청</button>
+        <button className="btn btn-sm" onClick={() => {
+          if (fromDraft) setMessage('') // 닫아 둔 AI 초안을 안내 없이 남기지 않는다
+          setFromDraft(false)
+          setOpen(true)
+        }}>✋ 도움 요청</button>
       )}
       {note && <span className="muted small">{note}</span>}
       {open && (
@@ -302,7 +370,10 @@ export function StudentHelp({ sessionId, reloadKey }) {
               <Mascot mood="happy" size={80} />
               <h2>선생님에게 도움 요청</h2>
             </header>
-            <textarea className="input" rows={4} maxLength={300} value={message} onChange={(e) => setMessage(e.target.value)}
+            {fromDraft && (
+              <p className="muted small">AI 조교가 만든 요약이에요. 질문 원문은 들어 있지 않아요. 고치거나 지운 뒤 보내 주세요.</p>
+            )}
+            <textarea className="input" rows={4} maxLength={HELP_MESSAGE_MAX} value={message} onChange={(e) => setMessage(e.target.value)}
               placeholder="어디서 막혔는지 적어 주세요" autoFocus required />
             <label className="check-row">
               <input type="checkbox" checked={share} onChange={(e) => setShare(e.target.checked)} />

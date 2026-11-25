@@ -1,9 +1,10 @@
-import { csrfHeader, toApiError } from './client'
+import { csrfHeader, toApiError } from './client.js'
 
 /**
  * 도우미 챗봇에 묻고 답변을 조각 단위로 받는다 (TutorController 의 SSE).
  * sessionId 를 주면 그 세션 선생님 설정(주제 · 난이도 · 정답 숨김)을 따른다.
- * 이벤트: (세션 자료를 찾았으면) sources {"items"} → delta {"t"} 여러 번 → done, 실패 시 error {"message"}.
+ * 이벤트: (세션 자료를 찾았으면) sources {"items"} → delta {"t"} 여러 번 → (Agent 경로면) agent {...} → done,
+ * 실패 시 error {"message"}. agent 는 onAgent 로 한 번 넘긴다 (PT-113 helpDraft). 모르는 이벤트는 무시한다.
  */
 export async function streamChat(
   topic,
@@ -12,6 +13,7 @@ export async function streamChat(
   signal,
   sessionId,
   onSources,
+  onAgent,
 ) {
   const res = await fetch('/api/tutor/chat', {
     method: 'POST',
@@ -35,6 +37,7 @@ export async function streamChat(
       const event = parseEvent(raw)
       if (event.name === 'delta') onDelta((JSON.parse(event.data)).t)
       else if (event.name === 'sources') onSources?.((JSON.parse(event.data)).items)
+      else if (event.name === 'agent') onAgent?.(JSON.parse(event.data))
       else if (event.name === 'error') throw new Error((JSON.parse(event.data)).message)
       else if (event.name === 'done') return
     }

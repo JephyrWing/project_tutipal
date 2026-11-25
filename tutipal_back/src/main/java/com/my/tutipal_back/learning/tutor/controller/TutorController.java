@@ -45,7 +45,7 @@ public class TutorController {
 
     /**
      * SSE 이벤트: (자료를 찾았으면) sources {"items": [출처]} → delta {"t": 조각} 여러 번 → (PT-85 Agent 경로면)
-     * agent {route, suggestHelp, variant, answerHidden, retryable} → done, 실패하면 error {"message": …}.
+     * agent {route, suggestHelp, variant, answerHidden, retryable, helpDraft} → done, 실패하면 error {"message": …}.
      */
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chat(@AuthenticationPrincipal OAuth2User me, @Valid @RequestBody ChatRequest request) {
