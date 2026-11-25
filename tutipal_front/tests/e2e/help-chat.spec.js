@@ -59,6 +59,7 @@ test('PT96 제3자·타수업·미수락 접근 차단과 입력·멱등·동시
   expect(first.status).toBe(200);expect(second.status).toBe(200);expect(first.body.id).toBe(second.body.id)
   expect((await api(student,path,'POST',{...body,text:'다른 내용'})).status).toBe(409)
   expect((await api(student,path,'POST',{clientMessageId:crypto.randomUUID(),text:' \n\t '})).status).toBe(400)
+  expect((await api(student,path,'POST',{clientMessageId:crypto.randomUUID(),text:'\u00a0\t\u3000'})).status).toBe(400)
   expect((await api(student,path,'POST',{clientMessageId:crypto.randomUUID(),text:'😀'.repeat(1001)})).status).toBe(400)
   const results=await Promise.all(Array.from({length:4},(_,i)=>api(i%2?teacher:student,path,'POST',{clientMessageId:crypto.randomUUID(),text:`동시 ${i}`})))
   expect(results.every(r=>r.status===200)).toBe(true)

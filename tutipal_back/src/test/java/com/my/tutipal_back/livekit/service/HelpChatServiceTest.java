@@ -67,6 +67,7 @@ class HelpChatServiceTest {
     }
     @Test void unicodeLengthAndWhitespaceAreValidatedWithoutRewritingText() {
         assertStatus(HttpStatus.BAD_REQUEST,()->service.send(1,7,new Send(clientId," \n\t ")));
+        assertStatus(HttpStatus.BAD_REQUEST,()->service.send(1,7,new Send(clientId,"\u00a0\t\u3000")));
         assertStatus(HttpStatus.BAD_REQUEST,()->service.send(1,7,new Send(clientId,"😀".repeat(1001))));
         String exact="😀".repeat(1000);when(store.insert(7,1,clientId,exact)).thenReturn(message(exact));
         assertThat(service.send(1,7,new Send(clientId,exact)).text()).isEqualTo(exact);

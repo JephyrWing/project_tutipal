@@ -35,7 +35,8 @@ public class HelpChatService {
     }
     public Message send(long userId,long helpId,Send input) {
         Context context=authorize(userId,helpId);
-        if(input==null || input.clientMessageId()==null || input.text()==null || input.text().isBlank()
+        if(input==null || input.clientMessageId()==null || input.text()==null
+                || input.text().codePoints().allMatch(c -> Character.isWhitespace(c) || Character.isSpaceChar(c))
                 || input.text().codePointCount(0,input.text().length())>MAX_LENGTH) {
             throw new ApiException(HttpStatus.BAD_REQUEST,"메시지는 공백만 입력하지 말고 1~1000자로 적어 주세요");
         }
