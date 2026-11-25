@@ -100,3 +100,30 @@ def load_rerank_settings() -> RerankSettings:
         # 값 자체는 남기지 않고 어떤 설정이 잘못됐는지만 남긴다.
         _log.warning("rerank disabled: invalid setting (%s)", str(error).split(" must ")[0])
         return RerankSettings(enabled=False, model_dir=model_dir, model_name=model_name)
+
+# langsmith.utils.tracing_is_enabled reads TRACING_V2, then TRACING, in both the LANGSMITH_ and
+# LANGCHAIN_ namespaces, so all four names must be checked (PT-85 AC-25).
+TRACING_FLAGS = ("LANGSMITH_TRACING", "LANGCHAIN_TRACING_V2", "LANGSMITH_TRACING_V2", "LANGCHAIN_TRACING")
+_TRUE_VALUES = {"true", "1", "yes", "on"}
+
+
+def _langsmith_tracing_enabled() -> bool:
+    """Ask the installed langsmith itself, so a future variable name or fallback is also caught."""
+    try:
+        from langsmith import utils as langsmith_utils
+    except ImportError:
+        return False
+    # get_env_var is lru_cached; clear it so the check sees the current environment.
+    cache_clear = getattr(langsmith_utils.get_env_var, "cache_clear", None)
+    if cache_clear is not None:
+        cache_clear()
+    return bool(langsmith_utils.tracing_is_enabled())
+
+
+def require_tracing_disabled() -> None:
+    """Fail closed: LangSmith/LangChain tracing would send request bodies off the server (PT-85 AC-25)."""
+    for name in TRACING_FLAGS:
+        if os.getenv(name, "").strip().lower() in _TRUE_VALUES:
+            raise RuntimeError(f"{name} must be false: tracing would export request bodies")
+    if _langsmith_tracing_enabled():
+        raise RuntimeError("langsmith reports tracing enabled: tracing would export request bodies")

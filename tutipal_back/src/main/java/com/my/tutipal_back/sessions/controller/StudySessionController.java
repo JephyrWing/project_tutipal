@@ -1,13 +1,17 @@
 package com.my.tutipal_back.sessions.controller;
 
 import java.util.List;
+import java.util.Map;
 
 import jakarta.validation.Valid;
 
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -22,6 +26,8 @@ import com.my.tutipal_back.sessions.dto.JoinSessionRequest;
 import com.my.tutipal_back.sessions.dto.ParticipantResponse;
 import com.my.tutipal_back.sessions.dto.SessionResponse;
 import com.my.tutipal_back.sessions.dto.UpdateSettingsRequest;
+import com.my.tutipal_back.sessions.service.InviteCodeJoinService;
+import com.my.tutipal_back.sessions.service.InviteCodeJoinService.RetryLater;
 import com.my.tutipal_back.sessions.service.StudySessionService;
 
 @RestController
@@ -29,9 +35,11 @@ import com.my.tutipal_back.sessions.service.StudySessionService;
 public class StudySessionController {
 
     private final StudySessionService service;
+    private final InviteCodeJoinService inviteCodeJoin;
 
-    public StudySessionController(StudySessionService service) {
+    public StudySessionController(StudySessionService service, InviteCodeJoinService inviteCodeJoin) {
         this.service = service;
+        this.inviteCodeJoin = inviteCodeJoin;
     }
 
     @PostMapping
@@ -42,7 +50,14 @@ public class StudySessionController {
 
     @PostMapping("/join")
     public SessionResponse join(@AuthenticationPrincipal OAuth2User me, @Valid @RequestBody JoinSessionRequest request) {
-        return service.join(userId(me), request.code());
+        return inviteCodeJoin.join(userId(me), request.code());
+    }
+
+    @ExceptionHandler(RetryLater.class)
+    ResponseEntity<Map<String, Object>> retryJoinLater(RetryLater error) {
+        return ResponseEntity.status(error.getStatus())
+                .header(HttpHeaders.RETRY_AFTER, Long.toString(error.retryAfterSeconds()))
+                .body(Map.of("status", error.getStatus().value(), "message", error.getMessage()));
     }
 
     @GetMapping

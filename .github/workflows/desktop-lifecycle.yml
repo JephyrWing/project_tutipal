@@ -1,0 +1,61 @@
+name: Windows desktop lifecycle
+
+on:
+  pull_request:
+    branches: [develop]
+    paths: ['tutipal_front/**', '.github/workflows/desktop-lifecycle.yml', '.nvmrc']
+  push:
+    branches: [develop]
+    paths: ['tutipal_front/**', '.github/workflows/desktop-lifecycle.yml', '.nvmrc']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop-lifecycle:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: tutipal_front/package-lock.json
+      - name: Install locked desktop dependencies
+        working-directory: tutipal_front
+        run: npm ci
+      - name: Build renderer
+        working-directory: tutipal_front
+        run: |
+          npm run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run real Windows desktop lifecycle
+        working-directory: tutipal_front
+        run: npm run test:desktop-lifecycle
+      - name: Count actual test execution
+        if: always()
+        shell: python
+        run: |
+          import os, sys, xml.etree.ElementTree as ET
+          path = 'tutipal_front/test-results/desktop-lifecycle.xml'
+          if not os.path.exists(path):
+              sys.exit('Desktop report missing; execution not verified')
+          cases = ET.parse(path).getroot().findall('.//testcase')
+          skipped = sum(c.find('skipped') is not None for c in cases)
+          failed = sum(c.find('failure') is not None or c.find('error') is not None for c in cases)
+          ran = len(cases) - skipped
+          summary = f'Windows desktop: collected={len(cases)} ran={ran} failed={failed} skipped={skipped}'
+          print(summary)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
+              output.write(summary + '\n')
+          if ran == 0 or failed:
+              sys.exit(1)
+      - name: Upload desktop evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-lifecycle-report
+          path: tutipal_front/test-results/desktop-lifecycle.xml
+          retention-days: 7

@@ -54,7 +54,7 @@ class TutorChatQuotaWebTest {
         var principal = new DefaultOAuth2User(List.of(new SimpleGrantedAuthority("ROLE_USER")), Map.of("id", "2"), "id");
         var login = UsernamePasswordAuthenticationToken.authenticated(principal, null, principal.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(login);
-        mvc = MockMvcBuilders.standaloneSetup(new TutorController(new TutorService(ai, sessions, rag, slots, quota)))
+        mvc = MockMvcBuilders.standaloneSetup(new TutorController(new TutorService(ai, sessions, rag, slots, quota, null, null, false)))
                 .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();

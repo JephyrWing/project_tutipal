@@ -13,6 +13,12 @@ if (!/^jdbc:postgresql:\/\/127\.0\.0\.1:\d+\/tutipal_e2e(?:_[a-z0-9]+)?$/.test(d
   throw new Error('E2E_DB_URL must use loopback and a dedicated tutipal_e2e database')
 }
 if (!process.env.E2E_DB_PASSWORD) throw new Error('Set E2E_DB_PASSWORD for the disposable database; real .env files are never loaded')
+const helpAccess = process.env.E2E_HELP_ACCESS === 'true'
+const livekitMedia = process.env.E2E_LIVEKIT_MEDIA === 'true'
+if (helpAccess && livekitMedia) throw new Error('Choose one isolated LiveKit test provider')
+if ((helpAccess || livekitMedia) && !/^[a-f0-9]{64}$/.test(process.env.E2E_LIVEKIT_SECRET ?? '')) {
+  throw new Error('Help access checks require a fresh 64-character hexadecimal test secret')
+}
 const libs = path.join(root, 'tutipal_back/build/libs')
 const jars = (await readdir(libs)).filter(name => name.endsWith('.jar') && !name.endsWith('-plain.jar'))
 if (jars.length !== 1) throw new Error('Build exactly one Spring bootJar before running the Electron tests')
@@ -111,9 +117,9 @@ const backendOptions = {
     SESSION_COOKIE_SECURE: 'false',
     FAST_API_BASE_URL: `http://127.0.0.1:${materialAi.address().port}`,
     AI_INTERNAL_KEY: randomBytes(32).toString('hex'),
-    LIVEKIT_INTERNAL_URL: 'http://127.0.0.1:9',
+    LIVEKIT_INTERNAL_URL: helpAccess || livekitMedia ? 'http://127.0.0.1:28082' : 'http://127.0.0.1:9',
     LIVEKIT_API_KEY: 'disposable-e2e',
-    LIVEKIT_API_SECRET: randomBytes(32).toString('hex'),
+    LIVEKIT_API_SECRET: helpAccess || livekitMedia ? process.env.E2E_LIVEKIT_SECRET : randomBytes(32).toString('hex'),
     MATERIAL_STORAGE: 'local',
     MATERIAL_LOCAL_PATH: path.join(temporary, 'materials'),
     GOOGLE_CLIENT_ID: '', GOOGLE_CLIENT_SECRET: '',

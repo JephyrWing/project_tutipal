@@ -76,7 +76,8 @@ public class StudySessionService {
 
     /**
      * 초대 코드로 참여 → STUDENT. 이미 참가자면 원래 역할 그대로 (선생님이 코드를 넣어도 선생님).
-     * ponytail: 코드 맞히기 시도 제한 없음 (31^6 ≈ 8.9억 가지), 공개 운영 전에 사용자별 시도 제한 추가
+     * 외부 참여 요청의 계정별 실패 제한은 InviteCodeJoinService에서 적용한다.
+     * 종료와 같은 수업 행을 잠근 상태에서 활성 여부를 확인하고 참가를 저장한다.
      */
     @Transactional
     public SessionResponse join(Long userId, String code) {

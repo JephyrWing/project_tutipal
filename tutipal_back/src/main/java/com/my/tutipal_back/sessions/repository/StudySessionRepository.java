@@ -16,6 +16,7 @@ public interface StudySessionRepository extends JpaRepository<StudySession, Long
     @Query("select s from StudySession s where s.id = :id")
     Optional<StudySession> lockById(@Param("id") Long id);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
     Optional<StudySession> findByInviteCode(String inviteCode);
 
     boolean existsByInviteCode(String inviteCode);
