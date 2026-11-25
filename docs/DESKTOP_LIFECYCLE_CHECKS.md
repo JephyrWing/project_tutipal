@@ -1,0 +1,21 @@
+# PT-30 Windows 앱 수명주기 검사
+
+FR-APP-01·02 / AC-APP-001-1 / CHK-INSTALLER-SECURITY 중 개발 실행의 Windows 창·IPC·트레이 handler·단일 인스턴스를 확인한다.
+제품 Main/Preload/bridge는 실제 코드를 실행하며 API 초기화만 loopback 합성 제공자로 대체한다.
+이는 Spring 인증·DB·OAuth 검사가 아니다. 합성 사용자는 테스트 UI 초기화용이다.
+
+Windows에서 `npm ci`, `npm run build`, `npm run test:desktop-lifecycle`을 실행한다.
+28080 포트가 비어 있어야 하며 기존 서버를 재사용하지 않는다. 임시 독립 프로필만 사용하고 OS 프로토콜 등록을 차단한다.
+보안 pref는 유지하고 테스트 프로세스만 GPU 소프트웨어 모드를 사용한다. 실제 사용자 앱·서비스·프로필·레지스트리를 변경하지 않는다.
+
+1. 실제 preload IPC로 위젯을 반복 표시·숨김 처리하고 창이 중복되지 않으며 허용 채팅 topic만 이동하는지 확인한다.
+2. 동일 프로필의 두 번째 실제 Electron 프로세스가 종료하고 첫 창이 복원되는지, 요청하지 않은 무효 딥링크가 첫 문서를 다시 읽거나 창을 늘리지 않는지 확인한다.
+3. 실제 native tray MenuItem의 열기·위젯 토글·종료 handler로 창과 앱·loopback 브리지가 정리되는지 확인한다.
+
+검사는 native Menu 객체를 관찰해 실제 callback을 호출한다. OS 트레이를 마우스로 직접 클릭한 검사는 아니다.
+투명도·다른 앱 위 표시·멀티모니터·혼합DPI의 시각 인수도 별도다. NSIS 설치/제거·Windows 레지스트리 연결,
+실제 브라우저 OAuth 복귀·서명·업데이트·다른 OS·설치본 전체 인수는 이 결과로 완료 처리하지 않는다.
+
+장치 권한·화면 캡처를 요청하지 않고 trace/video/screenshot은 비활성화한다.
+CI는 실제 JUnit 수집·실행·실패·건너뜀을 집계하고 보고서 누락/실행0/실패를 성공으로 표시하지 않는다.
+빌드 성공이나 합성 서버 응답을 실제 업무 기능 통과 수에 합산하지 않는다.
