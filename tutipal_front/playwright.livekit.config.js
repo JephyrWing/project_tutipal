@@ -8,6 +8,7 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   retries: 0,
+  repeatEach: 3,
   forbidOnly: !!process.env.CI,
   reporter: [['list'], ['junit', { outputFile: 'test-results/livekit-media.xml' }]],
   use: { trace: 'off', video: 'off', screenshot: 'off' },

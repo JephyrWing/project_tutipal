@@ -1,10 +1,11 @@
 import { test, expect, _electron } from '@playwright/test'
 import electronPath from 'electron'
-import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { login, createRoom, joinRoom } from '../e2e/fixtures.js'
+import { participantCount } from './participantProbe.js'
 
 const front = fileURLToPath(new URL('../../', import.meta.url))
 const sdk = await readFile(path.join(front, 'node_modules/livekit-client/dist/livekit-client.umd.js'), 'utf8')
@@ -81,7 +82,10 @@ async function connect(app, help) {
   const connected = await app.page.evaluate(async grant => {
     const L = window.LivekitClient
     L.setLogLevel('silent')
-    const room = new L.Room({ adaptiveStream: false, dynacast: false })
+    // This fixture measures server revocation, not the SDK's retry backoff.
+    // A lost signal must finish this connection; product reconnect tests are separate.
+    const room = new L.Room({ adaptiveStream: false, dynacast: false,
+      reconnectPolicy: { nextRetryDelayInMs: () => null } })
     const m = window.pt65Media = { room, videos: [], tracks: [], unsubscribed: 0, disconnected: false }
     room.on(L.RoomEvent.Disconnected, () => { m.disconnected = true })
     room.on(L.RoomEvent.TrackUnsubscribed, track => {
@@ -144,20 +148,50 @@ async function decoded(teacher, testInfo) {
     })
     return frames
   }).toBeGreaterThan(2)
-  await testInfo.attach('synthetic-media-count.json', { body: Buffer.from(JSON.stringify({ framesDecoded: frames, actualScreenCaptured: false })), contentType: 'application/json' })
+  const evidence = testInfo.outputPath('synthetic-media-count.json')
+  await writeFile(evidence, JSON.stringify({ framesDecoded: frames, actualScreenCaptured: false }))
+  await testInfo.attach('synthetic-media-count.json', { path: evidence, contentType: 'application/json' })
 }
-async function disconnected(app) {
-  await expect.poll(() => app.page.evaluate(() => window.pt65Media.disconnected && window.pt65Media.room.state === 'disconnected')).toBe(true)
+async function disconnected(app, grant, testInfo, label) {
+  let passed = false
+  try {
+    await expect.poll(() => app.page.evaluate(() => window.pt65Media.disconnected && window.pt65Media.room.state === 'disconnected')).toBe(true)
+    passed = true
+  } finally {
+    // Observe before test cleanup calls room.disconnect(), including on failure.
+    const values = await Promise.allSettled([
+      app.page.evaluate(() => {
+        const m = window.pt65Media
+        return { state: m.room.state, disconnectedEvent: m.disconnected,
+          remoteCount: m.room.remoteParticipants.size,
+          localTracks: [...m.room.localParticipant.trackPublications.values()].map(p => ({
+            kind: p.track?.kind, enabled: p.track?.mediaStreamTrack.enabled,
+            readyState: p.track?.mediaStreamTrack.readyState,
+          })) }
+      }),
+      participantCount(grant.room),
+      api(app, grant.url + '/rtc/validate').then(r => r.status),
+    ])
+    const diagnostic = { terminalConditionPassed: passed,
+      sdk: values[0].status === 'fulfilled' ? values[0].value : { unavailable: true },
+      serverParticipantCount: values[1].status === 'fulfilled' ? values[1].value : null,
+      springValidationStatus: values[2].status === 'fulfilled' ? values[2].value : null }
+    const evidence = testInfo.outputPath(`revocation-${label}.json`)
+    await writeFile(evidence, JSON.stringify(diagnostic))
+    await testInfo.attach(`revocation-${label}.json`, { path: evidence, contentType: 'application/json' })
+  }
 }
 
 test('PT65 real LiveKit decodes generated video and help end removes both connections', async ({}, testInfo) => {
   const c = await accepted('PT65 actual media end')
-  await connect(c.teacher, c.help)
+  const teacherGrant = await connect(c.teacher, c.help)
   const old = await connect(c.student, c.help)
   await publish(c.student)
   await decoded(c.teacher, testInfo)
   expect((await api(c.teacher, `/api/help/${c.help.id}/end`, 'POST')).status).toBe(204)
-  await disconnected(c.student); await disconnected(c.teacher)
+  await disconnected(c.student, old, testInfo, 'student-end')
+  await disconnected(c.teacher, teacherGrant, testInfo, 'teacher-end')
+  await expect.poll(() => participantCount(old.room)).toBe(0)
   expect((await api(c.student, old.url + '/rtc/validate')).status).toBe(409)
   expect((await api(c.student, `/api/help/${c.help.id}/token`, 'POST')).status).toBe(409)
   expect((await api(c.teacher, `/api/sessions/${c.room.id}/end`, 'POST')).status).toBe(200)
@@ -165,12 +199,14 @@ test('PT65 real LiveKit decodes generated video and help end removes both connec
 
 test('PT65 logout removes the real publisher and re-login cannot reuse its old mapping', async ({}, testInfo) => {
   const c = await accepted('PT65 actual media logout')
-  await connect(c.teacher, c.help)
+  const teacherGrant = await connect(c.teacher, c.help)
   const old = await connect(c.student, c.help)
   await publish(c.student)
   await decoded(c.teacher, testInfo)
   expect((await api(c.student, '/logout', 'POST')).status).toBe(204)
-  await disconnected(c.student)
+  await disconnected(c.student, old, testInfo, 'student-logout')
+  // The teacher is still authorized here; only the logged-out student is removed.
+  await expect.poll(() => participantCount(old.room)).toBe(1)
   await expect.poll(() => c.teacher.page.evaluate(() => window.pt65Media.room.remoteParticipants.size)).toBe(0)
   // SDK 2.24.1 disables remote tracks instead of ending reusable transceivers.
   // Require both the unsubscribe event and all actual received tracks disabled.
@@ -181,6 +217,8 @@ test('PT65 logout removes the real publisher and re-login cannot reuse its old m
   await login(c.student, 2)
   expect((await api(c.student, old.url + '/rtc/validate')).status).toBe(401)
   expect((await api(c.teacher, `/api/help/${c.help.id}/end`, 'POST')).status).toBe(204)
-  await disconnected(c.teacher)
+  await disconnected(c.teacher, teacherGrant, testInfo, 'teacher-logout-help-end')
+  await expect.poll(() => participantCount(old.room)).toBe(0)
+  expect((await api(c.teacher, teacherGrant.url + '/rtc/validate')).status).toBe(409)
   expect((await api(c.teacher, `/api/sessions/${c.room.id}/end`, 'POST')).status).toBe(200)
 })
