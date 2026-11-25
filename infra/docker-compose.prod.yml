@@ -1,6 +1,6 @@
 services:
   backend:
-    image: ${DOCKERHUB_USERNAME:?Set DOCKERHUB_USERNAME}/tutipal-back:${IMAGE_TAG:?Set IMAGE_TAG}
+    image: ${IMAGE_REGISTRY:?Set IMAGE_REGISTRY}/tutipal-back:${IMAGE_TAG:?Set IMAGE_TAG}
     environment:
       SPRING_PROFILES_ACTIVE: prod
       DB_URL: jdbc:postgresql://tutipal-db:5432/${DB_NAME:-tutipal_db}
@@ -27,7 +27,6 @@ services:
       MATERIAL_LOCAL_PATH: /app/data/materials
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
-      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
     volumes:
       - tutipal_materials:/app/data
     ports: ["127.0.0.1:${BACKEND_PORT:-8080}:8080"]
@@ -48,7 +47,7 @@ services:
     networks: [app, data, model, realtime]
 
   fastapi:
-    image: ${DOCKERHUB_USERNAME:?Set DOCKERHUB_USERNAME}/tutipal-fastapi:${IMAGE_TAG:?Set IMAGE_TAG}
+    image: ${IMAGE_REGISTRY:?Set IMAGE_REGISTRY}/tutipal-fastapi:${IMAGE_TAG:?Set IMAGE_TAG}
     environment:
       AI_INTERNAL_KEY: ${AI_INTERNAL_KEY:?Set AI_INTERNAL_KEY}
       MODEL_PROVIDER: ${MODEL_PROVIDER:-auto}
@@ -75,7 +74,7 @@ services:
     networks: [model]
 
   tutipal-db:
-    image: ${DOCKERHUB_USERNAME:?Set DOCKERHUB_USERNAME}/tutipal-db:${IMAGE_TAG:?Set IMAGE_TAG}
+    image: ${IMAGE_REGISTRY:?Set IMAGE_REGISTRY}/tutipal-db:${IMAGE_TAG:?Set IMAGE_TAG}
     environment:
       POSTGRES_DB: ${DB_NAME:-tutipal_db}
       POSTGRES_USER: ${DB_USER:-tutipal}
