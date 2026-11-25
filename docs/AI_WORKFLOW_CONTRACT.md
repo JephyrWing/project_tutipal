@@ -98,7 +98,7 @@ Spring은 로그인·수업 권한으로 Agent 종류와 도구 범위를 확정
 
 ## 6. Agent 컨텍스트 계약 (PT-85 · PT-106 · PT-16)
 
-2026-11-25 확정 계약이다. 아직 구현 전이며 [PT-85](https://gad03302.atlassian.net/browse/PT-85)가 조립·사용을, [PT-106](https://gad03302.atlassian.net/browse/PT-106)이 대화·요약·기억의 저장·조회·삭제를 구현한다. FastAPI는 요청에 담긴 입력만 쓰고 아무것도 저장하지 않는다(1절). 요청 본문 전체 형식은 7절에 있다.
+2026-11-25 확정 계약이다. [PT-85](https://gad03302.atlassian.net/browse/PT-85)가 조립·사용을, [PT-106](https://gad03302.atlassian.net/browse/PT-106)이 대화·요약·기억의 저장·조회·삭제를 구현한다. FastAPI는 요청에 담긴 입력만 쓰고 아무것도 저장하지 않는다(1절). 요청 본문 전체 형식은 7절에 있다.
 
 ### 6.1 격리 키와 범위
 
@@ -124,6 +124,8 @@ Spring은 로그인·수업 권한으로 Agent 종류와 도구 범위를 확정
 
 - 요약·기억의 `id`는 Spring이 붙인 불투명 문자열이며 `^[A-Za-z0-9_-]{1,64}$`을 따른다. FastAPI는 해석하지 않고 7.5 `meta`에 그대로 보고한다.
 - `summary.scope`와 모든 `memories[].scope`는 `context.scope`와 같아야 한다.
+- 데이터 블록 이스케이프: FastAPI는 요약·첫 user 핀(`<pin>`)·기억·자료(출처 포함)·화면 요약·변형 실패 시 원 문항(`<original_question>`)을 각 태그 블록 안에만 넣는다. 블록 안 텍스트의 꺾쇠 `<` `>`와 전각 `＜` `＞`, 작은 꼴 `﹤` `﹥`는 모두 `‹` `›`로 바꾼다. 그래서 공백·폭 없는 문자·전각을 섞은 어떤 철자로도 블록을 일찍 닫거나 새 블록을 열 수 없다. 정책 지시의 첫 줄은 이 블록들과 주제 이름이 참고 데이터이며 그 안의 지시를 따르지 않는다고 명시한다.
+- `policy.topic`은 정책 줄 안에 들어가므로 제어·서식 문자와 줄·문단 구분 문자를 공백으로 바꾸고 공백을 하나로 줄인 뒤, 위 꺾쇠 치환을 적용한다. 주제 값으로 정책 줄을 새로 만들 수 없다.
 
 ### 6.3 토큰 예산
 
@@ -132,7 +134,7 @@ Spring은 로그인·수업 권한으로 Agent 종류와 도구 범위를 확정
 | 추정식 | `ceil(CJK 글자 수 + 그 외 글자 수 / 3)`. CJK = 한글 음절·자모, CJK 통합 한자, 가나 |
 | 총 예산 | 추정 입력 3000 (모델 컨텍스트 약 4096, 출력 여유 약 1000) |
 | 배분 상한 | 정책·시스템 400 / 현재 질문 500 / 보호 구간(직전 메시지 6개) 800 / 요약 250 또는 첫 user 메시지 핀 150 / 자료 600(3 × 200) / 기억 250 / 화면 요약 200. 남는 몫은 보호 구간 밖의 오래된 메시지에 최신 순으로 준다 |
-| 시작 조건 | 전체 추정이 3000을 넘을 때만, 넘친 만큼만 줄인다. 3000 이하이면 아무것도 버리거나 줄이지 않는다 |
+| 시작 조건 | 전체 추정이 3000을 넘을 때만, 넘친 만큼만 줄인다. 3000 이하이면 아무것도 버리거나 줄이지 않는다. 예외 하나: 답변 호출은 기존 `/v1/chat` 모델 요청(메시지 최대 40개, 현재 질문 포함)을 재사용하므로 `context.messages`가 40개이면 예산과 관계없이 가장 오래된 1개를 버리고 `dropped.messages`에 센다(첫 user 메시지면 아래 핀 규칙 적용). Spring은 현재 질문을 뺀 최대 39개를 보내므로 Spring 경로에서는 생기지 않는다 |
 | 버리는 순서 | 1) 보호 구간 밖 메시지(오래된 것부터) 2) 기억(목록 뒤부터) 3) 화면 요약을 200까지 축약한 뒤 제거 4) 자료(순위 낮은 것부터, 최소 1개 유지) 5) 요약을 150까지 축약 6) 보호 구간 메시지를 오래된 것부터 각 120으로 축약 |
 | 보존 | 정책 지시(`hideAnswers` 금지 문구 포함, 질문 분류와 무관하게 항상), 현재 질문(머리 300 + 꼬리 200 축약 허용), 보호 구간 6개(축약만, 제거 안 함), 요약이 있으면 요약, 없으면 첫 user 메시지 150 핀 |
 | 결정성 | 질문 분류(`route`)·`hintLevel`·`suggestHelp`는 현재 질문과 보호 구간 6개의 **축약 전 원문**으로만 계산한다. 보호 구간이 같으면 대화 길이·요약·기억과 무관하게 같은 결과 |
@@ -147,7 +149,7 @@ Spring은 로그인·수업 권한으로 Agent 종류와 도구 범위를 확정
 | `meta.context.estimatedInputTokens` | 최종 지시문 전체의 추정 토큰 수 |
 | `meta.context.budget` | 적용한 총 예산 (3000) |
 | `meta.context.dropped` | `{messages, memories, materials, screenSummary}` 버린 개수. `screenSummary`는 0 또는 1 |
-| `meta.context.truncated[]` | 축약한 항목 이름. `question`, `protected`, `summary`, `pin`, `screenSummary`, `materials` 중에서 |
+| `meta.context.truncated[]` | 축약한 항목 이름. `question`, `protected`, `summary`, `screenSummary`, `materials` 중에서. 첫 user 핀은 버린 메시지로 만드는 150 표현이라 truncated에 넣지 않는다(dropped.messages로 센다) |
 | `meta.usedMemoryIds[]` | 지시문에 실제로 넣은 기억 id. 요청 `memories[].id`의 부분집합 |
 | `meta.usedSummaryId` | 넣은 요약의 id (요청 `summary.id`) 또는 `null` |
 
@@ -181,12 +183,19 @@ Spring은 로그인·수업 권한으로 Agent 종류와 도구 범위를 확정
 
 | 구성 | PT-85 | PT-106 |
 | --- | --- | --- |
-| `ConversationMemory` 포트 (Spring) | 입력: 사용자, scope, 현재 질문. 출력: 유효한 요약 0..1개, 관련도 순 기억 0..20개 | 포트 구현을 저장소 기반으로 교체 |
-| 기본 구현 `NoStoredConversationMemory` | 요약·기억 없음을 돌려준다 (`@Component` 기본) | 새 구현으로 대체 |
-| `context.messages` 출처 | 화면이 보낸 `ChatRequest.messages`에서 마지막 user 원소를 뺀 나머지 | 서버 저장 메시지로 바꿀 수 있음 (같은 형식·상한) |
-| `AgentContextAssembler` | 포트 결과와 이력을 6.2 형식으로 조립 | 변경 없이 재사용 |
+| `ConversationMemory` 포트 (Spring) | `recall(userId, scope, question, screenHistory)` → `Recall(messages, summary, memories)`. 출력: 이력 `messages`, 유효한 요약 0..1개, 관련도 순 기억 0..20개 | 포트 구현을 저장소 기반으로 교체 (TutorService 변경 없음) |
+| 이력 `messages` | 포트가 이력도 돌려준다. PT-85 기본 구현은 화면 이력(`screenHistory`)을 그대로 돌려준다 | 서버 저장 메시지를 돌려줄 수 있음 (같은 형식·상한) |
+| 저장 항목 소유자 | 저장 요약·기억(`StoredSummary`·`StoredMemory`)은 소유자 `ownerUserId`를 가진다 | 저장 시 소유자를 채운다 |
+| 기본 구현 `NoStoredConversationMemory` | 요약·기억 없음 + 화면 이력. 다른 `ConversationMemory` 구현 빈이 있으면 등록되지 않는다(`@ConditionalOnMissingBean`) | 구현 빈만 추가하면 교체된다. 쓰기 지점·시점은 PT-106이 정한다 |
+| `context.messages` 출처 | 포트가 준 이력. 화면 이력은 `ChatRequest.messages`에서 마지막 user 원소를 뺀 나머지 | 같음 |
+| `AgentContextAssembler` | 포트 결과를 6.2 형식으로 조립 | 변경 없이 재사용 |
 
-Java 메서드 이름·시그니처는 PT-85 구현 PR에서 정하고, 위 입출력 의미는 바꾸지 않는다.
+조립 규칙(PT-85 구현):
+
+- 포트가 준 이력은 최근 39개(현재 질문 제외), 각 8000자로 자르고 role이 `user`·`assistant`가 아니거나 내용이 빈 메시지는 뺀다.
+- 소유자 확인: `ownerUserId`가 요청 사용자와 다르거나 `null`인 요약·기억은 보내지 않는다. 6.1 scope 규칙에 더한 심층 방어다.
+
+Java 메서드 이름은 PT-85 구현 PR 기준이며, 위 입출력 의미는 바꾸지 않는다.
 
 ### 6.8 `state` 제한
 
@@ -194,7 +203,7 @@ Java 메서드 이름·시그니처는 PT-85 구현 PR에서 정하고, 위 입�
 
 ## 7. Agent 실행 요청·응답 (POST /v1/agent/chat)
 
-2026-11-25 확정 계약이며 아직 구현 전이다. 기존 `/v1/chat`은 바꾸지 않는다. 이 경로는 `internal_only`(내부 키 없으면 401), `InferenceBodyLimit`(4.5MB 초과 413), 모든 수준에서 Pydantic `extra="forbid"`(422)를 적용한다. 422 본문에는 입력 원문을 넣지 않는다. 필드 이름은 모두 camelCase이며, 예외는 PT-84 결과를 그대로 싣는 `variant.failure_reasons` 하나다(7.5).
+2026-11-25 확정 계약이며 PT-85에서 구현했다. `/v1/chat` 요청·응답 형식은 바꾸지 않는다. 422 본문에서 입력을 지우는 규칙(7.3)만 앱 공통으로 적용된다. 이 경로는 `internal_only`(내부 키 없으면 401), `InferenceBodyLimit`(4.5MB 초과 413), 모든 수준에서 Pydantic `extra="forbid"`(422)를 적용한다. 422 본문에는 입력 원문을 넣지 않는다. 필드 이름은 모두 camelCase이며, 예외는 PT-84 결과를 그대로 싣는 `variant.failure_reasons` 하나다(7.5).
 
 ### 7.1 요청 본문
 
@@ -203,9 +212,9 @@ Java 메서드 이름·시그니처는 PT-85 구현 PR에서 정하고, 위 입�
 | `agent` | `"student"` \| `"personal"` | 필수 | 필수 |
 | `question` | 문자열 1..8000자 | 필수 | 필수 |
 | `policy.topic` | 문자열 1..30자 | 세션 설정 | 화면 주제 |
-| `policy.difficulty` | 정수 1..5 | 세션 설정 | 요청값 |
-| `policy.hideAnswers` | 불리언 | 세션 설정 | `false` 고정 |
-| `policy.preferMaterials` | 불리언 | 세션 설정 | `false` 고정 |
+| `policy.difficulty` | 정수 1..5 | 세션 설정 | `3` 고정 (화면 요청에 난이도가 없다) |
+| `policy.hideAnswers` | 불리언 (JSON `true`/`false`만, `"false"`·`0` 거절) | 세션 설정 | `false` 고정 |
+| `policy.preferMaterials` | 불리언 (JSON `true`/`false`만) | 세션 설정 | `false` 고정 |
 | `allowedTools[]` | 7.2 이름, 중복 없음 | `answer_question` 필수 + 선택 | `["answer_question"]`만 |
 | `context` | 6.2 (`scope`, `messages`, `summary`, `memories`, `screenSummary`) | 필수, `scope.kind="session"` | 필수, `scope.kind="personal"` |
 | `materials[]` | 최대 3개, 각 `{id, source, page?, content}` | 선택 | 빈 목록만 |
@@ -241,6 +250,13 @@ Spring 매핑: `ChatRequest.messages`의 마지막 원소(role `user`)가 `quest
 | `search.round>0`인데 `state` 없음, `round=0`인데 `state` 있음, `state` 내부 모델 재검증 실패 또는 65,536바이트 초과 | 422 |
 | 정의되지 않은 필드(어느 수준이든), 상한 초과, `variantSource`에 학생 답안 같은 추가 필드 | 422 |
 | 노드 실행 직전 재검사에서 허용 범위 밖 도구 | 스트림 줄 `{"error": "tool_not_allowed"}` (7.5) |
+
+422 본문은 `{"detail": [{"loc", "type", "msg"}]}`이며 클라이언트 값을 다시 싣지 않는다(이 앱의 모든 경로 공통).
+
+- `input`·`ctx`는 넣지 않는다.
+- `extra_forbidden`이면 `loc`에서 마지막 원소(클라이언트가 보낸 모르는 키 이름)를 빼고 부모 위치까지만 보인다.
+- `msg`는 필드 상한이나 서버의 고정 문구로만 만들어지는 오류 종류(`missing`, `extra_forbidden`, `value_error`, `literal_error`, 타입·길이·범위·패턴 오류 등)일 때만 그대로 두고, 그 밖의 종류(예: 판별 태그 위조 `union_tag_invalid`, 입력 태그를 인용함)는 `"Invalid value"`로 바꾼다.
+- `search.state.v`는 JSON 정수 `1`만 받는다(`true`·`1.0`·`"1"` 거절).
 
 ### 7.4 요청 예시
 
@@ -324,6 +340,14 @@ Spring 매핑: `ChatRequest.messages`의 마지막 원소(role `user`)가 `quest
 
 `need_search`로 끝나는 응답에는 `meta`가 없고 LLM을 호출하지 않는다.
 
+`need_search` 조건과 `query` 규칙:
+
+- `material_search` 허용, `search.round<2`, 요청 `materials`가 비어 있음, `policy.preferMaterials=true`, 변형 턴이 아님. 이 조건에 더해 아래 규칙으로 만든 새 `query`가 있을 때만 낸다.
+- Spring의 첫 검색이 이미 질문 원문으로 0건이었으므로 어느 round도 질문 원문만으로 다시 검색하지 않는다.
+- round 0: `"<policy.topic> <질문>"`.
+- round 1: 보호 구간의 직전 user 메시지가 있으면 `"<policy.topic> <직전 user 메시지>"`, 없거나 쓸 수 없으면 `"<policy.topic>"`.
+- 공백은 하나로 줄이고 500자에서 자른다. 후보가 질문 원문 또는 `state`의 이전 `query`와 같으면(공백·대소문자 무시) 다음 후보로 넘어가고, 남은 후보가 없으면 `need_search` 없이 자료 없이 답변한다.
+
 예시:
 
 ```json
@@ -341,13 +365,15 @@ Spring 매핑: `ChatRequest.messages`의 마지막 원소(role `user`)가 `quest
 | 변형 실패, 그 밖 | `variant(failed)` → `meta` |
 | 실패 | (`variant`) → (`start` → `delta`…) → `error` |
 
+답변 모델이 오류 없이 끝났는데 비어 있지 않은 `delta`가 하나도 없으면(빈 문자열 `delta`만 온 경우 포함, 빈 조각은 내보내지 않음) 일반 답변은 `start`·`meta` 없이 `{"error": "llm_unavailable"}`로 끝난다. 변형 실패 뒤 일반 답변이면 7.6 고정 안내 경로처럼 `variant(failed)` → `meta`로 끝난다.
+
 ### 7.6 변형 실패 처리와 한도 정산
 
 | 항목 | 규칙 |
 | --- | --- |
 | 실패 문항 | 실패 문항·정답·해설은 SSE 어디에도 없다 (PT-84 실패 결과에는 문항이 없다) |
-| 일반 답변 (LLM 1회) | 실패 사유가 검증 실패(`model_unavailable`·`invalid_original`이 아님)이고 첫 `delta` 마감까지 30초 이상 남았을 때. `hideAnswers`를 지키는 일반 답변을 스트리밍한다 |
-| 고정 안내 | 그 밖(`model_unavailable`, 남은 시간 30초 미만). FastAPI는 `delta` 없이 `meta`로 끝내고 Spring이 고정 안내 문구를 `delta`로 보낸다 |
+| 일반 답변 (LLM 1회) | 실패 사유가 검증 실패(`model_unavailable`·`invalid_original`이 아님)이고 첫 `delta` 마감까지 30초 이상 남았을 때. `hideAnswers`를 지키는 일반 답변을 스트리밍한다. 지시문에는 원 문항의 본문과 보기만 `<original_question>` 데이터 블록(추정 200토큰까지 축약)으로 넣고 `answerIndex`·`modelAnswer`는 넣지 않는다 |
+| 고정 안내 | 그 밖(`model_unavailable`, 남은 시간 30초 미만). FastAPI는 `delta` 없이 `meta`로 끝내고 Spring이 고정 안내 문구를 `delta`로 보낸다. 일반 답변이 빈 스트림으로 끝난 경우(7.5)도 같다. `variant` 줄이 이미 나가 차감은 확정이므로 `error` 대신 이 경로로 빈 화면을 막는다 |
 | 재시도 안내 | `meta.retryable=true`이면 Spring이 재시도 안내 문구를 `delta`로 덧붙인다. `invalid_original`이면 `retryable=false`, 안내 없음. 같은 `variantQuizId` 재요청은 새로 실행한다 |
 | 변형 시간 | 변형 도구는 남은 마감 시간 안에서 실행하고, 시간이 다하면 `agent_timeout`이 아니라 `variant(failed, model_unavailable)` 줄을 낸다 |
 | 한도 정산 (PT-97) | `variant` 줄(성공·실패) 또는 `delta`를 받은 턴은 CHAT 1회 차감 확정이다. 변형 실패 뒤 일반 답변까지 포함해 1회다. FastAPI 연결 실패처럼 `variant`·`delta` 전에 끝난 경우만 기존 규칙대로 반납한다. `ping`·`start`·`need_search`는 출력으로 세지 않는다 |
@@ -371,6 +397,9 @@ Spring 매핑: `ChatRequest.messages`의 마지막 원소(role `user`)가 `quest
 
 - `hideAnswers=true`이면 변형 문항의 `answerIndex`·`modelAnswer`·`explanation`은 `delta`·`agent`를 포함해 SSE 어디에도 나가지 않는다. `false`이면 문제 뒤에 정답·해설 단락을 붙인다.
 - Spring `ChatRequest` 추가 필드: `variantQuizId`(Long, 선택. `sessionId` 없이 오면 400, TEACHER면 403, 접근 확인 조건은 PT-85 AC-12), `screenSummary`(문자열 ≤4000자, 선택). 거절은 모두 한도 예약 전에 HTTP로 나간다.
+- 동시 턴: 같은 사용자의 Agent 턴(student·personal)이 이미 진행 중이면 한도 예약 전에 HTTP 429 `{"status": 429, "message": "앞 질문의 답을 아직 만들고 있어요. 끝난 뒤 다시 물어봐 주세요"}`로 거절한다. SSE를 열지 않고 CHAT 한도를 쓰지 않는다. 자리는 턴이 끝나면(정상·오류·중지) 풀린다. TEACHER 경로와 `app.ai.agent.enabled=false` 경로에는 적용하지 않으며, 기존 한도 초과 429(`Retry-After`)와는 별개다.
+- 거절 검사 순서: 400/403/404/409/410 → 동시 턴 429 → 한도 초과 429.
+- Spring 내부에서 변형 원 문항은 JPA 엔티티 대신 값 객체(`VariantOriginal`)로 다룬다. FastAPI로 가는 `variantSource` JSON 형식(7.1)은 바뀌지 않는다.
 
 ### 7.8 실행 한도와 운영
 
@@ -381,6 +410,17 @@ Spring 매핑: `ChatRequest.messages`의 마지막 원소(role `user`)가 `quest
 | 재검색 | 최대 2회(FastAPI 호출 최대 3회). 3번째 `need_search`, `delta` 뒤 `need_search`, `state` 65,536바이트 초과, `query` 빈 값·500자 초과는 검색 없이 `error`. 재검색 전마다 Spring이 수업 권한을 다시 확인 |
 | `AiSlots` | 재검색 루프 전체에서 한 자리. `ticket.run` 하나 안에 `slots.run` 하나 |
 | AI 사용 한도 (PT-97) | 질문 하나 = CHAT 1회 (재검색·변형 포함), 정산은 7.6 |
-| 기능 플래그 | `app.ai.agent.enabled`(`AI_AGENT_ENABLED`)가 `false`면 모든 역할이 기존 `/v1/chat` 경로 |
-| 추적 | `LANGSMITH_TRACING` 또는 `LANGCHAIN_TRACING_V2`가 참이면 FastAPI가 시작을 거부한다(fail closed). Dockerfile은 `false`로 둔다 |
-| 로그 | Spring은 턴마다 한 줄(Agent 종류, 경로, 분류, 힌트, 추천, 도구, 재검색 횟수, 변형 결과, 소요 시간). FastAPI는 노드 이름·성공 여부·횟수만. 질문·검색어·자료·답안 원문은 남기지 않는다 |
+| 기능 플래그 | `app.ai.agent.enabled`(`AI_AGENT_ENABLED`, 기본 `false`). `false`면 모든 역할이 기존 `/v1/chat` 경로이고, 명시적으로 `true`를 줘야 학생·개인 학습이 Agent 경로를 쓴다. `application.yaml`, `TutorService`, infra compose, env 예제의 기본값이 모두 `false`다 |
+| 배포 순서 | 1) FastAPI(`/v1/agent/chat` 포함)를 먼저 배포하고 엔드포인트가 응답하는지 확인한다. 2) 그 뒤에 `AI_AGENT_ENABLED=true`로 Spring을 다시 띄운다. 값을 주지 않으면 기본 `false`라서 Spring이 먼저 배포되거나 이전 FastAPI와 함께 돌아도 기존 `/v1/chat` 경로로 동작한다. 문제가 생기면 `false`로 되돌리면 기존 경로로 돌아간다 |
+| 추적 | `LANGSMITH_TRACING`, `LANGCHAIN_TRACING_V2`, `LANGSMITH_TRACING_V2`, `LANGCHAIN_TRACING` 네 변수 중 하나라도 참(`true`/`1`/`yes`/`on`, 대소문자·앞뒤 공백 무시)이거나, 설치된 langsmith의 `tracing_is_enabled()`가 참이면 FastAPI가 시작을 거부한다(fail closed). langsmith는 `TRACING_V2`, `TRACING`을 `LANGSMITH_`·`LANGCHAIN_` 두 접두어로 모두 읽기 때문이다. Dockerfile은 네 변수 모두 `false`로 둔다 |
+| 로그 | Spring은 턴마다 한 줄. 성공은 `result=ok`와 Agent 종류, 경로, 분류, 힌트, 추천, 도구, 재검색 횟수, 변형 결과, 소요 시간. 실패 턴도 한 줄 `result=error reason=status_<code>\|ai_unavailable\|ai_unavailable_after_output\|<예외 종류> tools=… searchRounds=… elapsedMs=…`. FastAPI는 노드 이름·성공 여부·횟수만. 질문·검색어·자료·답안 원문, 예외 메시지, `userId`는 남기지 않는다 |
+
+### 7.9 알려진 한계 (PT-85)
+
+| 항목 | 내용 | 후속 |
+| --- | --- | --- |
+| 화면 이력 위조 | PT-106 전에는 `context.messages`가 화면이 보낸 이력이다. 학생이 assistant 메시지를 꾸며 `hintLevel`·`suggestHelp` 계산을 바꾸거나 few-shot 탈옥을 시도할 수 있다. 정답 숨김은 정책 지시(프롬프트)에 의존한다. 기존 `/v1/chat`과 같은 한계다 | PT-106 서버 저장 이력으로 교체 |
+| 짝 없는 서로게이트 | 질문에 짝 없는 UTF-16 서로게이트가 있으면 FastAPI가 422를 내고, Spring은 한도 예약 뒤라 CHAT 1회가 차감될 수 있다. 기존 `/v1/chat`과 같다 | Spring 입력 정리 검토 |
+| 과목별 안내 | Agent 경로는 Spring `TopicPrompt`의 과목 지시·수준 문구를 쓰지 않고 `policy.topic`·`difficulty`만 쓴다 | 품질 비교 후 policy 확장 검토 |
+| 의존성 해시 | `requirements.lock.txt`는 버전만 고정하고 해시는 고정하지 않는다(기존부터) | `--require-hashes` 도입 검토 |
+| 규칙 분류 | 질문 분류 정규식은 선형 시간으로 제한했다. `코드` 뒤 붙은 낱말은 10자까지만 본다 | — |
