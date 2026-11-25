@@ -51,6 +51,9 @@ export const test = base.extend({
       }).toBe(true)
       await expect(page.getByRole('heading', { name: '오늘은 무엇을 공부할까요?' })).toBeVisible()
       await expect.poll(() => application.windows().some(p => new URL(p.url()).pathname === '/widget')).toBe(true)
+      // Constructor visibility can settle after browser-window-created. Establish
+      // an explicit hidden test baseline only after both real pages have loaded.
+      await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().forEach(w => w.hide()))
       await use({ application, page, profile })
     } finally {
       await application?.close().catch(() => {})
