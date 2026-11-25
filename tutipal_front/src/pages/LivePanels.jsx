@@ -261,9 +261,9 @@ export function StudentHelp({ sessionId, reloadKey, draft }) {
   /** 이 수업의 내 도움 요청 목록 상태: loading → ok | failed. ok 일 때만 열린 요청 유무를 알 수 있으므로 초안 모달을 연다 */
   const [listState, setListState] = useState('loading')
   const handledDraft = useRef(0)
-  /** 조회 실패 상태에서 초안이 오면 그 초안마다 한 번만 목록을 다시 조회한다 (무한 재시도 방지) */
-  const retriedDraft = useRef(0)
-  const [retryKey, setRetryKey] = useState(0)
+  /** 초안이 올 때마다 그 초안에 대해 한 번 목록을 새로 조회한다. 이전 조회 결과(성공·실패 모두)에 기대지 않는다 */
+  const checkedDraft = useRef(0)
+  const [refreshKey, setRefreshKey] = useState(0)
   const active = mine?.status === 'PENDING' || mine?.status === 'ACCEPTED'
 
   // 다른 수업으로 바뀌면 이전 수업의 요청 상태 · 모달 · 초안을 버린다
@@ -277,17 +277,18 @@ export function StudentHelp({ sessionId, reloadKey, draft }) {
   }, [sessionId])
 
   useEffect(() => {
-    if (listState === 'loading' || !draft || draft.seq === handledDraft.current) return
+    if (!draft || draft.seq === handledDraft.current) return
     if (draft.sessionId !== sessionId) {
       handledDraft.current = draft.seq
       return
     }
-    if (listState === 'failed' && retriedDraft.current !== draft.seq) {
-      retriedDraft.current = draft.seq
+    if (checkedDraft.current !== draft.seq) {
+      checkedDraft.current = draft.seq
       setListState('loading')
-      setRetryKey((k) => k + 1)
+      setRefreshKey((k) => k + 1)
       return
     }
+    if (listState === 'loading') return
     handledDraft.current = draft.seq
     if (listState === 'failed') {
       setNote('도움 요청 상태를 확인하지 못했어요. 잠시 후 다시 눌러 주세요')
@@ -326,7 +327,7 @@ export function StudentHelp({ sessionId, reloadKey, draft }) {
       if (current) setListState((s) => (s === 'ok' ? s : 'failed'))
     })
     return () => { current = false }
-  }, [sessionId, reloadKey, retryKey])
+  }, [sessionId, reloadKey, refreshKey])
 
   async function onSubmit(e) {
     e.preventDefault()
