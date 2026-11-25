@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { formatRetryTime, isQuotaError } from '../api/client'
 import {
@@ -25,6 +25,7 @@ import {
   initialListState,
   isInputLocked,
   listFailed,
+  listPathFor,
   listLoaded,
   listLoading,
   memoryDraft,
@@ -67,7 +68,16 @@ function ConversationList() {
   const [createError, setCreateError] = useState('')
   const [loadingMore, setLoadingMore] = useState(false)
   const alive = useRef(true)
+  /** Changes with ?sessionId: a next page requested for the previous scope is dropped. */
+  const scopeRef = useRef(sessionId)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
+
+  // 다른 수업(또는 개인)으로 바뀌면 이전 범위의 목록을 보이지 않게 처음부터
+  useEffect(() => {
+    scopeRef.current = sessionId
+    setState(initialListState())
+    setLoadingMore(false)
+  }, [sessionId])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -81,14 +91,16 @@ function ConversationList() {
 
   async function loadMore() {
     if (loadingMore || !state.nextCursor) return
+    const scope = sessionId
+    const current = () => alive.current && scopeRef.current === scope
     setLoadingMore(true)
     try {
-      const page = await listConversations({ sessionId, cursor: state.nextCursor })
-      if (alive.current) setState((s) => listLoaded(s, page, { append: true }))
+      const page = await listConversations({ sessionId: scope, cursor: state.nextCursor })
+      if (current()) setState((s) => listLoaded(s, page, { append: true }))
     } catch (e) {
-      if (alive.current) setState((s) => listFailed(s, e))
+      if (current()) setState((s) => listFailed(s, e))
     } finally {
-      if (alive.current) setLoadingMore(false)
+      if (current()) setLoadingMore(false)
     }
   }
 
@@ -350,7 +362,7 @@ function ConversationDetail({ id }) {
       <div className="page">
         <section className="card session-body" role="alert">
           <p>{state.notice?.text}</p>
-          <button className="btn" onClick={() => navigate(CONVERSATIONS_PATH, { replace: true })}>목록으로</button>
+          <button className="btn" onClick={() => navigate(state.redirectTo ?? CONVERSATIONS_PATH, { replace: true })}>목록으로</button>
         </section>
       </div>
     )
@@ -362,7 +374,7 @@ function ConversationDetail({ id }) {
           <p className="error-text">{state.error}</p>
           <div className="row-gap">
             <button className="btn" onClick={() => setRevision((v) => v + 1)}>다시 불러오기</button>
-            <button className="btn" onClick={() => navigate(CONVERSATIONS_PATH)}>목록으로</button>
+            <button className="btn" onClick={() => navigate(listPathFor(state.conversation))}>목록으로</button>
           </div>
         </section>
       </div>
@@ -377,8 +389,7 @@ function ConversationDetail({ id }) {
     <div className="page conversation-detail">
       <section className="card chat-page">
         <header className="chat-head">
-          <button className="btn-link" onClick={() => navigate(conversation?.sessionId
-            ? `${CONVERSATIONS_PATH}?sessionId=${encodeURIComponent(conversation.sessionId)}` : CONVERSATIONS_PATH)}>
+          <button className="btn-link" onClick={() => navigate(listPathFor(conversation))}>
             ← 목록
           </button>
           <h1>{conversationTitle(conversation)}</h1>
@@ -403,23 +414,7 @@ function ConversationDetail({ id }) {
               <p>아직 메시지가 없어요. {conversation?.topic} 주제로 무엇이든 물어보세요.</p>
             </div>
           )}
-          {shown.map((m) =>
-            m.role === 'user' ? (
-              <div key={m.id} className="msg msg-user">
-                <div className="bubble bubble-user">{m.content}</div>
-                <span className="avatar"><Icon name="user" /></span>
-              </div>
-            ) : (
-              <div key={m.id} className="msg msg-ai">
-                <span className="avatar avatar-ai">
-                  <Mascot size={46} mood={m.streaming ? (m.content ? 'talk' : 'think') : 'idle'} />
-                </span>
-                <div className="bubble bubble-ai">
-                  {m.content || <span className="typing">답변을 생각하는 중…</span>}
-                </div>
-              </div>
-            ),
-          )}
+          {shown.map((m) => <MessageRow key={m.id} message={m} />)}
           <div ref={endRef} />
         </div>
 
@@ -493,3 +488,22 @@ function ConversationDetail({ id }) {
     </div>
   )
 }
+
+/** Stored rows keep their object identity, so only the streaming row re-renders on each delta. */
+const MessageRow = memo(function MessageRow({ message: m }) {
+  return m.role === 'user' ? (
+    <div className="msg msg-user">
+      <div className="bubble bubble-user">{m.content}</div>
+      <span className="avatar"><Icon name="user" /></span>
+    </div>
+  ) : (
+    <div className="msg msg-ai">
+      <span className="avatar avatar-ai">
+        <Mascot size={46} mood={m.streaming ? (m.content ? 'talk' : 'think') : 'idle'} />
+      </span>
+      <div className="bubble bubble-ai">
+        {m.content || <span className="typing">답변을 생각하는 중…</span>}
+      </div>
+    </div>
+  )
+})

@@ -82,13 +82,19 @@ export function detailLoaded(state, conversation, page) {
   }
 }
 
+/** List path of the conversation's scope (session conversations go back to that session's list). */
+export function listPathFor(conversation) {
+  const sessionId = conversation?.sessionId
+  return sessionId ? `${CONVERSATIONS_PATH}?sessionId=${encodeURIComponent(sessionId)}` : CONVERSATIONS_PATH
+}
+
 function missing(state) {
   return {
     ...state,
     status: 'missing',
     pending: null,
     notice: { kind: 'missing', text: MISSING_TEXT },
-    redirectTo: CONVERSATIONS_PATH,
+    redirectTo: listPathFor(state.conversation),
   }
 }
 
@@ -109,11 +115,10 @@ export function olderLoaded(state, page) {
 }
 
 export function noticeFor(error) {
-  const text = messageOf(error, '답변하지 못했어요')
-  if (error?.status === 429) return { kind: 'busy', text }
-  if (error?.status === 410) return { kind: 'ended', text: text || '끝난 수업이라 이어갈 수 없어요' }
+  if (error?.status === 429) return { kind: 'busy', text: messageOf(error, '앞 질문의 답을 아직 만들고 있어요') }
+  if (error?.status === 410) return { kind: 'ended', text: messageOf(error, '끝난 수업이라 이어서 질문할 수 없어요') }
   if (error?.status === 404) return { kind: 'missing', text: MISSING_TEXT }
-  return { kind: 'error', text }
+  return { kind: 'error', text: messageOf(error, '답변하지 못했어요') }
 }
 
 export function turnStarted(state, question) {

@@ -52,8 +52,9 @@ export function deleteMemory(id, memoryId) {
 }
 
 /**
- * Continues a conversation. Resolves with { text, saved } once the server stored the pair (saved event) and sent
- * done; rejects with the SSE error message, the cut-stream message, or an ApiRequestError before the stream.
+ * Continues a conversation. Resolves with { text, saved } once the server stored the pair (saved event): normally
+ * at done, but also when the stream is cut or stopped after saved (the pair is already stored, resending would
+ * duplicate it). Rejects with the SSE error message, the cut-stream message, or an ApiRequestError before the stream.
  */
 export async function sendMessage(id, content, handlers = {}, signal) {
   const res = await fetch(`${path(id)}/messages`, {
@@ -65,17 +66,21 @@ export async function sendMessage(id, content, handlers = {}, signal) {
   if (!res.ok || !res.body) throw await toApiError(res)
   let text = ''
   let saved = null
-  await readSse(res.body, {
-    onDelta: (t) => {
-      text += t
-      handlers.onDelta?.(t)
-    },
-    onSources: (items) => handlers.onSources?.(items),
-    onAgent: (event) => handlers.onAgent?.(event),
-    onSaved: (ids) => {
-      saved = ids
-      handlers.onSaved?.(ids)
-    },
-  })
+  try {
+    await readSse(res.body, {
+      onDelta: (t) => {
+        text += t
+        handlers.onDelta?.(t)
+      },
+      onSources: (items) => handlers.onSources?.(items),
+      onAgent: (event) => handlers.onAgent?.(event),
+      onSaved: (ids) => {
+        saved = ids
+        handlers.onSaved?.(ids)
+      },
+    })
+  } catch (error) {
+    if (!saved) throw error
+  }
   return { text, saved }
 }
