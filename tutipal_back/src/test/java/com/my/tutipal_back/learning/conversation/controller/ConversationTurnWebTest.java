@@ -319,7 +319,9 @@ class ConversationTurnWebTest {
 
         assertThat(eventNames(body)).doesNotContain("saved", "done").endsWith("error");
         assertThat(event(body, "error").json().get("message").asString()).isEqualTo(DELETED_MESSAGE);
-        assertThat(store.conversation(c.id())).isEmpty();
+        // soft delete: the row stays deleted (not revived) and nothing was written into it
+        assertThat(store.deletedAt(c.id())).isPresent();
+        assertThat(store.findOwned(ME, c.id())).isEmpty();
         assertThat(store.allMessages()).isEmpty();
         assertThat(store.calls).noneMatch(call -> call.equals("insertConversation"));
     }
@@ -333,6 +335,23 @@ class ConversationTurnWebTest {
         String before = store.snapshot();
 
         send(theirs.id(), "질문")
+                .andExpect(status().isNotFound())
+                .andExpect(request().asyncNotStarted())
+                .andExpect(jsonPath("$.status").value(404));
+
+        verifyNoInteractions(tutor);
+        assertThat(store.snapshot()).isEqualTo(before);
+    }
+
+    /** Soft delete: a deleted conversation is 404 like a missing one, before any tutor call or write. */
+    @Test
+    void continuingADeletedConversationIs404BeforeAnyTutorCall() throws Exception {
+        ConversationStore.Conversation c = personal();
+        store.seedMessages(c.id(), 2, NOW);
+        store.softDeleteConversation(c.id(), NOW);
+        String before = store.snapshot();
+
+        send(c.id(), "질문")
                 .andExpect(status().isNotFound())
                 .andExpect(request().asyncNotStarted())
                 .andExpect(jsonPath("$.status").value(404));

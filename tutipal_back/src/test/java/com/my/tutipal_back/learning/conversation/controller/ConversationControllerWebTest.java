@@ -191,7 +191,9 @@ class ConversationControllerWebTest {
         mvc.perform(get("/api/conversations/{id}/messages", c.id())).andExpect(status().isOk());
         mvc.perform(delete("/api/conversations/{id}", c.id())).andExpect(status().isNoContent());
 
-        assertThat(store.conversation(c.id())).isEmpty();
+        // soft delete (PM decision): hidden from the owner at once, the row stays until the purge
+        assertThat(store.findOwned(ME, c.id())).isEmpty();
+        assertThat(store.deletedAt(c.id())).contains(NOW);
     }
 
     // ------------------------------------------------------------------ AC-6 another user's conversation
@@ -293,8 +295,9 @@ class ConversationControllerWebTest {
 
     // ------------------------------------------------------------------ AC-9 delete
 
+    /** Soft delete (PM decision): one deleted_at update under the row lock; everything of it is hidden at once. */
     @Test
-    void deleteLocksThenDeletesOnceAndCascades() throws Exception {
+    void deleteLocksThenSoftDeletesOnceAndHidesEverythingOfIt() throws Exception {
         ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
         store.seedMessages(c.id(), 6, NOW);
         store.seedSummary(c.id(), "요약", 1, 2, NOW);
@@ -307,11 +310,21 @@ class ConversationControllerWebTest {
         List<String> relevant = store.calls.stream()
                 .filter(call -> call.equals("lockOwned:" + c.id()) || call.startsWith("delete:")).toList();
         assertThat(relevant).containsExactly("lockOwned:" + c.id(), "delete:" + c.id());
-        assertThat(store.conversation(c.id())).isEmpty();
-        assertThat(store.messagesOf(c.id())).isEmpty();
-        assertThat(store.summariesOf(c.id())).isEmpty();
-        assertThat(store.allMemories()).extracting(ConversationStore.Memory::id).containsExactly(keptMemory.id());
+        assertThat(store.deletedAt(c.id())).contains(NOW);
+        // invisible through every port read (the rows themselves wait for the purge)
+        assertThat(store.findOwned(ME, c.id())).isEmpty();
+        assertThat(store.messagesBefore(c.id(), null, 100)).isEmpty();
+        assertThat(store.activeSummary(c.id())).isEmpty();
+        assertThat(store.memoriesOf(c.id())).isEmpty();
+        assertThat(store.memories(ME, null, 20)).extracting(ConversationStore.Memory::id)
+                .containsExactly(keptMemory.id());
+        assertThat(store.countMemories(ME, null)).isEqualTo(1);
+        assertThat(store.messagesOf(c.id())).hasSize(6);
+        assertThat(store.summariesOf(c.id())).hasSize(1);
+        mvc.perform(get("/api/conversations/{id}", c.id())).andExpect(status().isNotFound());
+        mvc.perform(get("/api/conversations/{id}/messages", c.id())).andExpect(status().isNotFound());
     }
+
 
     @Test
     void afterDeleteRecallHasNoneOfItsSummaryOrMemories() throws Exception {

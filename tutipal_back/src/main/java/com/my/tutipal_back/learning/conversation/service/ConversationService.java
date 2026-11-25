@@ -133,12 +133,17 @@ public class ConversationService {
                 hasMore);
     }
 
-    /** Locks the row, then one DELETE: messages, summaries and memories go with it (ON DELETE CASCADE). */
+    /**
+     * Soft delete: locks the live row and sets deleted_at. From then on the conversation, its messages, summaries
+     * and memories are invisible to every read (404 like a missing one, never in an Agent request, not counted in
+     * the memory cap); ConversationRetention removes them physically after deleted-purge-days. A turn already
+     * streaming finds no live row in savePair and saves nothing.
+     */
     @Transactional
     public void delete(long userId, long conversationId) {
         ConversationStore.Conversation c = store.lockOwned(userId, conversationId)
                 .orElseThrow(ConversationService::notFound);
-        store.deleteConversation(c.id());
+        store.softDeleteConversation(c.id(), clock.instant());
     }
 
     /** At most 20 memories per (user, scope). Text is what the user wrote (the screen pre-fills it). */
@@ -159,10 +164,12 @@ public class ConversationService {
         return memory(saved);
     }
 
+    /** Soft delete (deleted_at): excluded at once from recall, detail and the cap; purged with the grace period. */
     @Transactional
     public void deleteMemory(long userId, long conversationId, long memoryId) {
         ConversationStore.Conversation c = owned(userId, conversationId);
-        if (!store.deleteMemory(c.id(), memoryId)) {
+        if (!store.softDeleteMemory(c.id(), memoryId, clock.instant())) {
+
             throw new ApiException(HttpStatus.NOT_FOUND, "기억을 찾을 수 없어요");
         }
     }

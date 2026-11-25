@@ -17,10 +17,13 @@ import org.springframework.dao.DuplicateKeyException;
 
 /**
  * PT-106 in-memory ConversationStore for service / web tests (JUnit has no DB).
- * Mimics the V21 schema rules the services rely on: ON DELETE CASCADE from a conversation to its messages,
- * summaries and memories, FK failure when writing into a deleted conversation, and the partial UNIQUE index
+ * Mimics the V21 schema rules the services rely on: soft delete (deleted_at) that hides a conversation with its
+ * messages, summaries and memories from every port read, and a soft-deleted memory from recall / detail / cap;
+ * physical deletion (retention, purge) with ON DELETE CASCADE from a conversation to its messages, summaries and
+ * memories; FK failure when writing into a physically removed conversation; and the partial UNIQUE index
  * (at most one active summary per conversation; one user message per clientMessageId).
- * Every lock / delete / pair insert is recorded in {@link #calls}.
+ * Every lock / delete / pair insert is recorded in {@link #calls} ("delete:7" is the soft delete of conversation 7,
+ * "deleteMemory:3" the soft delete of memory 3).
  */
 public class FakeConversationStore implements ConversationStore {
 
@@ -30,6 +33,10 @@ public class FakeConversationStore implements ConversationStore {
     private final Map<Long, Memory> memories = new TreeMap<>();
     /** message id → clientMessageId (user rows saved with a key). */
     private final Map<Long, UUID> clientIds = new TreeMap<>();
+    /** conversation id → deleted_at (soft-deleted rows stay until purged). */
+    private final Map<Long, Instant> deletedConversations = new TreeMap<>();
+    /** memory id → deleted_at. */
+    private final Map<Long, Instant> deletedMemories = new TreeMap<>();
     private long nextConversation = 1;
     private long nextMessage = 1;
     private long nextSummary = 1;
@@ -74,7 +81,7 @@ public class FakeConversationStore implements ConversationStore {
     /** Inserts an active summary; a previously active one is superseded first (like the real save). */
     public synchronized Summary seedSummary(long conversationId, String text, long fromMessageId, long toMessageId,
                                             Instant at) {
-        activeSummary(conversationId).ifPresent(s -> summaries.put(s.id(), withSuperseded(s, at)));
+        rawActiveSummary(conversationId).ifPresent(s -> summaries.put(s.id(), withSuperseded(s, at)));
         long id = nextSummary++;
         Summary s = new Summary(id, conversationId, text, fromMessageId, toMessageId, at, null, null);
         summaries.put(id, s);
@@ -98,10 +105,26 @@ public class FakeConversationStore implements ConversationStore {
         summaries.remove(summaryId);
     }
 
+    /** A user's delete at an unspecified time (test shortcut for {@link #softDeleteConversation}). */
+    public synchronized void deleteConversation(long conversationId) {
+        softDeleteConversation(conversationId, Instant.now());
+    }
+
     // ------------------------------------------------------------------ inspection helpers
 
+    /** The physical row, live or soft-deleted (empty only after a physical delete). */
     public synchronized Optional<Conversation> conversation(long id) {
         return Optional.ofNullable(conversations.get(id));
+    }
+
+    /** deleted_at of a conversation (empty while live or after a physical delete). */
+    public synchronized Optional<Instant> deletedAt(long conversationId) {
+        return Optional.ofNullable(deletedConversations.get(conversationId));
+    }
+
+    /** deleted_at of a memory (empty while live or after a physical delete). */
+    public synchronized Optional<Instant> memoryDeletedAt(long memoryId) {
+        return Optional.ofNullable(deletedMemories.get(memoryId));
     }
 
     public synchronized List<Message> messagesOf(long conversationId) {
@@ -124,13 +147,23 @@ public class FakeConversationStore implements ConversationStore {
         return Optional.ofNullable(summaries.get(id));
     }
 
+    /** Every physical memory row, deleted or not. */
     public synchronized List<Memory> allMemories() {
         return List.copyOf(memories.values());
     }
 
     /** Whole state as text: equal snapshots mean no DB change. */
     public synchronized String snapshot() {
-        return conversations.values() + "|" + messages.values() + "|" + summaries.values() + "|" + memories.values();
+        return conversations.values() + "|" + messages.values() + "|" + summaries.values() + "|" + memories.values()
+                + "|" + deletedConversations + "|" + deletedMemories;
+    }
+
+    private boolean live(long conversationId) {
+        return conversations.containsKey(conversationId) && !deletedConversations.containsKey(conversationId);
+    }
+
+    private boolean liveMemory(Memory m) {
+        return !deletedMemories.containsKey(m.id()) && live(m.conversationId());
     }
 
     // ------------------------------------------------------------------ ConversationStore
@@ -146,7 +179,8 @@ public class FakeConversationStore implements ConversationStore {
 
     @Override
     public synchronized Optional<Conversation> findOwned(long userId, long conversationId) {
-        return Optional.ofNullable(conversations.get(conversationId)).filter(c -> c.userId() == userId);
+        return Optional.ofNullable(conversations.get(conversationId))
+                .filter(c -> c.userId() == userId && live(c.id()));
     }
 
     @Override
@@ -158,13 +192,13 @@ public class FakeConversationStore implements ConversationStore {
     @Override
     public synchronized Optional<Conversation> lock(long conversationId) {
         calls.add("lock:" + conversationId);
-        return Optional.ofNullable(conversations.get(conversationId));
+        return Optional.ofNullable(conversations.get(conversationId)).filter(c -> live(c.id()));
     }
 
     @Override
     public synchronized List<Conversation> list(long userId, Long sessionId, Cursor after, int limit) {
         return conversations.values().stream()
-                .filter(c -> c.userId() == userId && Objects.equals(c.sessionId(), sessionId))
+                .filter(c -> c.userId() == userId && Objects.equals(c.sessionId(), sessionId) && live(c.id()))
                 .filter(c -> after == null || c.lastMessageAt().isBefore(after.lastMessageAt())
                         || c.lastMessageAt().equals(after.lastMessageAt()) && c.id() < after.id())
                 .sorted(Comparator.comparing(Conversation::lastMessageAt).thenComparing(Conversation::id).reversed())
@@ -173,16 +207,33 @@ public class FakeConversationStore implements ConversationStore {
     }
 
     @Override
-    public synchronized void deleteConversation(long conversationId) {
+    public synchronized void softDeleteConversation(long conversationId, Instant now) {
         calls.add("delete:" + conversationId);
+        if (conversations.containsKey(conversationId)) {
+            deletedConversations.putIfAbsent(conversationId, now);
+        }
+    }
+
+    /** Physical delete with ON DELETE CASCADE (retention / purge). */
+    private void hardDelete(long conversationId) {
         conversations.remove(conversationId);
+        deletedConversations.remove(conversationId);
         messages.values().removeIf(m -> m.conversationId() == conversationId);
         summaries.values().removeIf(s -> s.conversationId() == conversationId);
-        memories.values().removeIf(m -> m.conversationId() == conversationId);
+        memories.values().removeIf(m -> {
+            if (m.conversationId() == conversationId) {
+                deletedMemories.remove(m.id());
+                return true;
+            }
+            return false;
+        });
     }
 
     @Override
     public synchronized List<Message> messagesBefore(long conversationId, Long beforeId, int limit) {
+        if (!live(conversationId)) {
+            return List.of();
+        }
         return messages.values().stream()
                 .filter(m -> m.conversationId() == conversationId && (beforeId == null || m.id() < beforeId))
                 .sorted(Comparator.comparing(Message::id).reversed())
@@ -192,6 +243,9 @@ public class FakeConversationStore implements ConversationStore {
 
     @Override
     public synchronized List<Message> recentMessagesAfter(long conversationId, long afterMessageId, int limit) {
+        if (!live(conversationId)) {
+            return List.of();
+        }
         List<Message> after = messages.values().stream()
                 .filter(m -> m.conversationId() == conversationId && m.id() > afterMessageId)
                 .toList();
@@ -200,12 +254,18 @@ public class FakeConversationStore implements ConversationStore {
 
     @Override
     public synchronized int countMessagesAfter(long conversationId, long afterMessageId) {
+        if (!live(conversationId)) {
+            return 0;
+        }
         return (int) messages.values().stream()
                 .filter(m -> m.conversationId() == conversationId && m.id() > afterMessageId).count();
     }
 
     @Override
     public synchronized List<Message> oldestMessagesAfter(long conversationId, long afterMessageId, int limit) {
+        if (!live(conversationId)) {
+            return List.of();
+        }
         return messages.values().stream()
                 .filter(m -> m.conversationId() == conversationId && m.id() > afterMessageId)
                 .limit(limit)
@@ -240,6 +300,9 @@ public class FakeConversationStore implements ConversationStore {
     @Override
     public synchronized Optional<SavedPair> findPairByClientMessageId(long conversationId, UUID clientMessageId) {
         calls.add("findPairByClientMessageId:" + conversationId);
+        if (!live(conversationId)) {
+            return Optional.empty();
+        }
         return keyedQuestion(conversationId, clientMessageId).flatMap(user -> messages.values().stream()
                 .filter(m -> m.conversationId() == conversationId && m.id() > user.id())
                 .findFirst()
@@ -262,6 +325,11 @@ public class FakeConversationStore implements ConversationStore {
 
     @Override
     public synchronized Optional<Summary> activeSummary(long conversationId) {
+        return live(conversationId) ? rawActiveSummary(conversationId) : Optional.empty();
+    }
+
+    /** The partial UNIQUE index applies to every physical row. */
+    private Optional<Summary> rawActiveSummary(long conversationId) {
         return summaries.values().stream()
                 .filter(s -> s.conversationId() == conversationId && s.supersededAt() == null
                         && s.invalidatedAt() == null)
@@ -270,7 +338,7 @@ public class FakeConversationStore implements ConversationStore {
 
     @Override
     public synchronized Optional<Summary> findSummary(long summaryId) {
-        return Optional.ofNullable(summaries.get(summaryId));
+        return Optional.ofNullable(summaries.get(summaryId)).filter(s -> live(s.conversationId()));
     }
 
     @Override
@@ -289,7 +357,7 @@ public class FakeConversationStore implements ConversationStore {
         if (!conversations.containsKey(conversationId)) {
             throw new DataIntegrityViolationException("ai_conversation_summaries.conversation_id FK");
         }
-        if (activeSummary(conversationId).isPresent()) {
+        if (rawActiveSummary(conversationId).isPresent()) {
             throw new DataIntegrityViolationException("partial unique: one active summary per conversation");
         }
         long id = nextSummary++;
@@ -302,7 +370,7 @@ public class FakeConversationStore implements ConversationStore {
     public synchronized List<Memory> memories(long userId, Long sessionId, int limit) {
         memoryQueries.add(new Object[] {userId, sessionId, limit});
         return memories.values().stream()
-                .filter(m -> m.userId() == userId && Objects.equals(m.sessionId(), sessionId))
+                .filter(m -> m.userId() == userId && Objects.equals(m.sessionId(), sessionId) && liveMemory(m))
                 .sorted(Comparator.comparing(Memory::createdAt).thenComparing(Memory::id).reversed())
                 .limit(limit)
                 .toList();
@@ -311,7 +379,7 @@ public class FakeConversationStore implements ConversationStore {
     @Override
     public synchronized List<Memory> memoriesOf(long conversationId) {
         return memories.values().stream()
-                .filter(m -> m.conversationId() == conversationId)
+                .filter(m -> m.conversationId() == conversationId && liveMemory(m))
                 .sorted(Comparator.comparing(Memory::createdAt).thenComparing(Memory::id).reversed())
                 .toList();
     }
@@ -319,7 +387,8 @@ public class FakeConversationStore implements ConversationStore {
     @Override
     public synchronized int countMemories(long userId, Long sessionId) {
         return (int) memories.values().stream()
-                .filter(m -> m.userId() == userId && Objects.equals(m.sessionId(), sessionId)).count();
+                .filter(m -> m.userId() == userId && Objects.equals(m.sessionId(), sessionId) && liveMemory(m))
+                .count();
     }
 
     @Override
@@ -333,13 +402,13 @@ public class FakeConversationStore implements ConversationStore {
     }
 
     @Override
-    public synchronized boolean deleteMemory(long conversationId, long memoryId) {
+    public synchronized boolean softDeleteMemory(long conversationId, long memoryId, Instant now) {
         calls.add("deleteMemory:" + memoryId);
         Memory m = memories.get(memoryId);
-        if (m == null || m.conversationId() != conversationId) {
+        if (m == null || m.conversationId() != conversationId || deletedMemories.containsKey(memoryId)) {
             return false;
         }
-        memories.remove(memoryId);
+        deletedMemories.put(memoryId, now);
         return true;
     }
 
@@ -350,9 +419,39 @@ public class FakeConversationStore implements ConversationStore {
                 .map(Conversation::id)
                 .limit(limit)
                 .toList();
-        old.forEach(this::deleteConversation);
+        old.forEach(this::hardDelete);
         return old.size();
     }
+
+    @Override
+    public synchronized int purgeDeletedConversationsBefore(Instant cutoff, int limit) {
+        calls.add("purgeConversations");
+        List<Long> due = expired(deletedConversations, cutoff, limit);
+        due.forEach(this::hardDelete);
+        return due.size();
+    }
+
+    @Override
+    public synchronized int purgeDeletedMemoriesBefore(Instant cutoff, int limit) {
+        calls.add("purgeMemories");
+        List<Long> due = expired(deletedMemories, cutoff, limit);
+        due.forEach(id -> {
+            memories.remove(id);
+            deletedMemories.remove(id);
+        });
+        return due.size();
+    }
+
+    /** ids whose deleted_at < cutoff, oldest first (ORDER BY deleted_at, id LIMIT n). */
+    private static List<Long> expired(Map<Long, Instant> deleted, Instant cutoff, int limit) {
+        return deleted.entrySet().stream()
+                .filter(e -> e.getValue().isBefore(cutoff))
+                .sorted(Map.Entry.<Long, Instant>comparingByValue().thenComparing(Map.Entry.comparingByKey()))
+                .map(Map.Entry::getKey)
+                .limit(limit)
+                .toList();
+    }
+
 
     private static Summary withSuperseded(Summary s, Instant at) {
         return new Summary(s.id(), s.conversationId(), s.text(), s.fromMessageId(), s.toMessageId(), s.createdAt(),

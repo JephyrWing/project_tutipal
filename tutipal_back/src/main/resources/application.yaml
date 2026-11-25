@@ -101,6 +101,8 @@ app:
     conversations:
       retention-days: ${AI_CONVERSATION_RETENTION_DAYS:0}
       retention-batch-size: 500
+      # 사용자가 지운 대화 · 기억(soft delete)을 물리 삭제하기 전 유예 일수. 1 이상, 기본 30 (PT-13 결정 전 임시값)
+      deleted-purge-days: ${AI_CONVERSATION_DELETED_PURGE_DAYS:30}
       # 활성 요약 뒤 메시지 중 최신 keep-recent 개를 뺀 수가 threshold 이상이면 오래된 것부터 최대 max-input 개 요약
       summary:
         threshold: 20

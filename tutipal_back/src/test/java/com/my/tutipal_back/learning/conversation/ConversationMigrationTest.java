@@ -16,7 +16,8 @@ import org.junit.jupiter.api.Test;
 /**
  * PT-106 AC-13 (text check only; the real Postgres run is recorded as not run): V21__ai_conversations.sql
  * deletes everything with the user / session through ON DELETE CASCADE, and keeps at most one active summary
- * per conversation with a partial UNIQUE index.
+ * per conversation with a partial UNIQUE index. Soft delete: nullable deleted_at, partial live indexes and purge
+ * indexes.
  */
 class ConversationMigrationTest {
 
@@ -96,6 +97,36 @@ class ConversationMigrationTest {
         assertThat(cascades(t, "session_id", "study_sessions")).isTrue();
         assertThat(cascades(t, "conversation_id", "ai_conversations")).isTrue();
         assertThat(t).contains("1000");
+    }
+
+    /** Soft delete: nullable deleted_at on conversations and memories (NULL = live). */
+    @Test
+    void conversationsAndMemoriesHaveANullableDeletedAt() {
+        Pattern nullableDeletedAt = Pattern.compile("\\bdeleted_at timestamp(\\(6\\))? with time zone ?(,|\\))");
+
+        assertThat(nullableDeletedAt.matcher(table("ai_conversations")).find()).isTrue();
+        assertThat(nullableDeletedAt.matcher(table("ai_memories")).find()).isTrue();
+    }
+
+    private boolean hasIndex(String table, String columns, String predicate) {
+        Pattern index = Pattern.compile("create index( if not exists)? \\w+ on " + table + "( using btree)? ?\\( ?"
+                + columns + " ?\\) where \\(?" + predicate + "\\)?$");
+        return statements.stream().anyMatch(s -> index.matcher(s).find());
+    }
+
+    /** Live queries keep their index; deleted rows stay out of it. */
+    @Test
+    void liveListAndMemoryScopeIndexesArePartialOnLiveRows() {
+        assertThat(hasIndex("ai_conversations", "user_id, session_id, last_message_at desc, id desc",
+                "deleted_at is null")).as("live conversation list index").isTrue();
+        assertThat(hasIndex("ai_memories", "user_id, session_id, created_at desc, id desc", "deleted_at is null"))
+                .as("live memory scope index").isTrue();
+    }
+
+    @Test
+    void purgeCandidatesHaveAnIndexOnDeletedAt() {
+        assertThat(hasIndex("ai_conversations", "deleted_at, id", "deleted_at is not null")).isTrue();
+        assertThat(hasIndex("ai_memories", "deleted_at, id", "deleted_at is not null")).isTrue();
     }
 
     @Test

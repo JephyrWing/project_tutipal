@@ -141,7 +141,7 @@ test('PT106 personal conversation: save, reload, continue with stored history, i
   await expect.poll(async () => (await api(owner, `${base}/messages`, 'POST',
     { content: 'PT106 다른 질문', clientMessageId: key }, sse)).status).toBe(409)
 
-  // Delete through the screen: messages go with it (ON DELETE CASCADE)
+  // Delete through the screen (soft delete): from then on the conversation is 404 everywhere, like a missing one
   await owner.page.reload()
   owner.page.once('dialog', dialog => void dialog.accept())
   await owner.page.getByRole('button', { name: /대화 삭제/ }).click()
@@ -149,6 +149,11 @@ test('PT106 personal conversation: save, reload, continue with stored history, i
   expect((await api(owner, base)).status).toBe(404)
   expect((await api(owner, `${base}/messages`)).status).toBe(404)
   expect((await api(owner, '/api/conversations?limit=50')).body.items.map(c => c.id)).not.toContain(id)
+  expect((await api(owner, `${base}/memories`, 'POST', { text: 'PT106 지운 대화 기억' })).status).toBe(404)
+  expect((await api(owner, base, 'DELETE')).status).toBe(404)
+  // neither a continue nor the replay of a stored pair reaches the deleted conversation
+  await expect.poll(async () => (await api(owner, `${base}/messages`, 'POST', keyed, sse)).status).toBe(404)
+  expect((await api(owner, `${base}/messages`, 'POST', { content: 'PT106 지운 대화 이어가기' }, sse)).status).toBe(404)
   expect((await api(owner, `/api/conversations/${empty.body.id}`, 'DELETE')).status).toBe(204)
 })
 
@@ -195,11 +200,19 @@ test('PT106 session conversations: student only, scoped list, 20 memory cap unde
   expect((await api(student, `/api/conversations/${a.body.id}/memories`, 'POST', { text: 'PT106 다시 저장' })).status).toBe(201)
   expect((await api(student, `/api/conversations/${a.body.id}/memories`, 'POST', { text: 'PT106 넘침' })).status).toBe(409)
 
-  // Deleting a conversation takes its memories with it, so the scope has room again
+  // Deleting a conversation (soft delete) hides its memories at once, so they stop counting toward the cap
   expect((await api(teacher, `/api/conversations/${a.body.id}`, 'DELETE')).status).toBe(404)
   expect((await api(student, `/api/conversations/${a.body.id}`, 'DELETE')).status).toBe(204)
   expect((await api(student, `/api/conversations/${a.body.id}`)).status).toBe(404)
   expect((await api(student, `/api/conversations/${a.body.id}/messages`)).status).toBe(404)
   expect((await api(student, `/api/conversations/${b.body.id}/memories`, 'POST', { text: 'PT106 삭제 뒤 저장' })).status).toBe(201)
   expect((await api(student, `/api/conversations?sessionId=${room.id}`)).body.items.map(c => c.id)).toEqual([b.body.id])
+  // Only b's live memories count now: the scope fills up to exactly 20 again, then 409
+  const live = (await api(student, `/api/conversations/${b.body.id}`)).body.memories.length
+  expect(live).toBe(inB.length + 1)
+  for (let i = live; i < 20; i++) {
+    expect((await api(student, `/api/conversations/${b.body.id}/memories`, 'POST', { text: `PT106 채우기 ${i}` })).status).toBe(201)
+  }
+  expect((await api(student, `/api/conversations/${b.body.id}/memories`, 'POST', { text: 'PT106 다시 넘침' })).status).toBe(409)
+
 })

@@ -27,30 +27,39 @@ GAP-12 / FR-TUT-05 / NFR-SEC-11의 구현 원본. `docs/AI_WORKFLOW_CONTRACT.md`
 - `GET /api/conversations/{id}/messages?before=&limit=50` → 최신 페이지부터, 페이지 안은 오래된 순 `{items:[{id,role,content,createdAt}], nextBefore, hasMore}`. limit 1~100.
 - `POST /api/conversations/{id}/messages {content 1..8000, clientMessageId?}` → SSE `sources` → `delta {t}` … → `agent` → `saved {userMessageId, assistantMessageId}` → `done`, 실패 시 `error {message}`. 스트림 전 거절(400/403/404/409/410/429)은 JSON `{status, message}`(한도 429는 공통 ProblemDetail). 같은 사용자의 대화 턴이 진행 중이면 429. 스트림 중 대화가 지워지면 `error "대화가 삭제되어 저장하지 않았어요"`.
 - 중복 저장 방지(`clientMessageId`, UUID, HELP_CHAT과 같은 방식): 화면은 질문마다 새 UUID를 만들고, `saved` 전에 끊기거나 실패·중지된 질문을 **글자 그대로** 다시 보내면 같은 값을 쓴다(글을 고치면 새 값, 409면 버림). 서버는 소유·수업 확인(404/410/403) 뒤, 한도·모델 호출 전에 그 대화의 질문 행에서 이 값을 찾는다. 같은 질문이면 모델을 부르지 않고 SSE로 저장된 답을 다시 보낸다(`delta` 1개(저장된 답 전체) → `saved {저장된 ids}` → `done`, CHAT 한도·요약 없음). 다른 질문이면 409 JSON. 값은 질문 행 `client_message_id`에 저장되고 부분 UNIQUE `(conversation_id, client_message_id)`다. 같은 값으로 두 요청이 모두 모델까지 간 경우(다중 서버)에도 `savePair`가 대화 행 잠금 뒤 다시 찾아 이미 있으면 그 쌍을 돌려주고, 그래도 UNIQUE에 걸리면 되돌린 뒤 저장된 쌍을 `saved`로 보낸다(쌍·`message_count` 한 번만). 이때 방금 스트리밍한 답이 저장된 답과 다르면 `saved {userMessageId, assistantMessageId, answer, replaced:true}`로 저장된 답을 함께 보내고, 화면은 말풍선을 그 글로 바꾼다(새로 고침과 같게). 값이 없는 요청은 예전처럼 매번 새 턴이다.
-- `POST /api/conversations/{id}/memories {text 1..1000}` → 201 `{id,text,createdAt}`. 범위당 20개 초과 409. `DELETE /api/conversations/{id}/memories/{memoryId}` → 204.
-- `DELETE /api/conversations/{id}` → 204.
-- 남의 대화·없는 대화는 조회·이어가기·삭제·기억 저장/삭제 모두 404이며 DB·한도·모델 호출이 일어나지 않는다. 끝난 수업의 대화도 주인은 보고 지울 수 있다(이어가기만 410).
+- `POST /api/conversations/{id}/memories {text 1..1000}` → 201 `{id,text,createdAt}`. 범위당 살아 있는 기억 20개 초과 409. `DELETE /api/conversations/{id}/memories/{memoryId}` → 204(soft delete).
+- `DELETE /api/conversations/{id}` → 204(soft delete). 지운 대화는 다시 지우면 404.
+- 남의 대화·없는 대화·지운 대화는 목록에서 빠지고 조회·메시지·이어가기(SSE)·같은 `clientMessageId` 재생·삭제·기억 저장/삭제 모두 404이며 DB 쓰기·한도·모델 호출이 일어나지 않는다. 끝난 수업의 대화도 주인은 보고 지울 수 있다(이어가기만 410).
 
 ## 삭제
 
-- 대화 삭제: 대화 행을 `FOR UPDATE`로 잠근 뒤 `DELETE FROM ai_conversations` 한 번. 메시지·요약·그 대화에서 저장한 기억은 `ON DELETE CASCADE`로 함께 지워진다. 다음 턴부터는 다시 조회하므로 지운 대화의 요약·기억이 Agent 요청에 들어가지 않는다.
-- 기억 삭제: 즉시 물리 삭제, 다음 턴부터 제외.
-- 탈퇴·수업 삭제: `user_id`·`session_id` FK가 `ON DELETE CASCADE`라 `AccountCleanup`에 별도 DELETE를 추가하지 않았다.
+사용자가 지우는 대화·기억은 **soft delete**다(PM 결정, 2026-11-25). 물리 삭제는 유예 기간 뒤 정리 작업이 한다.
+
+- 대화 삭제: 살아 있는 대화 행을 `FOR UPDATE`로 잠근 뒤 `UPDATE ai_conversations SET deleted_at = now` 한 번. 그 순간부터 모든 사람에게 없는 대화와 같다: 목록·상세·메시지·이어가기·재생·기억 저장/삭제가 404이고, 그 대화의 메시지·요약·기억은 어떤 조회에도 나오지 않는다. 저장소의 모든 조회가 `deleted_at IS NULL`(메시지·요약·기억은 부모 대화가 살아 있는지 `EXISTS`)로 거르므로 `StoredConversationMemory`의 이력·요약·기억(`memories(userId, scope)`도 지운 대화의 기억은 뺌), 요약기의 입력·저장(`saveSummary`가 잠글 행이 없어 버림)에 들어가지 않는다. 스트리밍 중에 지워지면 `savePair`가 잠글 행을 못 찾아 기존 `error "대화가 삭제되어 저장하지 않았어요"`로 끝난다.
+- 기억 삭제: `UPDATE ai_memories SET deleted_at = now`. 즉시 상세·다음 턴 기억·20개 상한에서 빠진다(계약 6.6의 `deletedAt IS NULL`). 지운 대화의 기억도 상한에 세지 않는다.
+- 물리 삭제(유예): `app.ai.conversations.deleted-purge-days`(환경변수 `AI_CONVERSATION_DELETED_PURGE_DAYS`) 기본 **30일 — PT-13 결정 전 임시값**. 1시간마다 `deleted_at < 지금 - N일`인 대화(메시지·요약·기억은 `ON DELETE CASCADE`)와 기억을 `retention-batch-size`(500)개씩 지운다. 지금 잠긴 행은 `FOR UPDATE SKIP LOCKED`로 건너뛰고, 바깥 `DELETE`가 `deleted_at < ?`를 다시 확인한다. **값은 1 이상만 허용**하고 0·음수는 시작할 때 설정 오류로 막는다("0 = 삭제 즉시 물리 삭제"는 삭제 경로가 둘이 되어 지원하지 않음).
+- 인덱스(V21): 목록 `(user_id, session_id, last_message_at DESC, id DESC) WHERE deleted_at IS NULL`, 기억 범위 `(user_id, session_id, created_at DESC, id DESC) WHERE deleted_at IS NULL`, 정리 대상 `(deleted_at, id) WHERE deleted_at IS NOT NULL`(대화·기억 각각). 보관 기간용 `last_message_at` 인덱스는 지운 행도 포함한다.
+- 탈퇴·수업 삭제: 그대로 물리 삭제다. `user_id`·`session_id` FK가 `ON DELETE CASCADE`라 `AccountCleanup`에 별도 DELETE를 추가하지 않았다.
+- 계약 문서: `docs/AI_WORKFLOW_CONTRACT.md` 6.6의 "대화 삭제 → 메시지·요약 삭제" 문구는 PR #60 병합 뒤 "soft delete 후 유예 기간 뒤 물리 삭제"로 고쳐야 한다(이 PR에서는 계약 문서를 고치지 않음).
 - 남은 위험: 턴이 열린 뒤 대화가 지워지면 Agent 경로는 저장 이력·요약을 쓰지 않는다(같은 범위의 다른 기억은 씀). Agent가 꺼진 기존 경로는 턴을 열 때 만든 `ChatRequest.messages` 사본을 그대로 쓴다(그 턴의 저장은 막힘).
 - 요약이 밀린 경우(자리 없음·모델 실패·Agent를 나중에 켬): 활성 요약 끝과 최근 39개 사이의 메시지는 요약에도 이력에도 들어가지 않는다. 다음 요약이 따라잡을 때까지의 차이이며 리코 테스트(AC-1·AC-19)가 이 창 계산을 고정하고 있다. 단일 메시지 삭제(요약 `invalidated_at`)는 이번 범위가 아니다(컬럼만 준비).
 
 ## 보관 기간 (미정)
 
-PT-13에 보관 기간 결정이 없다. `app.ai.conversations.retention-days`(환경변수 `AI_CONVERSATION_RETENTION_DAYS`) 기본 0 = 자동 삭제 끔: 사용자가 지우거나 탈퇴할 때까지 보관한다. N을 주면 마지막 메시지가 N일 지난 대화를 1시간마다 `retention-batch-size`(500)개씩 지운다. 지금 저장 중인(잠긴) 대화는 건너뛰고, 고르는 사이에 새 메시지가 저장돼 기준을 넘긴 대화는 지우지 않는다. **PT-13 결정 전까지 운영에서 켜지 않는다.**
+PT-13에 보관 기간 결정이 없다. 두 값이 따로 있다.
+
+- 비활성 보관 `app.ai.conversations.retention-days`(환경변수 `AI_CONVERSATION_RETENTION_DAYS`) 기본 0 = 끔: 사용자가 지우거나 탈퇴할 때까지 보관한다. N을 주면 마지막 메시지가 N일 지난 대화를 **지운 것(soft delete)까지 포함해** 1시간마다 `retention-batch-size`(500)개씩 물리 삭제한다. 지금 저장 중인(잠긴) 대화는 건너뛰고, 고르는 사이에 새 메시지가 저장돼 기준을 넘긴 대화는 지우지 않는다. **PT-13 결정 전까지 운영에서 켜지 않는다.**
+- 삭제 유예 `app.ai.conversations.deleted-purge-days` 기본 30(임시, 1 이상): 위 "삭제" 참고. 비활성 보관이 꺼져 있어도 돈다. PT-13이 정해지면 기본값을 다시 정한다.
 
 ## 대화 묶기(ThreadLocal)와 후속
 
 PT-113(Draft)이 `TutorService` · `TutorController` · `ChatRequest` 주변을 고치고 있어 PT-106은 그 파일을 바꾸지 않는다. 대신 `ConversationTurnService`가 `tutor.openChat` / `tutor.chat`을 직접 부르고, `tutor.chat` 동안만 `ConversationBinding`(일반 ThreadLocal, 상속 안 됨)에 (사용자, 범위, 대화, 요약 id, 서버 이력)을 묶는다. `StoredConversationMemory`는 묶음이 있고 사용자·범위가 같을 때만 저장 데이터를 쓰고, 묶음이 없으면(`/api/tutor/chat`) 화면 이력만 쓴다(기존 동작과 같음).
 
 - 이 방식은 `TutorService`가 컨텍스트를 호출 스레드에서 동기로 조립한다는 전제에 기대며, `ConversationTurnAgentIntegrationTest`(실제 TutorService 연결)가 유일한 보호 장치다.
-- PT-113 병합 뒤 후속: `ChatRequest`에 conversationId를 실어 ThreadLocal 제거, `ConversationTurnController`와 `TutorController`의 SSE 처리 통합, `src/api/sse.js`와 `tutor.js` 파서 통합, ChatPage · SessionPage · 위젯의 자동 저장과 진입 링크, 계약 6.5의 기억 생성 기준 갱신.
+- PT-113 병합 뒤 후속: `ChatRequest`에 conversationId를 실어 ThreadLocal 제거, `ConversationTurnController`와 `TutorController`의 SSE 처리 통합, `src/api/sse.js`와 `tutor.js` 파서 통합, ChatPage · SessionPage · 위젯의 자동 저장과 진입 링크, 계약 6.5의 기억 생성 기준 갱신, 계약 6.6의 대화 삭제 문구를 soft delete로 갱신.
 - 알려진 차이: 실패한 턴도 답변 조각이 나온 뒤면 CHAT 한도는 차감된다(PT-97 규칙) — 저장은 안 됨. 저장 직후 연결이 끊긴 턴은 화면에 실패로 보이지만 저장은 됐다: 같은 글을 다시 보내면 위 재생으로 한 번만 보이고, 글을 고쳐 보내거나 화면을 새로 고쳐 입력이 사라지면 새 턴이 된다(그때는 목록·새로 고침에서 앞 쌍이 보인다). 재생도 턴 자리를 잠깐 쓰므로 앞 턴이 아직 정리 중이면 429일 수 있다. 빈 대화 행 수에 상한이 없다(후속). 기억 20개 상한은 범위 단위 advisory 잠금(`pg_advisory_xact_lock`)으로 세운다. 상세 화면은 이 대화의 기억만 보여 주므로 범위 전체 기억 목록 화면은 후속이다. 턴 중복 방지·요약 자리는 서버 메모리 기준이라 다중 서버 잠금은 없다.
 
 ## 검증 경계
 
-JUnit(`learning.conversation.*`, `AiClientSummarizeTest`)은 DB 없이 메모리 저장소와 SQL 문자열 검사로 확인한다. pytest `tests/test_agent_summarize.py`는 모델을 가짜로 바꿔 확인한다. node:test `tests/conversations.test.mjs`는 API 모듈과 화면 상태 함수다. 실제 PostgreSQL에서의 V21(CASCADE · 부분 UNIQUE) 적용, Playwright·Electron 실행, 실제 모델 요약 품질은 확인하지 않았다.
+JUnit(`learning.conversation.*`, `AiClientSummarizeTest`)은 DB 없이 메모리 저장소와 SQL 문자열 검사로 확인한다(soft delete 필터·정리 SQL 모양·V21 컬럼/인덱스 문자열 포함, 실제 PostgreSQL 실행 계획은 확인 안 함).
+ pytest `tests/test_agent_summarize.py`는 모델을 가짜로 바꿔 확인한다. node:test `tests/conversations.test.mjs`는 API 모듈과 화면 상태 함수다. 실제 PostgreSQL에서의 V21(CASCADE · 부분 UNIQUE) 적용, Playwright·Electron 실행, 실제 모델 요약 품질은 확인하지 않았다.

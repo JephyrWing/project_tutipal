@@ -211,8 +211,11 @@ class ConversationSummarizerTest {
 
         assertThatCode(() -> summarizer(true).summarizeIfNeeded(s.conversation().id())).doesNotThrowAnyException();
 
-        assertThat(store.allSummaries()).isEmpty();
-        assertThat(store.conversation(s.conversation().id())).isEmpty();
+        // soft delete: the earlier summary row waits for the purge untouched; nothing new was written
+        assertThat(store.allSummaries()).containsExactly(s.summary());
+        assertThat(store.calls).noneMatch(call -> call.startsWith("insertSummary") || call.startsWith("supersede"));
+        assertThat(store.activeSummary(s.conversation().id())).isEmpty();
+        assertThat(store.deletedAt(s.conversation().id())).isPresent();
     }
 
     @Test

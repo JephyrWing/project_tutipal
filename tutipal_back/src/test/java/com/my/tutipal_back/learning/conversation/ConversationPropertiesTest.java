@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.time.Duration;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Configuration;
@@ -27,6 +29,7 @@ class ConversationPropertiesTest {
             assertThat(p).isEqualTo(ConversationProperties.defaults());
             assertThat(p.retentionDays()).isZero();
             assertThat(p.retentionBatchSize()).isEqualTo(500);
+            assertThat(p.deletedPurgeDays()).isEqualTo(30);
             assertThat(p.summary().threshold()).isEqualTo(20);
             assertThat(p.summary().keepRecent()).isEqualTo(6);
             assertThat(p.summary().maxInput()).isEqualTo(40);
@@ -47,8 +50,30 @@ class ConversationPropertiesTest {
                     ConversationProperties p = context.getBean(ConversationProperties.class);
                     assertThat(p.retentionDays()).isEqualTo(30);
                     assertThat(p.retentionBatchSize()).isEqualTo(100);
+                    assertThat(p.deletedPurgeDays()).isEqualTo(30);
                     assertThat(p.summary()).isEqualTo(
                             new ConversationProperties.Summary(10, 4, 12, Duration.ofSeconds(2)));
+                });
+    }
+
+    @Test
+    void bindsTheDeletedPurgeDays() {
+        runner.withPropertyValues("app.ai.conversations.deleted-purge-days=7")
+                .run(context -> assertThat(context.getBean(ConversationProperties.class).deletedPurgeDays())
+                        .isEqualTo(7));
+    }
+
+    /** 0 ("delete physically right away") is not supported: startup fails with the property name in the message. */
+    @ParameterizedTest
+    @ValueSource(strings = {"0", "-1"})
+    void deletedPurgeDaysBelowOneFailsAtStartup(String days) {
+        runner.withPropertyValues("app.ai.conversations.deleted-purge-days=" + days)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure()).rootCause()
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("app.ai.conversations.deleted-purge-days")
+                            .hasMessageContaining("1 이상");
                 });
     }
 }

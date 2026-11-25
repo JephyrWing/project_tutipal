@@ -200,6 +200,24 @@ class ConversationTurnIdempotencyWebTest {
         verifyNoInteractions(tutor);
     }
 
+    /** Soft delete: the stored pair of a deleted conversation is never replayed (404 like a missing one). */
+    @Test
+    void resendIntoADeletedConversationIs404AndReplaysNothing() throws Exception {
+        ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
+        store.insertPair(c.id(), "미분이 뭐예요?", "저장된 답변", "미분이 뭐예요?", NOW, KEY);
+        store.softDeleteConversation(c.id(), NOW);
+
+        MvcResult result = send(c.id(), "미분이 뭐예요?", KEY)
+                .andExpect(status().isNotFound())
+                .andExpect(request().asyncNotStarted())
+                .andExpect(jsonPath("$.status").value(404))
+                .andReturn();
+
+        assertThat(result.getResponse().getContentAsString(StandardCharsets.UTF_8)).doesNotContain("저장된 답변");
+        verifyNoInteractions(tutor);
+        assertThat(insertPairs()).isEqualTo(1);
+    }
+
     @Test
     void newKeyForTheSameTextIsANewTurn() throws Exception {
         ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);

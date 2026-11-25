@@ -13,9 +13,19 @@ import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-/** PT-106 ConversationStore on PostgreSQL. The caller owns the transaction; writes lock the conversation row first. */
+/**
+ * PT-106 ConversationStore on PostgreSQL. The caller owns the transaction; writes lock the conversation row first.
+ *
+ * <p>Soft delete: every read filters {@code deleted_at IS NULL} on the conversation, and reads of messages,
+ * summaries and memories also require their conversation to be live ({@link #LIVE_PARENT}), so a deleted
+ * conversation's rows can never reach a response or an Agent request even before they are purged.
+ */
 @Repository
 public class JdbcConversationStore implements ConversationStore {
+
+    /** Correlated check on a child row's conversation_id (messages, summaries, memories). */
+    static final String LIVE_PARENT = " EXISTS (SELECT 1 FROM ai_conversations live WHERE live.id = %s.conversation_id"
+            + " AND live.deleted_at IS NULL)";
 
     private static final String CONVERSATION_COLUMNS =
             "id, user_id, session_id, topic, title, message_count, created_at, last_message_at";
@@ -23,6 +33,11 @@ public class JdbcConversationStore implements ConversationStore {
     private static final String SUMMARY_COLUMNS =
             "id, conversation_id, text, from_message_id, to_message_id, created_at, superseded_at, invalidated_at";
     private static final String MEMORY_COLUMNS = "id, user_id, session_id, conversation_id, text, created_at";
+    private static final String LIVE_MESSAGE = String.format(LIVE_PARENT, "ai_conversation_messages");
+    private static final String LIVE_SUMMARY = String.format(LIVE_PARENT, "ai_conversation_summaries");
+    /** A live memory of a live conversation (recall, detail and the 20 cap). */
+    private static final String LIVE_MEMORY = " ai_memories.deleted_at IS NULL AND"
+            + String.format(LIVE_PARENT, "ai_memories");
 
     private final JdbcTemplate jdbc;
 
@@ -39,20 +54,21 @@ public class JdbcConversationStore implements ConversationStore {
 
     @Override
     public Optional<Conversation> findOwned(long userId, long conversationId) {
-        return first(jdbc.query("SELECT " + CONVERSATION_COLUMNS + " FROM ai_conversations WHERE id = ? AND user_id = ?",
-                JdbcConversationStore::conversation, conversationId, userId));
+        return first(jdbc.query("SELECT " + CONVERSATION_COLUMNS + " FROM ai_conversations WHERE id = ? AND user_id = ?"
+                        + " AND deleted_at IS NULL", JdbcConversationStore::conversation, conversationId, userId));
     }
 
     @Override
     public Optional<Conversation> lockOwned(long userId, long conversationId) {
         return first(jdbc.query("SELECT " + CONVERSATION_COLUMNS
-                        + " FROM ai_conversations WHERE id = ? AND user_id = ? FOR UPDATE",
+                        + " FROM ai_conversations WHERE id = ? AND user_id = ? AND deleted_at IS NULL FOR UPDATE",
                 JdbcConversationStore::conversation, conversationId, userId));
     }
 
     @Override
     public Optional<Conversation> find(long conversationId) {
-        return first(jdbc.query("SELECT " + CONVERSATION_COLUMNS + " FROM ai_conversations WHERE id = ?",
+        return first(jdbc.query("SELECT " + CONVERSATION_COLUMNS
+                        + " FROM ai_conversations WHERE id = ? AND deleted_at IS NULL",
                 JdbcConversationStore::conversation, conversationId));
     }
 
@@ -65,7 +81,8 @@ public class JdbcConversationStore implements ConversationStore {
 
     @Override
     public Optional<Conversation> lock(long conversationId) {
-        return first(jdbc.query("SELECT " + CONVERSATION_COLUMNS + " FROM ai_conversations WHERE id = ? FOR UPDATE",
+        return first(jdbc.query("SELECT " + CONVERSATION_COLUMNS
+                        + " FROM ai_conversations WHERE id = ? AND deleted_at IS NULL FOR UPDATE",
                 JdbcConversationStore::conversation, conversationId));
     }
 
@@ -73,7 +90,8 @@ public class JdbcConversationStore implements ConversationStore {
     public List<Conversation> list(long userId, Long sessionId, Cursor after, int limit) {
         String scope = sessionId == null ? "session_id IS NULL" : "session_id = ?";
         String keyset = after == null ? "" : " AND (last_message_at, id) < (?, ?)";
-        String sql = "SELECT " + CONVERSATION_COLUMNS + " FROM ai_conversations WHERE user_id = ? AND " + scope + keyset
+        String sql = "SELECT " + CONVERSATION_COLUMNS + " FROM ai_conversations WHERE user_id = ? AND " + scope
+                + " AND deleted_at IS NULL" + keyset
                 + " ORDER BY last_message_at DESC, id DESC LIMIT ?";
         ArrayList<Object> args = new ArrayList<>();
         args.add(userId);
@@ -89,24 +107,28 @@ public class JdbcConversationStore implements ConversationStore {
     }
 
     @Override
-    public void deleteConversation(long conversationId) {
-        jdbc.update("DELETE FROM ai_conversations WHERE id = ?", conversationId);
+    public void softDeleteConversation(long conversationId, Instant now) {
+        jdbc.update("UPDATE ai_conversations SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL", time(now),
+                conversationId);
     }
 
     @Override
     public List<Message> messagesBefore(long conversationId, Long beforeId, int limit) {
         if (beforeId == null) {
             return jdbc.query("SELECT " + MESSAGE_COLUMNS + " FROM ai_conversation_messages WHERE conversation_id = ?"
-                    + " ORDER BY id DESC LIMIT ?", JdbcConversationStore::message, conversationId, limit);
+                    + " AND" + LIVE_MESSAGE + " ORDER BY id DESC LIMIT ?", JdbcConversationStore::message,
+                    conversationId, limit);
         }
         return jdbc.query("SELECT " + MESSAGE_COLUMNS + " FROM ai_conversation_messages WHERE conversation_id = ?"
-                + " AND id < ? ORDER BY id DESC LIMIT ?", JdbcConversationStore::message, conversationId, beforeId, limit);
+                + " AND id < ? AND" + LIVE_MESSAGE + " ORDER BY id DESC LIMIT ?", JdbcConversationStore::message,
+                conversationId, beforeId, limit);
     }
 
     @Override
     public List<Message> recentMessagesAfter(long conversationId, long afterMessageId, int limit) {
         return jdbc.query("SELECT " + MESSAGE_COLUMNS + " FROM (SELECT " + MESSAGE_COLUMNS
-                        + " FROM ai_conversation_messages WHERE conversation_id = ? AND id > ? ORDER BY id DESC LIMIT ?)"
+                        + " FROM ai_conversation_messages WHERE conversation_id = ? AND id > ? AND" + LIVE_MESSAGE
+                        + " ORDER BY id DESC LIMIT ?)"
                         + " recent ORDER BY id",
                 JdbcConversationStore::message, conversationId, afterMessageId, limit);
     }
@@ -114,7 +136,7 @@ public class JdbcConversationStore implements ConversationStore {
     @Override
     public int countMessagesAfter(long conversationId, long afterMessageId) {
         Integer count = jdbc.queryForObject(
-                "SELECT count(*) FROM ai_conversation_messages WHERE conversation_id = ? AND id > ?",
+                "SELECT count(*) FROM ai_conversation_messages WHERE conversation_id = ? AND id > ? AND" + LIVE_MESSAGE,
                 Integer.class, conversationId, afterMessageId);
         return count == null ? 0 : count;
     }
@@ -122,7 +144,8 @@ public class JdbcConversationStore implements ConversationStore {
     @Override
     public List<Message> oldestMessagesAfter(long conversationId, long afterMessageId, int limit) {
         return jdbc.query("SELECT " + MESSAGE_COLUMNS + " FROM ai_conversation_messages WHERE conversation_id = ?"
-                + " AND id > ? ORDER BY id LIMIT ?", JdbcConversationStore::message, conversationId, afterMessageId, limit);
+                + " AND id > ? AND" + LIVE_MESSAGE + " ORDER BY id LIMIT ?", JdbcConversationStore::message,
+                conversationId, afterMessageId, limit);
     }
 
     @Override
@@ -152,7 +175,7 @@ public class JdbcConversationStore implements ConversationStore {
         List<Message> rows = jdbc.query("SELECT " + MESSAGE_COLUMNS + " FROM ai_conversation_messages"
                         + " WHERE conversation_id = ? AND id >= (SELECT id FROM ai_conversation_messages"
                         + " WHERE conversation_id = ? AND client_message_id = ? AND role = 'user')"
-                        + " ORDER BY id LIMIT 2",
+                        + " AND" + LIVE_MESSAGE + " ORDER BY id LIMIT 2",
                 JdbcConversationStore::message, conversationId, conversationId, clientMessageId);
         if (rows.size() < 2 || !"user".equals(rows.get(0).role()) || !"assistant".equals(rows.get(1).role())) {
             return Optional.empty();
@@ -163,13 +186,15 @@ public class JdbcConversationStore implements ConversationStore {
     @Override
     public Optional<Summary> activeSummary(long conversationId) {
         return first(jdbc.query("SELECT " + SUMMARY_COLUMNS + " FROM ai_conversation_summaries"
-                        + " WHERE conversation_id = ? AND superseded_at IS NULL AND invalidated_at IS NULL",
+                        + " WHERE conversation_id = ? AND superseded_at IS NULL AND invalidated_at IS NULL AND"
+                        + LIVE_SUMMARY,
                 JdbcConversationStore::summary, conversationId));
     }
 
     @Override
     public Optional<Summary> findSummary(long summaryId) {
-        return first(jdbc.query("SELECT " + SUMMARY_COLUMNS + " FROM ai_conversation_summaries WHERE id = ?",
+        return first(jdbc.query("SELECT " + SUMMARY_COLUMNS + " FROM ai_conversation_summaries WHERE id = ? AND"
+                        + LIVE_SUMMARY,
                 JdbcConversationStore::summary, summaryId));
     }
 
@@ -191,25 +216,27 @@ public class JdbcConversationStore implements ConversationStore {
     public List<Memory> memories(long userId, Long sessionId, int limit) {
         if (sessionId == null) {
             return jdbc.query("SELECT " + MEMORY_COLUMNS + " FROM ai_memories WHERE user_id = ? AND session_id IS NULL"
-                    + " ORDER BY created_at DESC, id DESC LIMIT ?", JdbcConversationStore::memory, userId, limit);
+                    + " AND" + LIVE_MEMORY + " ORDER BY created_at DESC, id DESC LIMIT ?", JdbcConversationStore::memory,
+                    userId, limit);
         }
         return jdbc.query("SELECT " + MEMORY_COLUMNS + " FROM ai_memories WHERE user_id = ? AND session_id = ?"
-                + " ORDER BY created_at DESC, id DESC LIMIT ?", JdbcConversationStore::memory, userId, sessionId, limit);
+                + " AND" + LIVE_MEMORY + " ORDER BY created_at DESC, id DESC LIMIT ?", JdbcConversationStore::memory,
+                userId, sessionId, limit);
     }
 
     @Override
     public List<Memory> memoriesOf(long conversationId) {
-        return jdbc.query("SELECT " + MEMORY_COLUMNS + " FROM ai_memories WHERE conversation_id = ?"
+        return jdbc.query("SELECT " + MEMORY_COLUMNS + " FROM ai_memories WHERE conversation_id = ? AND" + LIVE_MEMORY
                 + " ORDER BY created_at DESC, id DESC", JdbcConversationStore::memory, conversationId);
     }
 
     @Override
     public int countMemories(long userId, Long sessionId) {
         Integer count = sessionId == null
-                ? jdbc.queryForObject("SELECT count(*) FROM ai_memories WHERE user_id = ? AND session_id IS NULL",
-                        Integer.class, userId)
-                : jdbc.queryForObject("SELECT count(*) FROM ai_memories WHERE user_id = ? AND session_id = ?",
-                        Integer.class, userId, sessionId);
+                ? jdbc.queryForObject("SELECT count(*) FROM ai_memories WHERE user_id = ? AND session_id IS NULL"
+                        + " AND" + LIVE_MEMORY, Integer.class, userId)
+                : jdbc.queryForObject("SELECT count(*) FROM ai_memories WHERE user_id = ? AND session_id = ?"
+                        + " AND" + LIVE_MEMORY, Integer.class, userId, sessionId);
         return count == null ? 0 : count;
     }
 
@@ -221,18 +248,37 @@ public class JdbcConversationStore implements ConversationStore {
     }
 
     @Override
-    public boolean deleteMemory(long conversationId, long memoryId) {
-        return jdbc.update("DELETE FROM ai_memories WHERE id = ? AND conversation_id = ?", memoryId, conversationId) > 0;
+    public boolean softDeleteMemory(long conversationId, long memoryId, Instant now) {
+        return jdbc.update("UPDATE ai_memories SET deleted_at = ? WHERE id = ? AND conversation_id = ?"
+                + " AND deleted_at IS NULL", time(now), memoryId, conversationId) > 0;
     }
 
-    @Override
     /**
      * Rows locked by a turn being saved are skipped (SKIP LOCKED), and the outer DELETE re-checks the cutoff so a
-     * conversation whose last_message_at moved past it meanwhile is kept.
+     * conversation whose last_message_at moved past it meanwhile is kept. Soft-deleted conversations are included:
+     * retention removes whatever is older than the cutoff.
      */
+    @Override
     public int deleteInactiveBefore(Instant cutoff, int limit) {
         return jdbc.update("DELETE FROM ai_conversations WHERE last_message_at < ? AND id IN (SELECT id"
                         + " FROM ai_conversations WHERE last_message_at < ? ORDER BY last_message_at, id LIMIT ?"
+                        + " FOR UPDATE SKIP LOCKED)",
+                time(cutoff), time(cutoff), limit);
+    }
+
+    /** Same shape as deleteInactiveBefore: locked rows are skipped and the outer DELETE re-checks deleted_at. */
+    @Override
+    public int purgeDeletedConversationsBefore(Instant cutoff, int limit) {
+        return jdbc.update("DELETE FROM ai_conversations WHERE deleted_at < ? AND id IN (SELECT id"
+                        + " FROM ai_conversations WHERE deleted_at < ? ORDER BY deleted_at, id LIMIT ?"
+                        + " FOR UPDATE SKIP LOCKED)",
+                time(cutoff), time(cutoff), limit);
+    }
+
+    @Override
+    public int purgeDeletedMemoriesBefore(Instant cutoff, int limit) {
+        return jdbc.update("DELETE FROM ai_memories WHERE deleted_at < ? AND id IN (SELECT id"
+                        + " FROM ai_memories WHERE deleted_at < ? ORDER BY deleted_at, id LIMIT ?"
                         + " FOR UPDATE SKIP LOCKED)",
                 time(cutoff), time(cutoff), limit);
     }

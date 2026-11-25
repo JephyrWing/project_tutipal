@@ -9,6 +9,10 @@ import java.util.UUID;
  * PT-106 AI 대화 저장소 (V21: ai_conversations, ai_conversation_messages, ai_conversation_summaries, ai_memories).
  * 트랜잭션은 호출자(ConversationService)가 연다. 쓰기 전에는 lockOwned / lock 으로 대화 행을 잠근다.
  * 메시지 순서는 id(identity) 순서다. sessionId 가 null 이면 개인 학습 대화.
+ *
+ * <p>삭제: 사용자가 지운 대화 · 기억은 deleted_at 만 채운다 (soft delete). 아래 조회는 모두 살아 있는 것만 본다:
+ * 지운 대화는 소유자 조회 · 잠금 · 목록에 없고, 그 대화의 메시지 · 요약 · 기억도 조회되지 않는다 (없는 것과 같다).
+ * 물리 삭제는 유예 기간 뒤 purgeDeleted* 와 보관 기간 작업, 탈퇴 · 수업 삭제(FK CASCADE)뿐이다.
  */
 public interface ConversationStore {
 
@@ -62,8 +66,11 @@ public interface ConversationStore {
     /** 최근 대화부터 (last_message_at DESC, id DESC). sessionId 가 null 이면 개인 대화만. */
     List<Conversation> list(long userId, Long sessionId, Cursor after, int limit);
 
-    /** 대화 행 하나만 지운다. 메시지 · 요약 · 기억은 ON DELETE CASCADE. */
-    void deleteConversation(long conversationId);
+    /**
+     * 사용자 삭제: deleted_at = now (이미 지운 대화는 그대로). 그 순간부터 메시지 · 요약 · 기억도 모든 조회에서 빠진다.
+     * 물리 삭제는 {@link #purgeDeletedConversationsBefore} 가 유예 기간 뒤 한다 (ON DELETE CASCADE).
+     */
+    void softDeleteConversation(long conversationId, Instant now);
 
     /** beforeId 보다 앞의 메시지, 최신부터. beforeId 가 null 이면 마지막 메시지부터. */
     List<Message> messagesBefore(long conversationId, Long beforeId, int limit);
@@ -104,19 +111,28 @@ public interface ConversationStore {
 
     Summary insertSummary(long conversationId, String text, long fromMessageId, long toMessageId, Instant now);
 
-    /** 같은 (사용자, 범위) 기억, 최신부터. sessionId 가 null 이면 개인 기억만. */
+    /** 같은 (사용자, 범위) 기억, 최신부터. sessionId 가 null 이면 개인 기억만. 지운 기억 · 지운 대화의 기억은 뺀다. */
     List<Memory> memories(long userId, Long sessionId, int limit);
 
     /** 이 대화에서 저장한 기억, 최신부터 (범위당 최대 20개라 크기가 제한된다). */
     List<Memory> memoriesOf(long conversationId);
 
+    /** 범위의 살아 있는 기억 수 (20개 상한). memories 와 같은 조건. */
     int countMemories(long userId, Long sessionId);
 
     Memory insertMemory(long userId, Long sessionId, long conversationId, String text, Instant now);
 
-    /** 이 대화의 기억이면 지우고 true. */
-    boolean deleteMemory(long conversationId, long memoryId);
+    /** 이 대화의 살아 있는 기억이면 deleted_at = now 로 지우고 true. */
+    boolean softDeleteMemory(long conversationId, long memoryId, Instant now);
 
-    /** last_message_at < cutoff 인 대화를 최대 limit 개 지우고 지운 수를 돌려준다 (보관 기간 작업). */
+    /**
+     * last_message_at < cutoff 인 대화를 (지운 것 포함) 최대 limit 개 물리 삭제하고 지운 수를 돌려준다 (보관 기간 작업).
+     */
     int deleteInactiveBefore(Instant cutoff, int limit);
+
+    /** deleted_at < cutoff 인 대화를 최대 limit 개 물리 삭제한다 (메시지 · 요약 · 기억은 CASCADE). */
+    int purgeDeletedConversationsBefore(Instant cutoff, int limit);
+
+    /** deleted_at < cutoff 인 기억을 최대 limit 개 물리 삭제한다. */
+    int purgeDeletedMemoriesBefore(Instant cutoff, int limit);
 }

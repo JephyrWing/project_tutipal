@@ -87,13 +87,15 @@ class JdbcConversationStoreSqlTest {
         assertThat(sql(invocations())).anySatisfy(s -> assertThat(s).contains("for update"));
     }
 
+    /** PM decision: the user's delete is a soft delete; the physical DELETE (CASCADE) is the purge job's. */
     @Test
-    void deleteConversationIsOneDeleteRelyingOnCascade() {
-        quietly(() -> store.deleteConversation(7L));
+    void deleteConversationIsOneUpdateOfDeletedAt() {
+        quietly(() -> store.softDeleteConversation(7L, java.time.Instant.parse("2026-11-25T00:00:00Z")));
 
         List<String> sent = sql(invocations());
         assertThat(sent).hasSize(1);
-        assertThat(sent.getFirst()).startsWith("delete from ai_conversations");
+        assertThat(sent.getFirst()).startsWith("update ai_conversations set deleted_at = ?")
+                .contains("deleted_at is null").doesNotContain("delete from");
         assertThat(args(invocations())).contains(7L);
     }
 
