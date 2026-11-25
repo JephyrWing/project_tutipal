@@ -60,14 +60,18 @@ def original_question_text(source: Mapping[str, object]) -> str:
 
 
 def build_instructions(*, agent: str, topic: str, difficulty: int, hide_answers: bool,
-                       route: str, hint_level: int | None, variant_fallback: bool = False,
+                       route: str, hint_level: int | None, stuck: bool = False, variant_fallback: bool = False,
                        original_question: str | None = None) -> str:
-    """Policy part of the system prompt. HIDE_ANSWERS_RULE is added for every route when the policy hides answers."""
+    """Policy part of the system prompt. HIDE_ANSWERS_RULE is added for every route when the policy hides answers.
+
+    The hint-level rule joins it on a stuck turn (`stuck`, e.g. "여전히 모르겠어요" routed to concept) and on
+    answer_request/answer_check/code_debug; a plain concept question ("for문이 뭐예요?") gets none.
+    """
     template = STUDENT_RULE if agent == "student" else PERSONAL_RULE
     parts = [BASE_RULE, template.format(topic=_inline(topic), difficulty=difficulty)]
     if hide_answers:
         parts.append(HIDE_ANSWERS_RULE)
-        if hint_level is not None and route != "concept":
+        if hint_level is not None and (stuck or route != "concept"):
             parts.append(HINT_RULES[hint_level])
     if route == "answer_check":
         parts.append(ANSWER_CHECK_RULE)

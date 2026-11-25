@@ -53,6 +53,9 @@ class Decision:
     route: Route
     hint_level: int | None
     suggest_help: bool
+    # The current question says it is stuck or asks for the answer; prompts uses it to add the
+    # hint-level rule to a stuck turn that classify() still routes to concept.
+    stuck: bool = False
 
 
 def classify(question: str) -> Route:
@@ -91,12 +94,13 @@ def decide(agent: str, question: str, messages: Sequence[Mapping[str, str]]) -> 
             break
         streak += 1
     hint_level = min(MAX_HINT_LEVEL, 1 + streak)
+    stuck = is_stuck(question, route)
 
     last_assistant = next((_content(m) for m in reversed(window) if m["role"] == "assistant"), "")
     if HELP_SUGGESTION_MARKER in last_assistant:
-        return Decision(route=route, hint_level=hint_level, suggest_help=False)
+        return Decision(route=route, hint_level=hint_level, suggest_help=False, stuck=stuck)
 
-    still_stuck = hint_level == MAX_HINT_LEVEL and is_stuck(question, route)
+    still_stuck = hint_level == MAX_HINT_LEVEL and stuck
     debug_count = sum(1 for _, text_route in user_turns if text_route == "code_debug")
     repeated_debug = route == "code_debug" and debug_count + 1 >= CODE_DEBUG_HELP_COUNT
-    return Decision(route=route, hint_level=hint_level, suggest_help=still_stuck or repeated_debug)
+    return Decision(route=route, hint_level=hint_level, suggest_help=still_stuck or repeated_debug, stuck=stuck)

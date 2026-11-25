@@ -31,6 +31,7 @@ class AgentState(TypedDict, total=False):
     route: str
     hint_level: int | None
     suggest_help: bool
+    stuck: bool
     action: Action
     error: str | None
     query: str | None
@@ -49,7 +50,7 @@ def _guarded(node: str, tool: str, state: AgentState, action: Action) -> dict:
 def classify_node(state: AgentState) -> dict:
     decision = decide(state["agent"], state["question"], state["window"])
     return {"route": decision.route, "hint_level": decision.hint_level,
-            "suggest_help": decision.suggest_help, "nodes": ["classify"]}
+            "suggest_help": decision.suggest_help, "stuck": decision.stuck, "nodes": ["classify"]}
 
 
 def _search_query(state: AgentState) -> str | None:

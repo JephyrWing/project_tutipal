@@ -264,7 +264,7 @@ def _chat_request(request: AgentChatRequest, turn: _Turn, decided: dict,
         original = shorten(prompts.original_question_text(source), ORIGINAL_QUESTION_LIMIT)[0]
     instructions = prompts.build_instructions(
         agent=request.agent, topic=policy.topic, difficulty=policy.difficulty, hide_answers=policy.hideAnswers,
-        route=decided["route"], hint_level=turn.hint_level, variant_fallback=variant_fallback,
+        route=decided["route"], hint_level=turn.hint_level, stuck=decided["stuck"], variant_fallback=variant_fallback,
         original_question=original,
     )
     context = request.context
