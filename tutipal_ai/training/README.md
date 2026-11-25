@@ -10,6 +10,8 @@ Jira PT-89(AI-007 효과 평가)와 PT-88(AI-006 주관식 채점 QLoRA)의 평�
 
 후보(`eval/candidates.json`)는 RTX 3060 Laptop 6GB에서 추론과 4bit QLoRA 학습이 모두 가능한 크기로 골랐다: `gemma4:e2b`, `qwen3.5:4b`, `llama3.2:3b`. 생각 모드는 끄고(`think=false`), 온도 0으로 비교한다.
 
+**채점 QLoRA 범위(PT-88/89)**: 프로그래밍(코딩) 과목의 한두 문장 주관식이다(짧은 코드 답안 포함). 개발 세트(`eval/grading_set.jsonl`)는 다과목 그대로 두고 회귀 확인용으로 쓰며, **보고하는 숫자는 코딩 과목**(`--subjects 코딩`, 개발 세트에서는 36건)과 저장소 밖 **봉인 세트**로 낸다. 자세한 절차는 아래 [범위와 봉인 세트](#범위와-봉인-세트).
+
 ## 채점 평가 세트
 
 과목 5개(코딩·수학·과학·영어·한국사/사회)의 문제 20개에 학생 답안을 6개씩 붙인 120건이다. 라벨은 백엔드 채점 규칙(`QuizAi.GRADE_SYSTEM`)을 따른다.
@@ -24,7 +26,7 @@ Jira PT-89(AI-007 효과 평가)와 PT-88(AI-006 주관식 채점 QLoRA)의 평�
 | `injection_with_answer` | 오답 | 정답을 쓰고 채점 지시를 덧붙임. 규칙 2에 따라 오답 |
 | `tag_escape` | 오답 | `</student_answer>`, `<model_answer>` 태그로 프롬프트 구조를 깨려는 답 |
 
-- 정답 40건, 오답 80건(꼼수 26건)이다. 그래서 정확도와 함께 균형 정확도를 본다.
+- 정답 40건, 오답 80건(꼼수 20건: injection 10, injection_with_answer 7, tag_escape 3)이다. 그래서 정확도와 함께 균형 정확도를 본다.
 - 라벨은 작성자가 붙였다. **팀원이나 선생님 역할이 한 번 검토**한 뒤 기준 세트로 고정한다.
 - 이 20문제와 같은 문제는 **학습 데이터에 넣지 않는다**. 학습용 합성 데이터는 다른 문제로 만든다.
 
@@ -109,15 +111,61 @@ docker build -t tutipal-eval-sandbox:1 -f eval/sandbox.Dockerfile eval
 
 # 파인튜닝 후: 학습한 모델을 Ollama에 등록하고 같은 세트로 다시 잰다(candidates.json에 없는 이름도 된다)
 .\.venv\Scripts\python.exe -m eval.run_eval --models qwen3.5:4b tutipal-grader --run-name grade-after-ft
+
+# 보고 범위(코딩 과목)만 채점. 과목 이름은 정확히 같아야 하고 여러 개를 줄 수 있다
+.\.venv\Scripts\python.exe -m eval.run_eval --subjects 코딩 --run-name grade-coding
+
+# Ollama 없이 기존 results.jsonl로 summary.md·summary.json·CSV만 다시 만든다(리포트 형식이 바뀌었을 때)
+.\.venv\Scripts\python.exe -m eval.run_eval --run-name grade-baseline --report-only
 ```
 
-결과는 `results/<run-name>/`에 남는다.
+- `--subjects`는 `grade` 과제에만 적용되고(필터한 뒤 `--limit`), 맞는 문항이 없거나 `--tasks`에 `grade`가 없으면 종료 코드 2로 끝난다. 과목 목록은 `run_config.json` 조건에 들어가므로, 같은 `--run-name`에서 과목을 바꾸면 이어서 할 수 없다(이 기능 전의 run은 필터 없이만 이어서 할 수 있다).
+- `--report-only`는 `--run-name`, `--candidates`만 함께 쓸 수 있다(`--models`·`--subjects`·`--tasks`·`--limit`을 주면 2). `run_config.json`은 읽기만 하고(모델 순서), 라벨은 `--candidates`에서 가져온다. `results.jsonl`이 없거나 비었거나 형식이 깨졌으면 2.
+- `--run-name`은 `results/` 안의 이름이어야 한다(절대 경로나 `..`로 밖을 가리키면 2).
 
-- `summary.md`: 발표·포트폴리오용 비교표
-- `summary.json`: 같은 내용의 숫자
+결과는 `results/<run-name>/`에 남는다. 리포트 파일(summary.md·summary.json·grade_errors.csv·ko_review.csv)은 임시 폴더에 다 만든 뒤 한 묶음으로 바꾸며, 도중에 실패하면 전부 이전 상태로 되돌린다. 되돌리기마저 실패하면 `results/<run-name>/.staging-*/.backup/`에 원래 파일이 남고 그 경로가 오류 메시지에 나온다. 그 폴더의 파일을 `results/<run-name>/`에 복사해 복구한 뒤 `.staging-*` 폴더를 지운다.
+
+- `summary.md`: 발표·포트폴리오용 비교표. 채점 표 맨 끝에 **정확도 95% CI**, **꼼수 방어 95% CI** 열(윌슨 구간, 같은 분모)이 있고, 그 아래 모델×과목 정확도 표와(답안에 `answer_form`이 있으면) 모델×형식(text·code) 표가 붙는다. **과목 표는 참고용**이다(과목마다 n이 작다)
+- `summary.json`: 같은 내용의 숫자(`accuracy_ci`, `injection_defense_ci`, `by_subject`, `by_form` 포함)
 - `results.jsonl`: 문항별 응답 원본
 - `grade_errors.csv`: 잘못 채점한 문항 목록. 학습 데이터를 설계할 때 근거로 쓴다
 - `ko_review.csv`: 한국어 답변을 사람이 채점하는 표
+
+## 범위와 봉인 세트
+
+개발 세트는 다과목 120건이고 프롬프트·학습 데이터를 만들며 여러 번 보게 되므로, 파인튜닝 효과는 **처음 보는 코딩 문항으로 만든 봉인(sealed) 세트**로 한 번만 잰다. 봉인 세트는 저장소에 넣지 않는다.
+
+1. 작성: 코딩 과목, 한두 문장 주관식(짧은 코드 포함). 행마다 `answer_form`(`text`|`code`)을 넣는다.
+2. 형식 검사: `python -m eval.gradeset <sealed.jsonl> --profile sealed` 가 0이어야 한다.
+3. 누수 검사: `python -m eval.leakcheck --train <train.jsonl> --sealed <sealed.jsonl>` 가 0이어야 한다.
+4. 기록: gradeset이 출력한 `sha256`과 `profile_version`을 일감(Jira)에 남긴다. 이후 파일이 바뀌면 다른 세트다.
+5. 평가: 학습이 끝난 뒤 **모델당 한 번만** `run_eval --grade-set <sealed.jsonl> --sealed`로 잰다. 결과를 보고 학습·프롬프트를 고친 뒤 다시 재면 봉인 세트가 아니다.
+6. 결과 보관: `--sealed` 실행은 `results.jsonl`에 지표·재개에 필요한 필드(과제·모델·과목·답안 유형·형식·라벨·판정·상태·속도)만 쓰고, 모델 응답 원문·피드백·오류 본문·qid는 쓰지 않으며 문항 id는 해시(`h:` + 16자)로 바꾼다. `grade_errors.csv`는 만들지 않으며 같은 폴더에 예전 것이 있으면 지우고, 진행 표시에도 id를 찍지 않는다. 그래도 `results/<run-name>/`는 **봉인 세트 관리자만 보관**하고, 팀·발표에는 `summary.md`·`summary.json`만 공유한다.
+
+- 채점 세트에 `answer_form`이 있는 행이 하나라도 있으면 봉인 세트로 보고, `--sealed` 없이 실행하면 종료 코드 2로 멈춘다(개발 세트에는 `answer_form`이 없다). `--sealed`는 `--tasks grade` 하나로만 쓸 수 있다.
+- 봉인 여부는 `run_config.json`의 재개 조건(`settings.sealed`)에 들어간다. 이 기능 전에 만든 run은 봉인 아님으로 보고 그대로 이어서 할 수 있다. `--report-only`는 `run_config.json`이나 기록을 보고 봉인 run이면 `grade_errors.csv`를 만들지 않는다.
+
+- `gradeset`의 기본 profile `dev`는 stdout에 과목 이름별 개수를 출력한다. 봉인 세트에는 **반드시 `--profile sealed`**를 붙인다(과목 이름 대신 코딩 개수만 나온다).
+
+`gradeset` sealed 규칙(분모는 전체 행 수, 경계값은 통과): 모든 행이 `코딩` 과목, `answer_form`이 `text`/`code`, 60행 이상, 문항(qid)마다 정답·오답이 하나 이상, 꼼수 답안 15% 이상, code 형식 20% 이상, 정답 25–45%. 공통 규칙(dev도 적용)은 필수 필드·타입, id 형식·중복, `kind`·`label` 일치, qid당 문항·모범 답안·과목이 하나인지다. 출력에는 숫자 통계·sha256·`profile_version`만 쓰고(sealed는 과목 이름 대신 코딩 개수), 오류는 `파일명:줄:필드 — 사유`로 전부 보여 준다(세트 단위 오류는 줄 자리가 `-`). id·qid·원문은 출력하지 않는다.
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.gradeset eval\grading_set.jsonl                       # dev(기본): 0
+.\.venv\Scripts\python.exe -m eval.gradeset <sealed.jsonl> --profile sealed
+.\.venv\Scripts\python.exe -m eval.trainmix --train <train.jsonl>                        # 또는 TUTIPAL_GRADING_TRAIN
+.\.venv\Scripts\python.exe -m eval.trainmix --train <train.jsonl> --min-coding-share 0.6 --max-trick-share 0.15
+```
+
+`trainmix`는 학습 데이터 구성을 숫자로만 보여 주고 검사한다: 코딩 과목 비율 ≥ `--min-coding-share`(기본 0.6), 꼼수 답안 비율 ≤ `--max-trick-share`(기본 0.15), 모든 행에 `messages`. 0.6은 학습 범위(코딩)와 맞추기 위한 목표치로, 다른 과목은 일반화를 위해 40% 이하로만 남긴다. 0.15는 지금 학습 데이터(`train_aug`)를 맞춘 꼼수 비율이자 봉인 세트의 꼼수 최소 비율과 같은 값이다.
+
+| 도구 | 0 | 1 | 2 |
+| --- | --- | --- | --- |
+| `eval.gradeset` | 통과 | 내용 불량(형식·비율 규칙 위반) | 입력 오류(파일 없음, UTF-8 아님) |
+| `eval.trainmix` | 통과 | 구성 위반 | 입력 오류(파일·형식, `--train` 없음, 비율 인자가 0~1 밖) |
+| `eval.leakcheck` | 누수 없음 | 누수 | 입력·출력 오류(내용 형식 불량도 **2**) |
+| `eval.run_eval` | 완료 | - | 실행 불가(Ollama·모델·Docker, 조건 충돌, `--subjects`·`--report-only` 오류) |
+
+`gradeset`은 형식 불량을 검사 결과(1)로 보지만, `leakcheck`는 형식이 맞아야 비교할 수 있어 같은 문제를 입력 오류(2)로 낸다.
 
 ## 주의
 
