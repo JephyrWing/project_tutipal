@@ -11,6 +11,7 @@ import org.springframework.stereotype.Repository;
  *   <li>이 사람이 연 세션: 세션 안의 퀴즈·답안·공지·게시글·자료·도움 요청·참가자까지 통째로 (세션 주인이 없어지므로)</li>
  *   <li>다른 세션: 이 사람의 답안·게시글(달린 댓글 포함)·댓글·도움 요청·자료·참가 기록</li>
  *   <li>복습 기록(review_items)은 users 삭제 때 ON DELETE CASCADE</li>
+ *   <li>AI 대화(ai_conversations · 메시지 · 요약 · ai_memories, PT-106)는 users · study_sessions 삭제 때 ON DELETE CASCADE</li>
  * </ul>
  * ponytail: NFR-PRV-02 보관 기간이 미정(PT-13)이라 "탈퇴 즉시 전부 삭제"로 둠. 보관 기간이 정해지면 바로 지우지 말고
  *   익명화(author_id → 탈퇴 계정) 또는 지연 삭제 작업으로 바꾼다. 새 테이블이 users 를 참조하면 아래 목록에도 추가해야 한다.
