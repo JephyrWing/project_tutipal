@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { formatRetryTime, isQuotaError } from '../api/client'
 import { streamChat } from '../api/tutor'
 import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
 import SubjectPicker from '../components/SubjectPicker'
+import { useRetryLock } from '../utils/useRetryLock'
 
 /** 예전 주소(?topic=coding)도 열리게 id → 과목 이름 */
 const LEGACY = { general: '자유 주제', coding: '코딩', english: '영어', math: '수학' }
@@ -47,6 +49,9 @@ export function ChatPanel({ topic, onTopicChange, sessionId, initialAsk, onAsked
   const abortRef = useRef(null)
   const sending = useRef(false)
   const endRef = useRef(null)
+  /** 챗봇 질문 한도(429)를 다 쓰면 기다릴 시간 동안 보내기를 막는다. 이 패널이 떠 있는 동안만 유지되고(주제를 바꿔도 유지),
+   * 페이지 · 세션 탭을 떠났다 오면 풀린다: 그때 다시 보내면 서버가 다시 429 로 막는다 (한도는 서버가 사용자 단위로 지킴). */
+  const [lock, lockFor] = useRetryLock()
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' })
@@ -74,7 +79,7 @@ export function ChatPanel({ topic, onTopicChange, sessionId, initialAsk, onAsked
 
   async function send(text, prior = bubbles) {
     const question = text.trim()
-    if (!question || sending.current) return
+    if (!question || sending.current || lock) return
     sending.current = true
     const history = [
       ...prior
@@ -107,11 +112,15 @@ export function ChatPanel({ topic, onTopicChange, sessionId, initialAsk, onAsked
       })
     } catch (e) {
       if (abortRef.current === controller) {
+        const quota = !controller.signal.aborted && isQuotaError(e)
+        if (quota) lockFor(e)
         setBubbles((prev) => {
           const next = [...prev]
           next[next.length - 1] = {
             role: 'assistant',
-            content: controller.signal.aborted ? '답변을 중지했어요' : e instanceof Error ? e.message : '답변하지 못했어요',
+            content: controller.signal.aborted ? '답변을 중지했어요'
+              : quota ? `챗봇 질문 한도를 다 썼어요. ${formatRetryTime(e.retryAt)} 이후 다시 물어봐 주세요`
+                : e instanceof Error ? e.message : '답변하지 못했어요',
             error: true,
           }
           return next
@@ -190,7 +199,8 @@ export function ChatPanel({ topic, onTopicChange, sessionId, initialAsk, onAsked
       </div>
 
       {!streaming && last?.error && bubbles.at(-2)?.role === 'user' &&
-        <button className="btn" onClick={() => void send(bubbles.at(-2).content, bubbles.slice(0, -2))}>답변 다시 시도</button>}
+        <button className="btn" disabled={!!lock}
+          onClick={() => void send(bubbles.at(-2).content, bubbles.slice(0, -2))}>답변 다시 시도</button>}
       <form className="chat-input" onSubmit={onSubmit}>
         <textarea
           value={input}
@@ -205,7 +215,8 @@ export function ChatPanel({ topic, onTopicChange, sessionId, initialAsk, onAsked
             <Icon name="stop" size={18} /> 중지
           </button>
         ) : (
-          <button type="submit" className="btn btn-primary" disabled={!input.trim()}>
+          <button type="submit" className="btn btn-primary" disabled={!input.trim() || !!lock}
+            title={lock ? `${formatRetryTime(lock.retryAt)} 이후 다시 보낼 수 있어요` : undefined}>
             보내기
           </button>
         )}
