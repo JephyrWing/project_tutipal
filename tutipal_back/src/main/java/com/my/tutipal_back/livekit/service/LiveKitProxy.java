@@ -27,7 +27,7 @@ public class LiveKitProxy implements WebSocketConfigurer {
     private record Pair(WebSocketSession client, WebSocketSession upstream, LiveKitAccess.Access access) {}
     private final LiveKitAccess access;
     private final String internal;
-    @Value("${app.allowed-origins:http://127.0.0.1:*,http://localhost:*}") private String[] allowedOrigins;
+    @Value("${app.allowed-origins:http://127.0.0.1:[*],http://localhost:[*]}") private String[] allowedOrigins;
     private final LiveKitAdmin admin;
     private record Removal(String room,String identity) {}
     private final ConcurrentHashMap<String,Removal> pendingRemovals=new ConcurrentHashMap<>();
