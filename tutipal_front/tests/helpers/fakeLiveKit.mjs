@@ -23,7 +23,9 @@ export function fakeLiveKit(secret) {
       canSubscribe: v.canSubscribe, canPublishData: v.canPublishData, sources: v.canPublishSources ?? [] })
   }
   const json = (res, value) => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(value))
-  const server = createServer(async (req, res) => {
+  // Java HttpClient offers h2c on validation GETs. Keep those as HTTP/1 requests;
+  // only actual WebSocket handshakes belong to the WS upgrade handler.
+  const server = createServer({ shouldUpgradeCallback: req => req.headers.upgrade?.toLowerCase() === 'websocket' }, async (req, res) => {
     try {
       const url = new URL(req.url, 'http://127.0.0.1')
       if (req.method === 'GET' && url.pathname === '/rtc/validate') {
