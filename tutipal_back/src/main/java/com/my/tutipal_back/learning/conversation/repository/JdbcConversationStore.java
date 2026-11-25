@@ -50,6 +50,19 @@ public class JdbcConversationStore implements ConversationStore {
     }
 
     @Override
+    public Optional<Conversation> find(long conversationId) {
+        return first(jdbc.query("SELECT " + CONVERSATION_COLUMNS + " FROM ai_conversations WHERE id = ?",
+                JdbcConversationStore::conversation, conversationId));
+    }
+
+    /** Transaction-scoped advisory lock on (user, scope); released at commit / rollback. */
+    @Override
+    public void lockMemoryScope(long userId, Long sessionId) {
+        String key = "ai_memories:" + userId + ":" + (sessionId == null ? "personal" : sessionId);
+        jdbc.query("SELECT pg_advisory_xact_lock(hashtextextended(?, 0))", (rs, row) -> null, key);
+    }
+
+    @Override
     public Optional<Conversation> lock(long conversationId) {
         return first(jdbc.query("SELECT " + CONVERSATION_COLUMNS + " FROM ai_conversations WHERE id = ? FOR UPDATE",
                 JdbcConversationStore::conversation, conversationId));

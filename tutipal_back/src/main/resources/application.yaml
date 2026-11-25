@@ -107,6 +107,10 @@ app:
         keep-recent: 6
         max-input: 40
         slot-wait: 5s
+        # 서버 전체 동시 요약 수. 1 = 요약이 AiSlots 자리를 하나만 써서 채팅 자리를 남긴다 (자리가 없으면 건너뜀)
+        max-concurrent: 1
+        # FastAPI 로 보내는 요약 입력 글자 합계 상한 (FastAPI 가 모델 문맥에 맞게 다시 줄인다)
+        max-input-chars: 12000
   livekit:
     api-key: ${LIVEKIT_API_KEY:}
     api-secret: ${LIVEKIT_API_SECRET:}

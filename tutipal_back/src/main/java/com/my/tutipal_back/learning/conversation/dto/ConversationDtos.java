@@ -14,13 +14,16 @@ public final class ConversationDtos {
     }
 
     /** topic: required for a personal conversation; a session conversation uses the session topic. */
-    public record CreateRequest(@Size(max = 30) String topic, @Positive Long sessionId) {
+    public record CreateRequest(@Size(max = 30, message = "주제는 30자까지 쓸 수 있어요") String topic,
+                                @Positive(message = "수업 번호가 올바르지 않아요") Long sessionId) {
     }
 
-    public record MessageRequest(@NotBlank @Size(max = 8000) String content) {
+    public record MessageRequest(@NotBlank(message = "질문을 입력해 주세요")
+                                 @Size(max = 8000, message = "질문은 8000자까지 쓸 수 있어요") String content) {
     }
 
-    public record MemoryRequest(@NotBlank @Size(max = 1000) String text) {
+    public record MemoryRequest(@NotBlank(message = "기억할 내용을 입력해 주세요")
+                                @Size(max = 1000, message = "기억은 1000자까지 쓸 수 있어요") String text) {
     }
 
     public record ListItem(String id, String topic, String title, String sessionId, int messageCount,

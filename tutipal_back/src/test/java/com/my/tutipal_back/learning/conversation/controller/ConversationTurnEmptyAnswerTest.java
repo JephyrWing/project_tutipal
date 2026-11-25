@@ -13,9 +13,12 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.request;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
@@ -85,6 +88,30 @@ class ConversationTurnEmptyAnswerTest {
         assertThat(event(body, "error").json().get("message").asString()).isNotBlank();
         assertThat(store.messagesOf(c.id())).isEmpty();
         verify(summarizer, after(300).never()).summarizeIfNeeded(anyLong());
+    }
+
+    @Test
+    void nulInTheQuestionIs400BeforeOpenChat() throws Exception {
+        ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
+
+        mvc.perform(post("/api/conversations/{id}/messages", c.id())
+                        .accept(MediaType.TEXT_EVENT_STREAM).contentType(MediaType.APPLICATION_JSON)
+                        .content(JSON.writeValueAsString(Map.of("content", "질\u0000문"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(request().asyncNotStarted());
+
+        verifyNoInteractions(tutor);
+    }
+
+    @Test
+    void blankQuestionGetsAKoreanMessage() throws Exception {
+        ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
+
+        mvc.perform(post("/api/conversations/{id}/messages", c.id())
+                        .accept(MediaType.TEXT_EVENT_STREAM).contentType(MediaType.APPLICATION_JSON)
+                        .content(JSON.writeValueAsString(Map.of("content", "  "))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("질문을 입력해 주세요"));
     }
 
     @Test

@@ -53,6 +53,9 @@ public class ConversationService {
     /** Stored answer limit (V21 CHECK). */
     static final int MAX_ANSWER_LENGTH = 32000;
     private static final String DEFAULT_SESSION_TOPIC = "수업";
+    /** Cursor timestamps outside this range cannot come from us (and PostgreSQL would reject them). */
+    private static final Instant CURSOR_MIN = Instant.parse("2000-01-01T00:00:00Z");
+    private static final Instant CURSOR_MAX = Instant.parse("9999-12-31T23:59:59Z");
 
     private final ConversationStore store;
     private final StudySessionService sessions;
@@ -83,6 +86,7 @@ public class ConversationService {
             if (chosen.length() > MAX_TOPIC_LENGTH) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "주제는 30자까지 쓸 수 있어요");
             }
+            rejectNul(chosen, "주제");
         } else {
             requireStudent(userId, sessionId);
             String sessionTopic = sessions.chatSettings(userId, sessionId).topic();
@@ -142,8 +146,10 @@ public class ConversationService {
         if (value.isEmpty() || value.length() > MAX_MEMORY_LENGTH) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "기억은 1~1000자로 써 주세요");
         }
+        rejectNul(value, "기억");
         ConversationStore.Conversation c = store.lockOwned(userId, conversationId)
                 .orElseThrow(ConversationService::notFound);
+        store.lockMemoryScope(userId, c.sessionId());
         if (store.countMemories(userId, c.sessionId()) >= MAX_MEMORIES_PER_SCOPE) {
             throw new ApiException(HttpStatus.CONFLICT, "기억은 범위마다 20개까지 저장할 수 있어요. 오래된 기억을 지운 뒤 다시 저장해 주세요");
         }
@@ -166,15 +172,12 @@ public class ConversationService {
     }
 
     /**
-     * Ownership (404) and, for a session conversation, participant / active / student checks (404 / 410 / 403), then
-     * the request: the last 39 stored messages after the active summary (each cut to 8000) + the question.
+     * Ownership (404), then the request: the last 39 stored messages after the active summary (each cut to 8000)
+     * + the question. Session checks (404 / 410 / 403) are done by ConversationTurnService right after this.
      */
     @Transactional(readOnly = true)
     public PreparedTurn prepareTurn(long userId, long conversationId, String question) {
         ConversationStore.Conversation c = owned(userId, conversationId);
-        if (c.sessionId() != null) {
-            requireStudent(userId, c.sessionId());
-        }
         Optional<ConversationStore.Summary> active = store.activeSummary(c.id());
         long after = active.map(ConversationStore.Summary::toMessageId).orElse(0L);
         List<ConversationStore.Message> recent = store.recentMessagesAfter(c.id(), after, MAX_HISTORY);
@@ -209,9 +212,9 @@ public class ConversationService {
     // ------------------------------------------------------------------ summary
 
     /** Agent scope of a conversation (empty if it no longer exists). Not an ownership check: system use only. */
-    @Transactional
+    @Transactional(readOnly = true)
     public Optional<AgentDtos.Scope> scopeOf(long conversationId) {
-        return store.lock(conversationId).map(c -> c.sessionId() == null ? AgentDtos.Scope.personal()
+        return store.find(conversationId).map(c -> c.sessionId() == null ? AgentDtos.Scope.personal()
                 : AgentDtos.Scope.session(c.sessionId()));
     }
 
@@ -277,9 +280,20 @@ public class ConversationService {
             if (id < 1) {
                 throw badCursor();
             }
-            return new ConversationStore.Cursor(Instant.parse(raw.substring(0, bar)), id);
+            Instant at = Instant.parse(raw.substring(0, bar));
+            if (at.isBefore(CURSOR_MIN) || at.isAfter(CURSOR_MAX)) {
+                throw badCursor();
+            }
+            return new ConversationStore.Cursor(at, id);
         } catch (IllegalArgumentException | DateTimeParseException e) {
             throw badCursor();
+        }
+    }
+
+    /** NUL cannot be stored in PostgreSQL text: reject it as bad input instead of failing in the DB. */
+    static void rejectNul(String text, String what) {
+        if (text.indexOf('\u0000') >= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, what + "에 쓸 수 없는 문자가 들어 있어요");
         }
     }
 
@@ -287,6 +301,7 @@ public class ConversationService {
         return new ApiException(HttpStatus.BAD_REQUEST, "목록 위치(cursor)가 올바르지 않아요");
     }
 
+    /** Cuts to at most max UTF-16 units without leaving a lone high surrogate at the end. */
     static String cut(String text, int max) {
         if (text.length() <= max) {
             return text;

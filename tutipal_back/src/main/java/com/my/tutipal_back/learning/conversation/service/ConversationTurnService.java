@@ -88,6 +88,7 @@ public class ConversationTurnService {
         if (question.isEmpty() || question.length() > ConversationService.MAX_QUESTION_LENGTH) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "질문은 1~8000자로 써 주세요");
         }
+        ConversationService.rejectNul(question, "질문");
         if (!running.add(userId)) {
             throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, TURN_IN_PROGRESS);
         }
@@ -152,12 +153,16 @@ public class ConversationTurnService {
         }
     }
 
-    /** Keeps at most the stored limit in memory (the rest is still streamed to the screen). */
-    private static void append(StringBuilder answer, String delta) {
+    /**
+     * Keeps at most the stored limit in memory (the rest is still streamed to the screen), never ending on a lone
+     * high surrogate. NUL characters are dropped (PostgreSQL text cannot hold them).
+     */
+    static void append(StringBuilder answer, String delta) {
         int room = ConversationService.MAX_ANSWER_LENGTH - answer.length();
         if (delta == null || room <= 0) {
             return;
         }
-        answer.append(delta.length() > room ? delta.substring(0, room) : delta);
+        String clean = delta.indexOf('\u0000') >= 0 ? delta.replace("\u0000", "") : delta;
+        answer.append(ConversationService.cut(clean, room));
     }
 }

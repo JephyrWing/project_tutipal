@@ -17,6 +17,10 @@ import com.my.tutipal_back.learning.tutor.service.ConversationMemory;
  * (re-queried every time, so an invalidated or deleted one is dropped; the assembler filters invalidated ones), and
  * the newest 20 memories of the same (user, scope). Unbound turn (/api/tutor/chat) or a user / scope mismatch:
  * the screen history and nothing stored, without touching the store. No cache: every recall re-queries.
+ *
+ * <p>Fail-closed: if the bound conversation was deleted after the turn opened, its history and summary are not
+ * used (empty history, no summary); memories of the same scope from other conversations still are. The legacy path
+ * (agent disabled) uses the ChatRequest.messages snapshot taken when the turn opened and is not affected by this.
  */
 @Component
 public class StoredConversationMemory implements ConversationMemory {
@@ -42,14 +46,15 @@ public class StoredConversationMemory implements ConversationMemory {
             return new Recall(screenHistory == null ? List.of() : screenHistory, null, List.of());
         }
         ConversationBinding.Bound b = bound.get();
-        StoredSummary summary = b.summaryId() == null ? null : store.findSummary(b.summaryId())
+        boolean exists = store.findOwned(b.userId(), b.conversationId()).isPresent();
+        StoredSummary summary = !exists || b.summaryId() == null ? null : store.findSummary(b.summaryId())
                 .filter(s -> s.conversationId() == b.conversationId())
                 .map(s -> new StoredSummary(SUMMARY_PREFIX + s.id(), b.userId(), scope, s.text(), s.invalidatedAt()))
                 .orElse(null);
         List<StoredMemory> memories = store.memories(b.userId(), scope.sessionId(), MAX_MEMORIES).stream()
                 .map(m -> new StoredMemory(MEMORY_PREFIX + m.id(), m.userId(), scopeOf(m), m.text(), null))
                 .toList();
-        return new Recall(b.history(), summary, memories);
+        return new Recall(exists ? b.history() : List.of(), summary, memories);
     }
 
     private static AgentDtos.Scope scopeOf(ConversationStore.Memory memory) {

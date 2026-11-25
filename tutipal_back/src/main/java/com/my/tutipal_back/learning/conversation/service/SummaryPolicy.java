@@ -1,5 +1,6 @@
 package com.my.tutipal_back.learning.conversation.service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -12,7 +13,9 @@ import com.my.tutipal_back.learning.conversation.repository.ConversationStore;
 /**
  * PT-106 AC-20 (pure): when to summarize and what goes in. Messages after the active summary, minus the newest
  * keepRecent, must reach threshold; then the oldest of them (at most maxInput, each cut to 8000) are summarized
- * together with the previous summary, so at least keepRecent messages always stay raw.
+ * together with the previous summary, so at least keepRecent messages always stay raw. The input also stops once
+ * the cut texts would exceed maxInputChars in total (at least one message always goes in); the rest waits for the
+ * next run. FastAPI fits what it receives to the local model's context again.
  */
 @Component
 public class SummaryPolicy {
@@ -43,15 +46,19 @@ public class SummaryPolicy {
             return Optional.empty();
         }
         int take = Math.min(Math.min(eligible, rules.maxInput()), oldestAfter.size());
-        List<ConversationStore.Message> input = oldestAfter.subList(0, take);
-        List<AgentDtos.ContextMessage> messages = input.stream()
-                .map(m -> new AgentDtos.ContextMessage(m.role(), cut(m.content())))
-                .toList();
+        List<AgentDtos.ContextMessage> messages = new ArrayList<>(take);
+        int chars = 0;
+        long lastId = 0;
+        for (ConversationStore.Message m : oldestAfter.subList(0, take)) {
+            String content = ConversationService.cut(m.content(), MAX_MESSAGE_LENGTH);
+            if (!messages.isEmpty() && chars + content.length() > rules.maxInputChars()) {
+                break;
+            }
+            messages.add(new AgentDtos.ContextMessage(m.role(), content));
+            chars += content.length();
+            lastId = m.id();
+        }
         return Optional.of(new SummaryPlan(active == null ? null : active.id(), active == null ? null : active.text(),
-                messages, input.getFirst().id(), input.getLast().id()));
-    }
-
-    private static String cut(String text) {
-        return text.length() > MAX_MESSAGE_LENGTH ? text.substring(0, MAX_MESSAGE_LENGTH) : text;
+                messages, oldestAfter.getFirst().id(), lastId));
     }
 }

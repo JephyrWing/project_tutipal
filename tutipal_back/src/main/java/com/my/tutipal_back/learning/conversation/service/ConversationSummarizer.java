@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Semaphore;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,6 +24,8 @@ import com.my.tutipal_back.learning.conversation.repository.ConversationStore;
  * <ul>
  *   <li>At most one run per conversation at a time (a second call returns at once); other conversations run
  *       concurrently.</li>
+ *   <li>At most summary.max-concurrent runs server-wide (production: 1, so summaries never take every AiSlots seat
+ *       from chat); without a free summary seat the run is skipped at once.</li>
  *   <li>Waits only a short configured time for an AiSlots seat, otherwise skips (the next turn retries).</li>
  *   <li>No CHAT quota: the user did not ask for it. Skipped while the Agent path is disabled.</li>
  *   <li>Failure keeps the previous summary. Logs only the conversation id and the error type, never text.</li>
@@ -44,6 +47,8 @@ public class ConversationSummarizer {
     private final ConversationProperties properties;
     private final boolean agentEnabled;
     private final Set<Long> running = ConcurrentHashMap.newKeySet();
+    /** Server-wide summary seats (separate from AiSlots: a summary holds one of each). */
+    private final Semaphore seats;
 
     public ConversationSummarizer(ConversationStore store, ConversationService conversations, AiClient ai,
                                   AiSlots slots, SummaryPolicy policy, ConversationProperties properties,
@@ -55,6 +60,7 @@ public class ConversationSummarizer {
         this.policy = policy;
         this.properties = properties;
         this.agentEnabled = agentEnabled;
+        this.seats = new Semaphore(properties.summary().maxConcurrent());
     }
 
     /** Never throws. */
@@ -89,8 +95,17 @@ public class ConversationSummarizer {
             return;
         }
         SummaryPlan p = plan.get();
-        String text = slots.run(properties.summary().slotWait(),
-                () -> ai.summarize(scope.get(), p.messages(), p.previousSummary()));
+        if (!seats.tryAcquire()) {
+            log.debug("conversation summary skipped, no free summary seat: conversation={}", conversationId);
+            return;
+        }
+        String text;
+        try {
+            text = slots.run(properties.summary().slotWait(),
+                    () -> ai.summarize(scope.get(), p.messages(), p.previousSummary()));
+        } finally {
+            seats.release();
+        }
         String stored = ConversationService.cut(text.strip(), MAX_SUMMARY_LENGTH);
         if (stored.isEmpty()) {
             return;

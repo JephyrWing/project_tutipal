@@ -40,6 +40,21 @@ public interface ConversationStore {
     /** SELECT ... FOR UPDATE (소유자 조건 포함). */
     Optional<Conversation> lockOwned(long userId, long conversationId);
 
+    /**
+     * 소유자 조건 없는 일반 조회 (시스템 작업용: 요약 범위 확인). 잠그지 않는다. 기본 구현은 {@link #lock} 을 쓰므로
+     * DB 구현은 잠그지 않는 SELECT 로 덮어쓴다.
+     */
+    default Optional<Conversation> find(long conversationId) {
+        return lock(conversationId);
+    }
+
+    /**
+     * 같은 (사용자, 범위) 기억 저장을 트랜잭션 끝까지 한 줄로 세운다 (범위당 20개 상한의 경쟁 방지).
+     * 기본 구현은 아무것도 안 한다 (메모리 구현용).
+     */
+    default void lockMemoryScope(long userId, Long sessionId) {
+    }
+
     /** SELECT ... FOR UPDATE (시스템 작업용: 요약 저장). */
     Optional<Conversation> lock(long conversationId);
 

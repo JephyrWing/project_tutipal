@@ -127,7 +127,9 @@ public class ConversationTurnController {
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     ResponseEntity<Map<String, Object>> invalid(MethodArgumentNotValidException error) {
-        return json(HttpStatus.BAD_REQUEST, "질문은 1~8000자로 써 주세요");
+        String message = error.getBindingResult().getFieldErrors().stream().findFirst()
+                .map(f -> f.getDefaultMessage()).orElse("질문은 1~8000자로 써 주세요");
+        return json(HttpStatus.BAD_REQUEST, message);
     }
 
     private static ResponseEntity<Map<String, Object>> json(HttpStatus status, String message) {
