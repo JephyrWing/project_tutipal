@@ -27,18 +27,25 @@ public interface MaterialRepository extends JpaRepository<Material, Long> {
     @Query(ROW + " where m.id = :id")
     java.util.Optional<MaterialRow> row(@Param("id") Long id);
 
-    record ReusableMaterial(Long id, String filename, String sessionTitle) {
+    record ReusableMaterial(Long id, String filename, String sessionTitle, Material.Status status) {
     }
 
     @Query("select new com.my.tutipal_back.materials.repository.MaterialRepository$ReusableMaterial("
-            + "m.id, m.filename, s.title) from Material m, StudySession s "
+            + "m.id, m.filename, s.title, m.status) from Material m, StudySession s "
             + "where m.sessionId = s.id and s.ownerId = :userId and m.sessionId <> :sessionId order by m.id desc")
     List<ReusableMaterial> reusable(@Param("userId") Long userId, @Param("sessionId") Long sessionId);
+
+    @Query(value = """
+            SELECT * FROM materials WHERE id = :id AND status = 'PROCESSING'
+                AND (index_retry_at IS NULL OR index_retry_at <= statement_timestamp())
+            """, nativeQuery = true)
+    java.util.Optional<Material> dueIndex(@Param("id") Long id);
 
     @Modifying
     @Query(value = """
             UPDATE materials
-            SET status = 'PROCESSING', error = NULL, index_retryable = FALSE, updated_at = statement_timestamp()
+            SET status = 'PROCESSING', error = NULL, index_retryable = FALSE, index_retry_count = 0,
+                index_retry_at = NULL, updated_at = statement_timestamp()
             WHERE id = :id AND (status = 'DONE' OR (status = 'FAILED' AND index_retryable))
             """, nativeQuery = true)
     int queueIndex(@Param("id") Long id);

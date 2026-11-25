@@ -16,6 +16,10 @@ import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.client.ResourceAccessException;
+
+import com.my.tutipal_back.common.support.TransientConnectionFailure;
 
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
@@ -121,6 +125,13 @@ public class AiClient {
                 for(float v:vector)if(!Float.isFinite(v))throw new AiUnavailableException();
             }
             return res;
+        } catch (ResourceAccessException e) {
+            throw new AiUnavailableException(TransientConnectionFailure.confirmed(e));
+        } catch (RestClientResponseException e) {
+            var headers = e.getResponseHeaders();
+            // FastAPI가 확인된 장애에 붙인 내부 표지만 신뢰한다.
+            throw new AiUnavailableException(e.getStatusCode().value() == 503 && headers != null
+                    && "transient".equals(headers.getFirst("X-Embedding-Failure")));
         } catch (RestClientException e) {
             throw new AiUnavailableException();
         }

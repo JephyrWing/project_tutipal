@@ -54,6 +54,9 @@ public class Material extends BaseTimeEntity {
     @Column(nullable = false)
     private boolean indexRetryable;
 
+    @Column(nullable = false)
+    private int indexRetryCount;
+
     protected Material() {
     }
 
@@ -70,4 +73,5 @@ public class Material extends BaseTimeEntity {
     public String getFilename() { return filename; }
     public String getStorageKey() { return storageKey; }
     public Status getStatus() { return status; }
+    public int getIndexRetryCount() { return indexRetryCount; }
 }

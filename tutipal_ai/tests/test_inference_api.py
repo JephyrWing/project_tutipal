@@ -103,6 +103,20 @@ async def test_embedding_api_success_and_failure(monkeypatch):
     response = await post("/v1/embed", {"texts": ["x"]})
     assert response.status_code == 503
     assert response.json() == {"detail": "embedding unavailable"}
+    assert response.headers["X-Embedding-Failure"] == "transient"
+
+
+@pytest.mark.parametrize("status,temporary", [(401, False), (403, False), (404, False),
+                                              (502, True), (503, False), (504, True)])
+async def test_embedding_gateway_error_header_requires_confirmed_outage(monkeypatch, status, temporary):
+    async def fail(*args):
+        request = httpx.Request("POST", "http://provider.invalid/embed")
+        raise httpx.HTTPStatusError("provider error", request=request,
+                                    response=httpx.Response(status, request=request))
+    monkeypatch.setattr(service.ollama_client, "embed_texts", fail)
+    response = await post("/v1/embed", {"texts": ["x"]})
+    assert response.status_code == 503
+    assert response.headers.get("X-Embedding-Failure") == ("transient" if temporary else None)
 
 
 @pytest.mark.parametrize("path", ["/health", "/internal/ai/health"])

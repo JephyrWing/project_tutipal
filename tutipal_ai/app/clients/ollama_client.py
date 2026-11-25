@@ -1,6 +1,7 @@
 """모델 서버와의 HTTP 통신만 담당한다. DB나 원본 자료는 접근하지 않는다."""
 
 import asyncio
+import errno
 import json
 import math
 import time
@@ -17,6 +18,26 @@ _models_cache: dict[str, tuple[float, set[str]]] = {}
 
 class ModelUnavailable(Exception):
     pass
+
+
+class EmbeddingTemporarilyUnavailable(ModelUnavailable):
+    pass
+
+
+def confirmed_embedding_outage(error: Exception) -> bool:
+    if isinstance(error, (EmbeddingTemporarilyUnavailable, httpx.TimeoutException, TimeoutError)):
+        return True
+    if isinstance(error, httpx.HTTPStatusError):
+        return error.response.status_code in {502, 504}
+    if isinstance(error, httpx.NetworkError):
+        cause = error.__cause__
+        while cause is not None:
+            if isinstance(cause, OSError) and cause.errno in {
+                errno.ECONNREFUSED, errno.ECONNRESET, errno.ECONNABORTED,
+            }:
+                return True
+            cause = cause.__cause__
+    return False
 
 
 def _base_url(settings: ModelSettings) -> str:
@@ -67,6 +88,8 @@ async def embed_texts(settings: ModelSettings, texts: list[str]) -> list[list[fl
     async with asyncio.timeout(125), httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=5.0), trust_env=False) as client:
         async with client.stream("POST", f"{_base_url(settings)}/api/embed", json={"model": settings.embedding_model, "input": texts}) as response:
             if response.status_code != 200:
+                if response.status_code in {502, 504}:
+                    raise EmbeddingTemporarilyUnavailable("embedding gateway unavailable")
                 raise ModelUnavailable("embedding unavailable")
             raw = bytearray()
             async for part in response.aiter_bytes():
@@ -91,7 +114,7 @@ async def embed_texts(settings: ModelSettings, texts: list[str]) -> list[list[fl
         raise ModelUnavailable("invalid embedding response") from error
 
 
-async def available_models(settings: ModelSettings) -> set[str]:
+async def available_models(settings: ModelSettings, *, report_embedding_outage: bool = False) -> set[str]:
     cached = _models_cache.get(settings.base_url)
     if cached and cached[0] > time.monotonic():
         return cached[1]
@@ -108,7 +131,9 @@ async def available_models(settings: ModelSettings) -> set[str]:
             _models_cache.clear()
         _models_cache[settings.base_url] = (time.monotonic() + 3, names)
         return names
-    except (httpx.HTTPError, ModelUnavailable, ValueError, TypeError):
+    except (httpx.HTTPError, ModelUnavailable, ValueError, TypeError) as error:
+        if report_embedding_outage and confirmed_embedding_outage(error):
+            raise EmbeddingTemporarilyUnavailable("embedding model discovery unavailable") from error
         return set()
 
 

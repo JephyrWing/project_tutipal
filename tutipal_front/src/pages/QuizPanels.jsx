@@ -24,17 +24,24 @@ export function TeacherQuizTab({ sessionId, reloadKey }) {
   const [list, setList] = useState([])
   const [formMode, setFormMode] = useState(null)
   const [reviewId, setReviewId] = useState(null)
+  const [sentId, setSentId] = useState(null)
   const [error, setError] = useState('')
+  const listRequest = useRef(0)
 
   const load = useCallback(() => {
-    quizzes.list(sessionId).then(setList, (e) => setError(errText(e, '불러오지 못했어요')))
+    const request = ++listRequest.current
+    quizzes.list(sessionId).then(
+      (rows) => { if (request === listRequest.current) setList(rows) },
+      (e) => { if (request === listRequest.current) setError(errText(e, '불러오지 못했어요')) },
+    )
   }, [sessionId])
   useEffect(load, [load, reloadKey])
 
   function onCreated(quiz) {
     setList((current) => current.some((item) => item.id === quiz.id) ? current : [...current, quiz])
+    setSentId(quiz.id)
     setFormMode(null)
-    setReviewId(quiz.id)
+    load()
   }
 
   const reviewedQuiz = list.find((quiz) => quiz.id === reviewId)
@@ -49,7 +56,7 @@ export function TeacherQuizTab({ sessionId, reloadKey }) {
         {error && <p className="error-text">{error}</p>}
         {list.length === 0 && <p className="muted">아직 보낸 질문이 없어요</p>}
         {[...list].reverse().map((q) => (
-          <QuizRow key={q.id} quiz={q} onOpen={() => setReviewId(q.id)} />
+          <QuizRow key={q.id} quiz={q} justSent={q.id === sentId} onOpen={() => setReviewId(q.id)} />
         ))}
       </section>
       {formMode && <QuizForm key={formMode} sessionId={sessionId} aiMode={formMode === 'ai'}
@@ -223,23 +230,26 @@ function QuizForm({ sessionId, aiMode, onCreated, onClose }) {
   )
 }
 
-function QuizRow({ quiz, onOpen }) {
+function QuizRow({ quiz, justSent, onOpen }) {
   const graded = quiz.answered - quiz.pending
   const pct = graded > 0 ? Math.round((quiz.correct / graded) * 100) : 0
   return (
-    <div className="quiz-row">
-      <button className="quiz-row-head" onClick={onOpen} aria-haspopup="dialog">
-        <strong className="quiz-no">{quiz.no}번</strong>
-        <span className="quiz-q">{quiz.question}</span>
-        <span className="bar" aria-label={`정답률 ${pct}%`}>
-          <span className={`bar-fill${pct < 50 ? ' low' : ''}`} style={{ width: `${pct}%` }} />
-        </span>
-        <strong className="quiz-pct">{graded > 0 ? `${pct}%` : '-'}</strong>
-        <span className="muted quiz-count">
-          응답 {quiz.answered}/{quiz.studentCount}{quiz.pending > 0 && ` · 채점 중 ${quiz.pending}`}
-        </span>
-        {quiz.open ? <OpenBadge closesAt={quiz.closesAt} /> : <span className="badge badge-gray">마감</span>}
-      </button>
+    <div className={`quiz-row quiz-row-head${justSent ? ' quiz-row-sent' : ''}`}>
+      <strong className="quiz-no">{quiz.no}번</strong>
+      <div className="quiz-title">
+        <div className="quiz-q">{quiz.question}</div>
+        {justSent && <span className="badge badge-ok" role="status">방금 보냄</span>}
+      </div>
+      <span className="bar" aria-label={`정답률 ${pct}%`}>
+        <span className={`bar-fill${pct < 50 ? ' low' : ''}`} style={{ width: `${pct}%` }} />
+      </span>
+      <strong className="quiz-pct">{graded > 0 ? `${pct}%` : '-'}</strong>
+      <span className="muted quiz-count">
+        응답 {quiz.answered}/{quiz.studentCount}{quiz.pending > 0 && ` · 채점 중 ${quiz.pending}`}
+      </span>
+      {quiz.open ? <OpenBadge closesAt={quiz.closesAt} /> : <span className="badge badge-gray">마감</span>}
+      <button type="button" className="btn btn-sm quiz-review-button" onClick={onOpen} aria-haspopup="dialog"
+        aria-label={`${quiz.no}번 답안 보기`}>답안 보기</button>
     </div>
   )
 }

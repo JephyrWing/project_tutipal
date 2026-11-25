@@ -6,6 +6,7 @@ import Mascot from '../components/Mascot'
 const errText = (e, fallback) => (e instanceof Error ? e.message : fallback)
 const when = (iso) => new Date(iso).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 const kb = (n) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))}KB` : `${(n / 1024 / 1024).toFixed(1)}MB`)
+const materialStatus = { PROCESSING: '처리 중', DONE: '완료', FAILED: '실패' }
 
 /** 목업 28: 자료 (선생님 업로드 · 삭제, 모두 내려받기). 올린 자료는 세션 챗봇이 근거로 쓴다 */
 export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
@@ -16,6 +17,7 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
   const [alert, setAlert] = useState(false)
   const [candidates, setCandidates] = useState(null)
   const [sourceId, setSourceId] = useState('')
+  const [reuseAlert, setReuseAlert] = useState(false)
   const inputRef = useRef(null)
   const listRequest = useRef(0)
 
@@ -48,6 +50,7 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
     try {
       setCandidates(await materials.reusable(sessionId))
       setSourceId('')
+      setReuseAlert(false)
     } catch (e) {
       setError(errText(e, '이전 수업 자료를 불러오지 못했어요'))
     }
@@ -59,7 +62,7 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
     setBusy('reusing')
     setError('')
     try {
-      await materials.reuse(sessionId, sourceId)
+      await materials.reuse(sessionId, sourceId, reuseAlert)
       setCandidates(null)
       load()
     } catch (err) {
@@ -113,8 +116,14 @@ export function MaterialsPanel({ sessionId, teacher, reloadKey }) {
             <form className="row-gap" onSubmit={(e) => void reuse(e)}>
               <select className="input" aria-label="이전 수업 자료" value={sourceId} disabled={!!busy} onChange={(e) => setSourceId(e.target.value)}>
                 <option value="">자료 선택</option>
-                {candidates.map((m) => <option key={m.id} value={m.id}>{m.sessionTitle} · {m.filename}</option>)}
+                {candidates.map((m) => <option key={m.id} value={m.id}>
+                  {m.sessionTitle} · {m.filename}{materialStatus[m.status] ? ` · ${materialStatus[m.status]}` : ''}
+                </option>)}
               </select>
+              <label className="check-row">
+                <input type="checkbox" checked={reuseAlert} disabled={!!busy} onChange={(e) => setReuseAlert(e.target.checked)}
+                  aria-label="자료 불러오기 시 학생에게 알림" /> 학생에게 알림
+              </label>
               <button className="btn btn-primary" disabled={!sourceId || !!busy}>{busy === 'reusing' ? '불러오는 중…' : '불러오기'}</button>
             </form>
           ))}

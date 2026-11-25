@@ -7,7 +7,7 @@ import httpx
 from fastapi import HTTPException
 
 from app.clients import ollama_client, openai_client
-from app.clients.ollama_client import ModelUnavailable, available_models, model_present
+from app.clients.ollama_client import ModelUnavailable, available_models, confirmed_embedding_outage, model_present
 from app.core.settings import load_model_settings
 from app.models.inference import ChatRequest, EmbedRequest
 from app.views.inference_view import EmbedView
@@ -20,10 +20,14 @@ def require_supported_provider() -> None:
         raise HTTPException(status_code=501, detail="supported providers: auto, ollama, openai")
 
 
-async def _provider(settings, model_name: str) -> str:
+async def _provider(settings, model_name: str, *, embedding: bool = False) -> str:
     if settings.provider != "auto":
         return settings.provider
-    if model_present(await available_models(settings), model_name):
+    if embedding and not settings.openai_api_key:
+        models = await available_models(settings, report_embedding_outage=True)
+    else:
+        models = await available_models(settings)
+    if model_present(models, model_name):
         return "ollama"
     if settings.openai_api_key:
         return "openai"
@@ -60,7 +64,7 @@ async def embed(request: EmbedRequest) -> EmbedView:
     settings = load_model_settings()
     try:
         async with asyncio.timeout(125):
-            provider = await _provider(settings, settings.embedding_model)
+            provider = await _provider(settings, settings.embedding_model, embedding=True)
             if provider == "ollama":
                 try:
                     vectors = await ollama_client.embed_texts(settings, request.texts)
@@ -74,5 +78,6 @@ async def embed(request: EmbedRequest) -> EmbedView:
                 model, vectors = await openai_client.embed_texts(settings, request.texts)
     except (ModelUnavailable, httpx.HTTPError, TimeoutError) as error:
         log.warning("embedding unavailable: %s", type(error).__name__)
-        raise HTTPException(status_code=503, detail="embedding unavailable") from error
+        headers = {"X-Embedding-Failure": "transient"} if confirmed_embedding_outage(error) else None
+        raise HTTPException(status_code=503, detail="embedding unavailable", headers=headers) from error
     return EmbedView(model=f"{provider}:{model}:{settings.embedding_dimensions}", vectors=vectors)

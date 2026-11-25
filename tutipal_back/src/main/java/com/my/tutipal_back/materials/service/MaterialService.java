@@ -68,7 +68,7 @@ public class MaterialService {
     }
 
     @Transactional
-    public MaterialRow reuse(Long userId, Long sessionId, Long sourceId) {
+    public MaterialRow reuse(Long userId, Long sessionId, Long sourceId, boolean alert) {
         sessions.requireTeacherOf(userId, sessionId);
         sessions.requireActiveRole(userId, sessionId);
         Material source = find(sourceId);
@@ -78,7 +78,7 @@ public class MaterialService {
             throw new ApiException(HttpStatus.BAD_REQUEST, "다른 수업의 자료를 선택해 주세요");
         }
         // 대상 수업의 원본·청크를 따로 저장해 어느 쪽을 삭제해도 다른 수업에 영향이 없다.
-        return store(userId, sessionId, source.getFilename(), objects.get(source.getStorageKey()), false);
+        return store(userId, sessionId, source.getFilename(), objects.get(source.getStorageKey()), alert);
     }
 
     private MaterialRow store(Long userId, Long sessionId, String name, byte[] data, boolean alert) {

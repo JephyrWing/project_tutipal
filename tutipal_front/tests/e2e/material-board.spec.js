@@ -107,6 +107,53 @@ async function indexControl(options = {}) {
   return response.json()
 }
 
+test('PT-99 확인된 장애 자동 재시도 간격·상한·대기 중 다른 자료 처리', async ({ apps }) => {
+  test.setTimeout(120_000)
+  const { teacher, student } = await actors(apps)
+  const room = await createRoom(teacher, 'PT99 자동 재시도')
+  await enter(student, room)
+  await tab(teacher, '자료 · 공지').click()
+  const query = () => sources(student, room.id, 'PT99QUERY old')
+  const initial = (await indexControl({ outcome: 'temporary' })).documentCalls
+  async function attemptTime(offset, timeout = 17_000) {
+    await expect.poll(indexControl, { timeout }).toMatchObject({ documentCalls: initial + offset })
+    return (await indexControl()).lastDocumentCallAt
+  }
+
+  try {
+    const material = await upload(teacher, 'pt99-auto-retry.pdf', pdf('PT99MATERIAL auto retry sample'), 'application/pdf')
+    const row = materialRow(teacher, material.filename)
+    const first = await attemptTime(1)
+    await expect(row).toContainText('처리 중')
+    await expect(row.getByRole('button', { name: '재시도' })).toHaveCount(0)
+    expect(await query()).toBeUndefined()
+
+    const other = await upload(teacher, 'pt99-unblocked.txt', 'PT70MATERIAL processed during retry wait')
+    await expect(materialRow(teacher, other.filename)).toContainText('완료')
+    expect((await indexControl()).documentCalls).toBe(initial + 1)
+
+    const second = await attemptTime(2)
+    expect(second - first).toBeGreaterThanOrEqual(10_000)
+    await expect(row).toContainText('처리 중')
+    const third = await attemptTime(3, 37_000)
+    expect(third - second).toBeGreaterThanOrEqual(30_000)
+    await expect(row).toContainText('실패')
+    expect(await query()).toBeUndefined()
+
+    await row.getByRole('button', { name: '재시도' }).click()
+    const manual = await attemptTime(4)
+    await indexControl({ outcome: 'success' })
+    const recovered = await attemptTime(5)
+    expect(recovered - manual).toBeGreaterThanOrEqual(10_000)
+    await expect(row).toContainText('완료')
+    const files = await guarded(teacher, `/api/sessions/${room.id}/materials`)
+    expect(files.data.find(file => file.id === material.id)).toMatchObject({ status: 'DONE', chunkCount: 1 })
+    expect(JSON.parse(await query()).items).toEqual([material.filename + ' p.1'])
+  } finally {
+    await indexControl({ outcome: 'success' })
+  }
+})
+
 test('PT-99 부분 처리 서버 재기동·중복 재색인·실패 색인 보존', async ({ apps }) => {
   test.setTimeout(180_000)
   const { teacher, student, outsider } = await actors(apps)
@@ -257,7 +304,7 @@ test('PT-70 자료 형식·독립 재사용·수업 권한·삭제 후 검색', 
   const deleteUrl = id => '/api/materials/' + id
   const candidates = targetFiles + '/reusable'
   expect((await guarded(student, candidates)).status).toBe(403)
-  expect((await guarded(student, reuseUrl(original.id), { method: 'POST' })).status).toBe(403)
+  expect((await guarded(student, reuseUrl(original.id) + '?alert=true', { method: 'POST' })).status).toBe(403)
   expect((await guarded(student, targetFiles, { method: 'POST', file: { name: 'blocked.txt', size: 12 } })).status).toBe(403)
   expect((await guarded(student, fileUrl(original.id))).status).toBe(404)
   expect((await guarded(outsider, targetFiles)).status).toBe(404)
@@ -268,13 +315,17 @@ test('PT-70 자료 형식·독립 재사용·수업 권한·삭제 후 검색', 
   expect(await sources(student, target.id)).toBeUndefined()
   expect(await sources(teacher, source.id)).toContain(original.filename)
 
-  async function copyOriginal() {
+  const toast = student.page.locator('.toast[role=status]')
+  async function copyOriginal(alert = false) {
     await teacher.page.getByRole('button', { name: '이전 수업 자료 불러오기' }).click()
     const picker = teacher.page.getByRole('combobox', { name: '이전 수업 자료' })
-    await expect(picker.getByRole('option', { name: 'PT70 이전 수업 · fractions.txt' })).toHaveCount(1)
+    await expect(picker.getByRole('option', { name: 'PT70 이전 수업 · fractions.txt · 완료' })).toHaveCount(1)
     await expect(picker.getByRole('option', { name: /foreign\.txt/ })).toHaveCount(0)
     await picker.selectOption(String(original.id))
-    const response = teacher.page.waitForResponse(r => r.url().endsWith(reuseUrl(original.id)))
+    const notify = teacher.page.getByRole('checkbox', { name: '자료 불러오기 시 학생에게 알림' })
+    await expect(notify).not.toBeChecked()
+    if (alert) await notify.check()
+    const response = teacher.page.waitForResponse(r => new URL(r.url()).pathname === reuseUrl(original.id))
     await teacher.page.getByRole('button', { name: '불러오기', exact: true }).click()
     const posted = await response
     expect(posted.status()).toBe(201)
@@ -285,6 +336,7 @@ test('PT-70 자료 형식·독립 재사용·수업 권한·삭제 후 검색', 
   }
 
   const copy = await copyOriginal()
+  await expect(toast).toHaveCount(0)
   expect((await guarded(outsider, fileUrl(copy.id))).status).toBe(404)
   expect((await guarded(student, deleteUrl(copy.id), { method: 'DELETE' })).status).toBe(403)
   const destination = join(student.profile, 'pt70-download.txt')
@@ -311,7 +363,9 @@ test('PT-70 자료 형식·독립 재사용·수업 권한·삭제 후 검색', 
   expect((await guarded(teacher, '/api/sessions/' + source.id + '/end', { method: 'POST' })).status).toBe(200)
   if (teacher.page.url() !== targetUrl) await teacher.page.goto(targetUrl)
   await tab(teacher, '자료 · 공지').click()
-  const secondCopy = await copyOriginal()
+  const secondCopy = await copyOriginal(true)
+  await expect(toast).toContainText('새 자료: ' + original.filename)
+  await expect(outsider.page.locator('.toast[role=status]')).toHaveCount(0)
   expect((await guarded(teacher, deleteUrl(original.id), { method: 'DELETE' })).status).toBe(204)
   expect((await guarded(teacher, fileUrl(original.id))).status).toBe(404)
   expect((await guarded(student, fileUrl(secondCopy.id))).data).toBe(contents)
@@ -326,6 +380,48 @@ test('PT-70 자료 형식·독립 재사용·수업 권한·삭제 후 검색', 
   const found = JSON.parse(await sources(student, target.id)).items
   expect(found).toHaveLength(3)
   expect(found).toContain('lesson.pdf p.1')
+})
+
+test('PT-70 불러오기 목록에서 원본 상태 세 가지를 확인하고 선택', async ({ apps }) => {
+  const teacher = await apps.launch()
+  await login(teacher, 1)
+  await createRoom(teacher, 'PT70 상태 원본 수업')
+  await tab(teacher, '자료 · 공지').click()
+  const done = await upload(teacher, 'reuse-done.txt', 'PT70MATERIAL reusable completed text')
+  const failed = await upload(teacher, 'reuse-failed.txt', '   \n')
+  await expect(materialRow(teacher, done.filename)).toContainText('완료')
+  await expect(materialRow(teacher, failed.filename)).toContainText('실패')
+
+  await indexControl({ outcome: 'hold' })
+  try {
+    const pending = await upload(teacher, 'reuse-pending.pdf', pdf('PT99MATERIAL reusable pending'), 'application/pdf')
+    await expect.poll(indexControl).toMatchObject({ held: 1 })
+    await teacher.page.goto(new URL('/', teacher.page.url()).href)
+    const target = await createRoom(teacher, 'PT70 상태 대상 수업')
+    await tab(teacher, '자료 · 공지').click()
+    for (const [file, label] of [[done, '완료'], [failed, '실패'], [pending, '처리 중']]) {
+      await teacher.page.getByRole('button', { name: '이전 수업 자료 불러오기' }).click()
+      const picker = teacher.page.getByRole('combobox', { name: '이전 수업 자료' })
+      const option = picker.getByRole('option', { name: `PT70 상태 원본 수업 · ${file.filename} · ${label}` })
+      await expect(option).toHaveCount(1)
+      await picker.selectOption(String(file.id))
+      const copyRequest = teacher.page.waitForResponse(r => new URL(r.url()).pathname ===
+        `/api/sessions/${target.id}/materials/reuse/${file.id}`)
+      await teacher.page.getByRole('button', { name: '불러오기', exact: true }).click()
+      const response = await copyRequest
+      expect(response.status()).toBe(201)
+      const copy = await response.json()
+      expect(copy).toMatchObject({ sessionId: target.id, filename: file.filename, status: 'PROCESSING' })
+      expect(copy.id).not.toBe(file.id)
+      await expect(picker).toHaveCount(0)
+    }
+    await expect(materialRow(teacher, pending.filename)).toContainText('처리 중')
+  } finally {
+    await indexControl({ outcome: 'success' })
+  }
+  await expect(materialRow(teacher, done.filename)).toContainText('완료')
+  await expect(materialRow(teacher, failed.filename)).toContainText('실패')
+  await expect(materialRow(teacher, 'reuse-pending.pdf')).toContainText('완료')
 })
 
 test('PT-70 공지·자료 알림 선택과 게시글·댓글 삭제 권한', async ({ apps }) => {
