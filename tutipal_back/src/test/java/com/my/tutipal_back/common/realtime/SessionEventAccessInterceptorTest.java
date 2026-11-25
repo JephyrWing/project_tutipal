@@ -58,14 +58,28 @@ class SessionEventAccessInterceptorTest {
         verifyNoInteractions(sessions);
     }
 
+    // PT-100: 개인 큐(/user/queue/events, /user/queue/draw)도 로그인 세션이 살아 있는 연결에만 전달한다.
+    // (이전에는 guard 를 거치지 않았다 — 계획된 변경이며 약화가 아니다.)
     @Test
-    void preservesPrivateNotificationsAndDrawings() {
+    void deliversPrivateNotificationsAndDrawingsToValidSubscriber() {
         Message<?> notification = event("/queue/events-user2", "connected-student");
         Message<?> drawing = event("/queue/draw-user2", "connected-student");
+        when(guard.subscriber("connected-student")).thenReturn(() -> "2");
 
         assertThat(interceptor.beforeHandle(notification, channel, handler)).isSameAs(notification);
         assertThat(interceptor.beforeHandle(drawing, channel, handler)).isSameAs(drawing);
-        verifyNoInteractions(sessions, guard);
+        verifyNoInteractions(sessions);
+    }
+
+    @Test
+    void dropsPrivateNotificationsAndDrawingsWhenLoginSessionIsGone() {
+        Message<?> notification = event("/queue/events-user2", "logged-out-student");
+        Message<?> drawing = event("/queue/draw-user2", "logged-out-student");
+        when(guard.subscriber("logged-out-student")).thenReturn(null);
+
+        assertThat(interceptor.beforeHandle(notification, channel, handler)).isNull();
+        assertThat(interceptor.beforeHandle(drawing, channel, handler)).isNull();
+        verifyNoInteractions(sessions);
     }
 
     private static Message<?> event(String destination, String socketId) {

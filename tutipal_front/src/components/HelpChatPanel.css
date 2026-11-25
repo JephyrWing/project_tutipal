@@ -1,0 +1,15 @@
+.help-chat-panel { display: flex; flex-direction: column; gap: 14px; min-width: 0; color: var(--text); }
+.help-chat-panel p { margin: 0; }
+.help-chat-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.help-chat-heading p, .help-chat-heading > span, .help-chat-note, .help-chat-author { color: var(--text-2); font-size: 12px; }
+.help-chat-note { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.help-chat-messages { display: flex; flex-direction: column; gap: 14px; overflow-wrap: anywhere; }
+.help-chat-message { max-width: 90%; align-self: flex-start; min-width: 0; }
+.help-chat-message.own { align-self: flex-end; }
+.help-chat-bubble { background: var(--surface-2); border-radius: 4px 12px 12px 12px; padding: 10px 12px; white-space: pre-wrap; }
+.help-chat-message.own .help-chat-bubble { background: var(--primary-weak); border-radius: 12px 4px 12px 12px; }
+.help-chat-delivery { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--text-2); margin-top: 5px; }
+.help-chat-compose { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
+.help-chat-panel textarea { min-width: 0; resize: vertical; }
+.help-chat-closed { padding: 24px 0; }
+@media (max-width: 480px) { .help-chat-panel textarea { font-size: 16px; } }

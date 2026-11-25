@@ -1,4 +1,3 @@
-const { readFileSync } = require('node:fs')
 const path = require('node:path')
 const {
   app, BrowserWindow, ipcMain, Menu, nativeImage, screen, session, shell, Tray,
@@ -8,22 +7,13 @@ const { capture, listSources, loadSettings, saveSettings } = require('./screen.c
 const { chooseShareSource, forwardDraw, installDisplayMediaHandler, showOverlay,
   helpShareSources, prepareHelpShare, setHelpShareVideoSize } = require('./share.cjs')
 const { startBridge } = require('./bridge.cjs')
+const { loadServerUrl } = require('./serverConfig.cjs')
 
 /**
  * Spring 업무 서버 주소. React 화면은 설치 패키지의 dist에 내장한다.
- * 개발은 TUTIPAL_SPRING_URL, 설치 앱은 package.json의 tutipal.serverUrl 또는 실행 환경변수를 사용한다.
+ * 운영 릴리스는 빌드에 기록한 주소로 고정한다. 일반 로컬 패키지는 기존 개발 환경변수를 지원한다.
  */
-function serverUrl() {
-  if (process.env.TUTIPAL_SPRING_URL) return process.env.TUTIPAL_SPRING_URL
-  try {
-    const pkg = JSON.parse(readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8'))
-    if (pkg.tutipal?.serverUrl) return pkg.tutipal.serverUrl
-  } catch {
-    // 기본값
-  }
-  return 'http://127.0.0.1:8080'
-}
-const BACKEND = new URL(serverUrl())
+const BACKEND = new URL(loadServerUrl(app.getAppPath(), app.isPackaged, process.env))
 if (!['http:', 'https:'].includes(BACKEND.protocol) || BACKEND.username || BACKEND.password) throw new Error('Invalid Spring URL')
 let BASE
 let bridge

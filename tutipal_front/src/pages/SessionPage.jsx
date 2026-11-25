@@ -101,7 +101,7 @@ function StudentView({ session, reload }) {
       setDismissed((d) => d.filter((x) => x !== e.id))
       refreshQuiz(e.id)
     } else if ((e.type === 'quizResult' || e.type === 'quizClosed') && quiz?.id === e.id) refreshQuiz(e.id)
-    else if (e.type === 'helpAccepted' || e.type === 'helpDeclined' || e.type === 'helpEnded') setHelpKey((k) => k + 1)
+    else if (e.type === 'helpAccepted' || e.type === 'helpDeclined' || e.type === 'helpEnded' || e.type === 'helpChat') setHelpKey((k) => k + 1)
     else if (e.type === 'notice') {
       bump('notice')
       notices.list(session.id).then((list) => {
@@ -193,6 +193,7 @@ function TeacherView({ session, onChange, reload }) {
       setHelpKey((k) => k + 1)
       setNewHelp(true)
     }
+    if (e.type === 'helpChat') setHelpKey((k) => k + 1)
     if (e.type === 'reconnect') {
       setHelpKey((k) => k + 1)
       reload()

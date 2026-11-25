@@ -23,7 +23,7 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     private final StompAuthInterceptor authInterceptor;
     private final SessionEventAccessInterceptor eventAccessInterceptor;
     private final SessionWebSocketGuard sessionGuard;
-    @org.springframework.beans.factory.annotation.Value("${app.allowed-origins:http://127.0.0.1:*,http://localhost:*}")
+    @org.springframework.beans.factory.annotation.Value("${app.allowed-origins:http://127.0.0.1:[*],http://localhost:[*]}")
     private String[] allowedOrigins;
 
     public WebSocketConfig(StompAuthInterceptor authInterceptor, SessionEventAccessInterceptor eventAccessInterceptor,

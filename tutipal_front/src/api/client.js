@@ -56,32 +56,46 @@ function errorFrom(res, body) {
 
 // 세션 쿠키는 Electron의 Spring 쿠키 저장소에만 둔다. CSRF 값만 서버에서 읽는다.
 let csrf = null
-export async function csrfHeader() {
+let authGeneration = 0
+export const AUTH_EXPIRED_EVENT = 'tutipal-auth-expired'
+export const AUTH_REQUEST_TIMEOUT_MS = 10000
+export function advanceAuthGeneration() { authGeneration++; csrf = null }
+function requireAuthGeneration(generation) {
+  if (generation !== authGeneration) {
+    const error = new Error('로그인 상태가 바뀌었어요. 다시 시도해 주세요')
+    error.name = 'AuthContextChangedError'
+    throw error
+  }
+}
+export async function csrfHeader(signal, generation = authGeneration) {
   if (!csrf) {
-    const response = await fetch('/api/auth/csrf')
-    if (!response.ok) throw await toApiError(response)
+    const response = await fetch('/api/auth/csrf', { signal })
+    if (!response.ok) throw await toApiError(response, generation)
     const value = await response.json()
+    requireAuthGeneration(generation)
     csrf = { [value.headerName]: value.token }
   }
   return csrf
 }
 
 export async function request(path, init = {}) {
+  const generation = authGeneration
   const method = (init.method ?? 'GET').toUpperCase()
   const headers = new Headers(init.headers)
   if (method !== 'GET') {
-    for (const [k, v] of Object.entries(await csrfHeader())) headers.set(k, v)
+    for (const [k, v] of Object.entries(await csrfHeader(init.signal, generation))) headers.set(k, v)
+    requireAuthGeneration(generation)
   }
   let res = await fetch(path, { ...init, headers })
   // 다른 앱 창에서 로그인/로그아웃하면 기존 CSRF 값이 회전한다. 거절된 요청만 새 값으로 한 번 다시 보낸다.
-  if (res.status === 403 && !['GET', 'HEAD'].includes(method)) {
+  if (res.status === 403 && generation === authGeneration && !['GET', 'HEAD'].includes(method)) {
     csrf = null
-    for (const [name, value] of Object.entries(await csrfHeader())) headers.set(name, value)
+    for (const [name, value] of Object.entries(await csrfHeader(init.signal, generation))) headers.set(name, value)
+    requireAuthGeneration(generation)
     res = await fetch(path, { ...init, headers })
   }
   if (!res.ok) {
-    const body = await res.json().catch(() => null)
-    throw errorFrom(res, body)
+    throw await toApiError(res, generation)
   }
   if (path === '/logout' || path.startsWith('/dev/login')) csrf = null
   if (res.status === 204 || res.headers.get('content-length') === '0') return undefined
@@ -93,14 +107,14 @@ export const api = {
   /** 로그인 안 했으면 null */
   async me() {
     try {
-      return await request('/api/users/me')
+      return await request('/api/users/me', { signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS) })
     } catch (e) {
       if (e instanceof ApiRequestError && e.status === 401) return null
       throw e
     }
   },
 
-  logout: () => request('/logout', { method: 'POST' }),
+  logout: () => request('/logout', { method: 'POST', signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS) }),
 
   updateName: (name) => request('/api/users/me/name', {
     method: 'PATCH',
@@ -116,11 +130,15 @@ export const api = {
 
   /** 로컬 테스트용 로그인 (서버에서 app.dev-login=true 일 때만 동작, 아니면 404) */
   /** n = 계정 번호 1~9 (선생님 · 학생을 따로 시험할 때) */
-  devLogin: (n = 1) => request(`/dev/login?n=${n}`, { method: 'POST' }),
+  devLogin: (n = 1) => request(`/dev/login?n=${n}`, { method: 'POST', signal: AbortSignal.timeout(AUTH_REQUEST_TIMEOUT_MS) }),
 }
 
 /** 서버 오류 본문({status, message}, 429 는 ProblemDetail)을 ApiRequestError 로 */
-export async function toApiError(res) {
+export async function toApiError(res, generation = null) {
+  if (res.status === 401 && generation !== null && generation === authGeneration) {
+    csrf = null
+    if (typeof window !== 'undefined') window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
+  }
   const body = await res.json().catch(() => null)
   return errorFrom(res, body)
 }
