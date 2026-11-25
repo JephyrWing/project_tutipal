@@ -190,8 +190,16 @@ public class ConversationTurnService {
             if (turn.clientMessageId == null) {
                 throw e;
             }
-            return conversations.findSaved(turn.userId, turn.conversationId, turn.clientMessageId, turn.question)
-                    .orElseThrow(() -> e);
+            try {
+                return conversations.findSaved(turn.userId, turn.conversationId, turn.clientMessageId, turn.question)
+                        .orElseThrow(() -> e);
+            } catch (ApiException lookup) {
+                // the other request saved the pair, then the conversation was (soft-)deleted: same 410 as savePair
+                if (lookup.getStatus() == HttpStatus.NOT_FOUND) {
+                    throw new ApiException(HttpStatus.GONE, ConversationService.DELETED_WHILE_STREAMING);
+                }
+                throw lookup;
+            }
         }
     }
 

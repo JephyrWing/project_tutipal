@@ -15,6 +15,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -22,6 +23,7 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 
 import com.my.tutipal_back.ai.quota.MutableClock;
@@ -214,6 +216,46 @@ class ConversationTurnIdempotencyTest {
         assertThat(insertPairs(store)).isEqualTo(2);           // the second insert was rejected by the index
         assertThat(store.messagesOf(c.id())).hasSize(2);
         assertThat(store.conversation(c.id()).orElseThrow().messageCount()).isEqualTo(2);
+    }
+
+    /** Saved by the other request, then deleted before the recovery lookup: the defined 410, not 404. */
+    @Test
+    void duplicateKeyRecoveryOnADeletedConversationIsTheDeletedWhileStreaming410() {
+        AtomicInteger hidden = new AtomicInteger(4);
+        FakeConversationStore store = new FakeConversationStore() {
+            @Override
+            public synchronized Optional<SavedPair> findPairByClientMessageId(long conversationId, UUID key) {
+                Optional<SavedPair> real = super.findPairByClientMessageId(conversationId, key);
+                return hidden.getAndDecrement() > 0 ? Optional.empty() : real;
+            }
+
+            @Override
+            public synchronized SavedPair insertPair(long conversationId, String question, String answer,
+                                                     String title, Instant now, UUID clientMessageId) {
+                try {
+                    return super.insertPair(conversationId, question, answer, title, now, clientMessageId);
+                } catch (DuplicateKeyException e) {
+                    softDeleteConversation(conversationId, now);
+                    throw e;
+                }
+            }
+        };
+        ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
+        when(tutor.openChat(anyLong(), any())).thenReturn(opened);
+        scriptTutor(tutor, (request, onDelta) -> onDelta.accept("답"));
+        ConversationTurnService serverA = turnsOn(store);
+        ConversationTurnService serverB = turnsOn(store);
+
+        ConversationTurnService.OpenedTurn a = serverA.open(ME, c.id(), "질문", KEY);
+        ConversationTurnService.OpenedTurn b = serverB.open(ME, c.id(), "질문", KEY);
+        run(serverA, a, new ArrayList<>());
+
+        assertThatThrownBy(() -> run(serverB, b, new ArrayList<>()))
+                .isInstanceOfSatisfying(ApiException.class, e -> {
+                    assertThat(e.getStatus()).isEqualTo(HttpStatus.GONE);
+                    assertThat(e.getMessage()).isEqualTo(ConversationService.DELETED_WHILE_STREAMING);
+                });
+        assertThat(store.messagesOf(c.id())).hasSize(2);
     }
 
     @Test

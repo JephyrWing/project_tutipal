@@ -2,11 +2,13 @@ package com.my.tutipal_back.learning.conversation.service;
 
 import static com.my.tutipal_back.learning.conversation.ConversationTestSupport.NOW;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -167,6 +169,44 @@ class ConversationRetentionTest {
         assertThat(store.allMemories()).extracting(ConversationStore.Memory::id)
                 .containsExactly(newDeleted.id(), liveMemory.id());
         assertThat(store.conversation(live.id())).isPresent();
+    }
+
+    // ------------------------------------------------------------------ the hourly job
+
+    @Test
+    void hourlyJobPurgesDeletedRowsEvenWithInactivityRetentionOff() {
+        ConversationStore store = mock(ConversationStore.class);
+
+        new ConversationRetention(store, ConversationProperties.defaults(), clock).scheduledPurge();
+
+        Instant cutoff = NOW.minus(Duration.ofDays(30));
+        verify(store).purgeDeletedConversationsBefore(eq(cutoff), eq(500));
+        verify(store).purgeDeletedMemoriesBefore(eq(cutoff), eq(500));
+        verify(store, never()).deleteInactiveBefore(any(), anyInt());
+    }
+
+    @Test
+    void hourlyJobStillRunsInactivityRetentionWhenTheDeletedPurgeFails() {
+        ConversationStore store = mock(ConversationStore.class);
+        when(store.purgeDeletedConversationsBefore(any(), anyInt())).thenThrow(new IllegalStateException("db down"));
+
+        assertThatCode(() -> new ConversationRetention(store, retention(30, 500), clock).scheduledPurge())
+                .doesNotThrowAnyException();
+
+        verify(store).deleteInactiveBefore(eq(NOW.minus(Duration.ofDays(30))), eq(500));
+    }
+
+    @Test
+    void hourlyJobStillPurgesDeletedRowsWhenInactivityRetentionFails() {
+        ConversationStore store = mock(ConversationStore.class);
+        when(store.deleteInactiveBefore(any(), anyInt())).thenThrow(new IllegalStateException("db down"));
+
+        assertThatCode(() -> new ConversationRetention(store, retention(30, 500), clock).scheduledPurge())
+                .doesNotThrowAnyException();
+
+        verify(store).purgeDeletedConversationsBefore(any(), eq(500));
+        verify(store).purgeDeletedMemoriesBefore(any(), eq(500));
+        verify(store).deleteInactiveBefore(any(), eq(500));
     }
 
     @Test

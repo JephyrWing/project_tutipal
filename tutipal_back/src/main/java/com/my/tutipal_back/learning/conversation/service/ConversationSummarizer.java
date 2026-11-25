@@ -101,10 +101,17 @@ public class ConversationSummarizer {
         }
         String text;
         try {
+            // Seat and slot waits can take seconds: re-check right before the model call so a conversation deleted
+            // meanwhile never has its messages sent (a delete during the call itself is caught by saveSummary).
             text = slots.run(properties.summary().slotWait(),
-                    () -> ai.summarize(scope.get(), p.messages(), p.previousSummary()));
+                    () -> conversations.scopeOf(conversationId).isEmpty() ? null
+                            : ai.summarize(scope.get(), p.messages(), p.previousSummary()));
         } finally {
             seats.release();
+        }
+        if (text == null) {
+            log.debug("conversation summary skipped, deleted before the model call: conversation={}", conversationId);
+            return;
         }
         String stored = ConversationService.cut(text.strip(), MAX_SUMMARY_LENGTH);
         if (stored.isEmpty()) {

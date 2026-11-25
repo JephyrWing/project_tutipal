@@ -41,7 +41,7 @@ GAP-12 / FR-TUT-05 / NFR-SEC-11의 구현 원본. `docs/AI_WORKFLOW_CONTRACT.md`
 - 인덱스(V21): 목록 `(user_id, session_id, last_message_at DESC, id DESC) WHERE deleted_at IS NULL`, 기억 범위 `(user_id, session_id, created_at DESC, id DESC) WHERE deleted_at IS NULL`, 정리 대상 `(deleted_at, id) WHERE deleted_at IS NOT NULL`(대화·기억 각각). 보관 기간용 `last_message_at` 인덱스는 지운 행도 포함한다.
 - 탈퇴·수업 삭제: 그대로 물리 삭제다. `user_id`·`session_id` FK가 `ON DELETE CASCADE`라 `AccountCleanup`에 별도 DELETE를 추가하지 않았다.
 - 계약 문서: `docs/AI_WORKFLOW_CONTRACT.md` 6.6의 "대화 삭제 → 메시지·요약 삭제" 문구는 PR #60 병합 뒤 "soft delete 후 유예 기간 뒤 물리 삭제"로 고쳐야 한다(이 PR에서는 계약 문서를 고치지 않음).
-- 남은 위험: 턴이 열린 뒤 대화가 지워지면 Agent 경로는 저장 이력·요약을 쓰지 않는다(같은 범위의 다른 기억은 씀). Agent가 꺼진 기존 경로는 턴을 열 때 만든 `ChatRequest.messages` 사본을 그대로 쓴다(그 턴의 저장은 막힘).
+- 남은 위험: 턴이 열린 뒤 대화가 지워지면 Agent 경로는 저장 이력·요약을 쓰지 않는다(같은 범위의 다른 기억은 씀). Agent가 꺼진 기존 경로는 턴을 열 때 만든 `ChatRequest.messages` 사본을 그대로 쓴다(그 턴의 저장은 막힘). 요약기는 자리(요약 자리·AiSlots)를 얻은 뒤 모델 호출 직전에 대화가 살아 있는지 다시 확인하고 지워졌으면 건너뛴다. 그 확인과 모델 호출 사이(또는 호출 도중)에 지워지면 그 대화의 메시지가 요약 모델에 한 번 갈 수 있다(결과는 저장 직전 확인에서 버려짐) — 남은 아주 짧은 창이다.
 - 요약이 밀린 경우(자리 없음·모델 실패·Agent를 나중에 켬): 활성 요약 끝과 최근 39개 사이의 메시지는 요약에도 이력에도 들어가지 않는다. 다음 요약이 따라잡을 때까지의 차이이며 리코 테스트(AC-1·AC-19)가 이 창 계산을 고정하고 있다. 단일 메시지 삭제(요약 `invalidated_at`)는 이번 범위가 아니다(컬럼만 준비).
 
 ## 보관 기간 (미정)
@@ -61,5 +61,4 @@ PT-113(Draft)이 `TutorService` · `TutorController` · `ChatRequest` 주변을 
 
 ## 검증 경계
 
-JUnit(`learning.conversation.*`, `AiClientSummarizeTest`)은 DB 없이 메모리 저장소와 SQL 문자열 검사로 확인한다(soft delete 필터·정리 SQL 모양·V21 컬럼/인덱스 문자열 포함, 실제 PostgreSQL 실행 계획은 확인 안 함).
- pytest `tests/test_agent_summarize.py`는 모델을 가짜로 바꿔 확인한다. node:test `tests/conversations.test.mjs`는 API 모듈과 화면 상태 함수다. 실제 PostgreSQL에서의 V21(CASCADE · 부분 UNIQUE) 적용, Playwright·Electron 실행, 실제 모델 요약 품질은 확인하지 않았다.
+JUnit(`learning.conversation.*`, `AiClientSummarizeTest`)은 DB 없이 메모리 저장소와 SQL 문자열 검사로 확인한다(soft delete 필터·정리 SQL 모양·V21 컬럼/인덱스 문자열 포함, 실제 PostgreSQL 실행 계획은 확인 안 함). pytest `tests/test_agent_summarize.py`는 모델을 가짜로 바꿔 확인한다. node:test `tests/conversations.test.mjs`는 API 모듈과 화면 상태 함수다. 실제 PostgreSQL에서의 V21(CASCADE · 부분 UNIQUE) 적용, Playwright·Electron 실행, 실제 모델 요약 품질은 확인하지 않았다.

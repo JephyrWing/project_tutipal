@@ -218,6 +218,22 @@ class ConversationSummarizerTest {
         assertThat(store.deletedAt(s.conversation().id())).isPresent();
     }
 
+    /** Deleted while waiting for a seat / AiSlots: re-checked before the model call, so its text is never sent. */
+    @Test
+    @SuppressWarnings("unchecked")
+    void conversationDeletedWhileWaitingForASlotIsNeverSentToTheModel() {
+        Seeded s = seed(40);
+        when(slots.run(any(Duration.class), any(Supplier.class))).thenAnswer(inv -> {
+            store.deleteConversation(s.conversation().id());
+            return ((Supplier<?>) inv.getArgument(1)).get();
+        });
+
+        assertThatCode(() -> summarizer(true).summarizeIfNeeded(s.conversation().id())).doesNotThrowAnyException();
+
+        verifyNoInteractions(ai);
+        assertThat(store.calls).noneMatch(call -> call.startsWith("insertSummary") || call.startsWith("supersede"));
+    }
+
     @Test
     void missingConversationIsIgnored() {
         assertThatCode(() -> summarizer(true).summarizeIfNeeded(999L)).doesNotThrowAnyException();
