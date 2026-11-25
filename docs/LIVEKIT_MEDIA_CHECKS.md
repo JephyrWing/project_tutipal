@@ -12,9 +12,13 @@ U4 합성 제어 서버 검사는 `HELP_ACCESS_CHECKS.md`에 별도로 보존한
 
 테스트는 장치 권한을 요청하지 않고 자체 생성한 320×180 canvas 영상만 `screen_share` source로 송신한다.
 교사 SDK의 `framesDecoded`가 2보다 커야 영상 수신 성공이다. 단순 연결 성공으로 대체하지 않는다.
-도움 종료 뒤 두 연결의 Disconnected 이벤트와 상태, 로그아웃 뒤 발행자 퇴장·원격 트랙 종료,
+도움 종료 뒤 두 연결의 Disconnected 이벤트와 상태, 로그아웃 뒤 발행자 퇴장·원격 구독 해제 및 트랙 비활성화,
 이전 로그인 세션의 접속 주소 재사용 거절을 확인한다. 참가자 제거는 실제 LiveKit 서버가 처리한다.
 캡처 자원 정리는 테스트의 합성 트랙에만 적용되며 제품 OS 캡처 해제 증거로 쓰지 않는다.
+고정 SDK의 `RemoteTrack.stop()`은 재사용할 transceiver를 보존하기 위해 트랙을 disable한다.
+따라서 원격 `MediaStreamTrack.readyState=ended`를 요구하지 않고 실제 수신 이력·구독 해제 이벤트·
+모든 수신 트랙의 `enabled=false`와 참가자 제거를 함께 요구한다. 테스트의 detach는 표시 요소 정리이며
+트랙을 직접 stop해서 SDK 비활성화 검사를 통과시키지 않는다.
 
 ## 실행
 

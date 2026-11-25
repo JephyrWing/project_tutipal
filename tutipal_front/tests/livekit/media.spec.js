@@ -82,8 +82,13 @@ async function connect(app, help) {
     const L = window.LivekitClient
     L.setLogLevel('silent')
     const room = new L.Room({ adaptiveStream: false, dynacast: false })
-    const m = window.pt65Media = { room, videos: [], tracks: [], disconnected: false }
+    const m = window.pt65Media = { room, videos: [], tracks: [], unsubscribed: 0, disconnected: false }
     room.on(L.RoomEvent.Disconnected, () => { m.disconnected = true })
+    room.on(L.RoomEvent.TrackUnsubscribed, track => {
+      if (track.kind !== L.Track.Kind.Video) return
+      m.unsubscribed++
+      track.detach().forEach(video => video.remove())
+    })
     room.on(L.RoomEvent.TrackSubscribed, track => {
       if (track.kind !== L.Track.Kind.Video) return
       m.tracks.push(track)
@@ -167,7 +172,12 @@ test('PT65 logout removes the real publisher and re-login cannot reuse its old m
   expect((await api(c.student, '/logout', 'POST')).status).toBe(204)
   await disconnected(c.student)
   await expect.poll(() => c.teacher.page.evaluate(() => window.pt65Media.room.remoteParticipants.size)).toBe(0)
-  await expect.poll(() => c.teacher.page.evaluate(() => window.pt65Media.tracks.every(t => t.mediaStreamTrack.readyState === 'ended'))).toBe(true)
+  // SDK 2.24.1 disables remote tracks instead of ending reusable transceivers.
+  // Require both the unsubscribe event and all actual received tracks disabled.
+  await expect.poll(() => c.teacher.page.evaluate(() => {
+    const m = window.pt65Media
+    return m.tracks.length > 0 && m.unsubscribed === m.tracks.length && m.tracks.every(t => !t.mediaStreamTrack.enabled)
+  })).toBe(true)
   await login(c.student, 2)
   expect((await api(c.student, old.url + '/rtc/validate')).status).toBe(401)
   expect((await api(c.teacher, `/api/help/${c.help.id}/end`, 'POST')).status).toBe(204)
