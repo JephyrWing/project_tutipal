@@ -24,6 +24,7 @@ const materialVector = [1, ...Array(1023).fill(0)]
 const indexModel = (name) => 'e2e:' + name + ':1024'
 const held = new Set()
 let documentCalls = 0
+let lastDocumentCallAt = null
 let indexReply = { outcome: 'success', model: 'old', allowThrough: 0 }
 let child
 
@@ -49,13 +50,14 @@ const materialAi = createServer(async (request, response) => {
         indexReply = { outcome: body.outcome, model: body.model ?? 'old', allowThrough: documentCalls + (body.after ?? 0) }
         held.forEach(resume => resume())
       }
-      sendJson(response, { documentCalls, held: held.size })
+      sendJson(response, { documentCalls, lastDocumentCallAt, held: held.size })
     } else if (request.url === '/v1/embed' && body.texts?.length &&
         body.texts.every(text => text.startsWith('PT70MATERIAL'))) {
       sendJson(response, { model: 'e2e:pt70', vectors: body.texts.map(() => materialVector) })
     } else if (request.url === '/v1/embed' && body.texts?.length &&
         body.texts.every(text => text.startsWith('PT99MATERIAL'))) {
       documentCalls++
+      lastDocumentCallAt = Date.now()
       if (indexReply.outcome === 'hold' && documentCalls > indexReply.allowThrough) {
         await new Promise(resolve => {
           const resume = () => {
@@ -68,7 +70,8 @@ const materialAi = createServer(async (request, response) => {
         })
       }
       if (response.destroyed) return
-      if (indexReply.outcome === 'fail') response.writeHead(503).end()
+      if (indexReply.outcome === 'temporary') response.writeHead(503, { 'X-Embedding-Failure': 'transient' }).end()
+      else if (indexReply.outcome === 'fail') response.writeHead(503).end()
       else sendJson(response, { model: indexModel(indexReply.model), vectors: body.texts.map(() => materialVector) })
     } else if (request.url === '/v1/embed' && body.texts?.[0]?.startsWith('PT99QUERY ')) {
       sendJson(response, { model: indexModel(body.texts[0].split(' ')[1]), vectors: [materialVector] })
