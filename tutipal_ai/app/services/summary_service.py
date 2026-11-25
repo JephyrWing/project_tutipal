@@ -56,22 +56,40 @@ def _fit(text: str, tokens: int) -> str:
     return text[:low]
 
 
+def _encode(fields: dict[str, str], key: str) -> str:
+    """One JSON line of at most MESSAGE_MAX_CHARS. The raw value of `key` is cut before encoding (never the encoded
+    text), so escaping-heavy content (quotes, backslashes) shortens the value instead of breaking the JSON."""
+    def line(length: int) -> str:
+        return json.dumps({**fields, key: fields[key][:length]}, ensure_ascii=False)
+
+    full = line(len(fields[key]))
+    if len(full) <= MESSAGE_MAX_CHARS:
+        return full
+    low, high = 0, len(fields[key])
+    while low < high:
+        middle = (low + high + 1) // 2
+        if len(line(middle)) <= MESSAGE_MAX_CHARS:
+            low = middle
+        else:
+            high = middle - 1
+    return line(low)
+
+
 def _data_messages(request: SummarizeRequest) -> list[Message]:
     """JSON lines packed into user messages of at most 8000 characters, within INPUT_TOKEN_BUDGET."""
     lines: list[str] = []
     budget = INPUT_TOKEN_BUDGET
     if request.previousSummary:
         previous = _fit(request.previousSummary, PREVIOUS_TOKEN_LIMIT)
-        lines.append(json.dumps({"previous_summary": previous}, ensure_ascii=False))
+        lines.append(_encode({"previous_summary": previous}, "previous_summary"))
         budget -= estimate_tokens(previous)
     share = max(1, budget // len(request.messages))
     for message in request.messages:
         text = _fit(message.content, share)
-        lines.append(json.dumps({"transcript": SPEAKERS[message.role], "text": text}, ensure_ascii=False))
+        lines.append(_encode({"transcript": SPEAKERS[message.role], "text": text}, "text"))
     chunks: list[str] = []
     current = ""
     for line in lines:
-        line = line[:MESSAGE_MAX_CHARS]
         if current and len(current) + 1 + len(line) > MESSAGE_MAX_CHARS:
             chunks.append(current)
             current = line

@@ -67,6 +67,22 @@ async def test_input_is_fitted_to_the_small_model_budget(llm):
     assert len(texts) == 41
 
 
+@pytest.mark.parametrize("content", ['"' * 8000, "\\" * 8000, '\\"' * 4000],
+                         ids=["quotes", "backslashes", "mixed"])
+async def test_escaping_heavy_content_stays_valid_json(llm, content):
+    await post(body(previousSummary='"' * 4000, messages=[{"role": "user", "content": content}]))
+
+    lines = [line for message in llm.calls[0].messages for line in message.content.split("\n")]
+    assert all(len(message.content) <= summary_service.MESSAGE_MAX_CHARS for message in llm.calls[0].messages)
+    parsed = [json.loads(line) for line in lines]
+    assert len(parsed) == 2
+    assert isinstance(parsed[0]["previous_summary"], str) and parsed[0]["previous_summary"]
+    assert set(parsed[0]["previous_summary"]) == {'"'}
+    assert parsed[1]["transcript"] == "student"
+    assert isinstance(parsed[1]["text"], str) and parsed[1]["text"]
+    assert content.startswith(parsed[1]["text"])
+
+
 class OddLLM:
     def __init__(self, line=None, error=None):
         self.line = line
