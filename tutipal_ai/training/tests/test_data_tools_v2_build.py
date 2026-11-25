@@ -20,7 +20,9 @@ from _v2_data import (
     make_tables,
     qid_of,
     quizai_file,
-    write_caches,
+)
+from _v2_data import (
+    write_caches_v3 as write_caches,  # PT-88: 새 캐시 키 줄도 쓴다
 )
 
 from data_tools import build_grading_c as BC

@@ -29,6 +29,7 @@ from pathlib import Path
 
 from eval.run_eval import GRADE_SYSTEM
 
+from . import quality as Q
 from .common import (
     DEFAULT_SEED,
     exit_error,
@@ -154,13 +155,38 @@ def mohler_label_v2(avg: float, g1: float, g2: float) -> bool | None:
     return False
 
 
-def _mohler_items(datasets_dir, v2: bool) -> list[dict]:
+# Mohler 원천 점수: score_avg 는 0~5 이지만 E11·E12 의 20문항은 채점자 점수(score_grader_*)가 0~10 이다(2026-11-25 확인).
+MOHLER_TEN_SCALE_MAX = 5
+# v2: 채점자 둘의 점수 차가 이만큼 이상인 오답 후보는 라벨을 믿기 어려워 버린다(5점 척도로 맞춘 뒤).
+MOHLER_DISAGREE_GAP = 3
+
+
+def mohler_scale_questions(rows: list[dict]) -> set[str]:
+    """채점자 점수가 5를 넘는 문항(id 의 마지막 '.' 앞, 예: E11.Q01) — 이 문항은 채점자 점수가 10점 척도다."""
+    return {r['id'].rsplit('.', 1)[0] for r in rows
+            if max(float(r['score_grader_1']), float(r['score_grader_2'])) > MOHLER_TEN_SCALE_MAX}
+
+
+def _mohler_items(datasets_dir, v2: bool, dropped: list | None = None) -> list[dict]:
+    raw = rows(datasets_dir, SOURCE_FILES['mohler_open']) + rows(datasets_dir, SOURCE_FILES['mohler_close'])
+    scaled = mohler_scale_questions(raw) if v2 else set()
     items = []
-    for r in (rows(datasets_dir, SOURCE_FILES['mohler_open'])
-              + rows(datasets_dir, SOURCE_FILES['mohler_close'])):
+    for r in raw:
         s = float(r['score_avg'])
         if v2:
-            label = mohler_label_v2(s, float(r['score_grader_1']), float(r['score_grader_2']))
+            g1, g2 = float(r['score_grader_1']), float(r['score_grader_2'])
+            ten = r['id'].rsplit('.', 1)[0] in scaled
+            raw_label = mohler_label_v2(s, g1, g2)
+            if ten:
+                g1, g2 = g1 / 2, g2 / 2
+            label = mohler_label_v2(s, g1, g2)
+            why = None
+            if label is None and ten and raw_label is True:
+                why = 'mohler_10scale_flip'
+            elif label is False and abs(g1 - g2) >= MOHLER_DISAGREE_GAP:
+                why, label = 'disagree', None
+            if why and dropped is not None:
+                dropped.append({'source': 'MohlerASAG', 'source_id': r['id'], 'error': why})
             if label is None:
                 continue
         else:
@@ -191,14 +217,24 @@ def load_sources(datasets_dir):
     return [x for x in items if x['q'] and x['ref'] and x['ans']]
 
 
-def load_sources_v2(datasets_dir) -> list[dict]:
-    """v2 원천: SciEntsBank train, Mohler open+close(v2 점수 규칙), SAF train+validation. 항목마다 qid 를 붙인다."""
-    items = (_sci_items(datasets_dir) + _mohler_items(datasets_dir, v2=True)
+def load_sources_v2(datasets_dir, dropped: list | None = None) -> list[dict]:
+    """v2 원천: SciEntsBank train, Mohler open+close(v2 점수 규칙), SAF train+validation. 항목마다 qid 를 붙인다.
+
+    PT-88 규칙: Mohler 10점 척도 문항 정규화, 채점자 불일치 오답 후보 제외, 독일어 SAF 답안 제외, 무응답 오답은 kind
+    'unknown'. dropped 에 리스트를 주면 규칙으로 뺀 행을 {'source', 'source_id', 'error'} 로 덧붙인다.
+    """
+    items = (_sci_items(datasets_dir) + _mohler_items(datasets_dir, v2=True, dropped=dropped)
              + _saf_items(datasets_dir, ('saf', 'saf_validation')))
     out = []
     for x in items:
-        if x['q'] and x['ref'] and x['ans']:
-            out.append({**x, "qid": question_id(x['source'], x['q'])})
+        if not (x['q'] and x['ref'] and x['ans']):
+            continue
+        if x['source'] == 'SAF-communication-networks' and Q.is_german(x['ans']):
+            if dropped is not None:
+                dropped.append({'source': x['source'], 'source_id': x['source_id'], 'error': 'german'})
+            continue
+        kind = 'unknown' if x['label'] is False and Q.is_no_answer(x['ans']) else x['kind']
+        out.append({**x, "kind": kind, "qid": question_id(x['source'], x['q'])})
     return out
 
 

@@ -7,11 +7,14 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from data_tools import build_grading_train as B
+from data_tools.common import DEFAULT_SEED
 
 SCI = "SciEntsBank"
 MOH = "MohlerASAG"
@@ -181,19 +184,30 @@ def english_items(tables: dict[str, list[dict]]) -> list[dict]:
 
 # ---------- 한국어 번역·작성 결과(캐시 내용) ----------
 
+# PT-88 번역 검사(trans_check)를 통과하도록 영어 원문의 숫자·약어 토큰을 그대로 옮기고, 구분용 번호는
+# 숫자 대신 한글 글자로 쓴다(번역에 원문에 없는 숫자가 있으면 'number' 규칙에 걸린다).
+def _tag(n: int) -> str:
+    return "".join("가까나다따라마바빠사"[int(d)] for d in str(n))
+
+
+def _carry(en: str) -> str:
+    keep = " ".join(w for w in en.split() if re.search(r"\d|[A-Z]{2}", w))
+    return f" ({keep})" if keep else ""
+
+
 def ko_question(q_en: str) -> str:
-    return f"합성 문항 {sha_num(q_en, 10**6)}번: 가상의 구조가 새 항목을 다루는 규칙을 우리말로 정리하세요."
+    return f"합성 문항 {_tag(sha_num(q_en, 10**6))}: 가상의 구조가 새 항목을 다루는 규칙을 우리말로 정리하세요.{_carry(q_en)}"
 
 
 def ko_ref(ref_en: str) -> str:
-    return f"합성 모범 답안 {sha_num(ref_en, 10**6)}번: 새 항목을 끝에 두고 앞선 항목의 순서를 유지한다."
+    return f"합성 모범 답안 {_tag(sha_num(ref_en, 10**6))}: 새 항목을 끝에 두고 앞선 항목의 순서를 유지한다.{_carry(ref_en)}"
 
 
 def ko_answer(ans_en: str) -> str:
-    n = sha_num(ans_en)
+    n = _tag(sha_num(ans_en))
     if " says " in ans_en and ("keeps" in ans_en or "resends lost" in ans_en or "heat flows" in ans_en):
-        return f"학생 답안 {n}번입니다 새 항목을 끝에 붙이고 기존 순서를 그대로 지킵니다"
-    return f"학생 답안 {n}번입니다 항목을 매번 무작위로 섞어 버립니다"
+        return f"학생 답안 {n}입니다 새 항목을 끝에 붙이고 기존 순서를 그대로 지킵니다{_carry(ans_en)}"
+    return f"학생 답안 {n}입니다 항목을 매번 무작위로 섞어 버리고 순서를 지키지 않습니다{_carry(ans_en)}"
 
 
 def translate_text(text: str, kind_hint: str) -> str:
@@ -216,19 +230,35 @@ def wkey(item, translator=TRANSLATOR, writer=WRITER):
     return f"{item['source']}:{item['source_id']}:{translator}>{writer}"
 
 
-def write_caches(folder: Path, items: list[dict], *, trans_only=(), reasons=None) -> None:
-    """items 전부의 번역 캐시와(trans_only 에 든 id 는 빼고) 작성 캐시를 folder 에 쓴다."""
+def write_caches(folder: Path, items: list[dict], *, trans_only=(), reasons=None, new_keys=False) -> None:
+    """items 전부의 번역 캐시와(trans_only 에 든 id 는 빼고) 작성 캐시를 folder 에 쓴다.
+
+    기본은 예전(2026-11-25 v2) 키만 쓴다. new_keys=True 면 PT-88 키(#p=, #w=) 줄도 함께 쓴다
+    (과학 행 선별은 예전 키, 번역·작성 재사용은 새 키로 하므로 둘 다 있어야 LLM 을 부르지 않는다).
+    """
+    from data_tools import (
+        build_grading_c as BC,  # 순환 import 방지(테스트 도우미에서만 필요)
+    )
+
+    ns = argparse.Namespace(translator=TRANSLATOR, writer=WRITER, seed=DEFAULT_SEED, v2=True)
     reasons = reasons or {}
     folder.mkdir(parents=True, exist_ok=True)
     t_lines, w_lines = [], []
     for x in items:
         out = written(x, reasons.get(x["source_id"]))
         tr = {k: out[k] for k in ("question", "model_answer", "student_answer")}
-        t_lines.append(json.dumps({"key": tkey(x), "out": tr, "error": None}, ensure_ascii=False))
+        tkeys = [tkey(x)] + ([BC.tkey(x, ns)] if new_keys else [])
+        wkeys = [wkey(x)] + ([BC.wkey(x, ns)] if new_keys else [])
+        t_lines += [json.dumps({"key": k, "out": tr, "error": None}, ensure_ascii=False) for k in tkeys]
         if x["source_id"] not in trans_only:
-            w_lines.append(json.dumps({"key": wkey(x), "out": out, "error": None}, ensure_ascii=False))
+            w_lines += [json.dumps({"key": k, "out": out, "error": None}, ensure_ascii=False) for k in wkeys]
     (folder / "trans_cache.jsonl").write_text("".join(s + "\n" for s in t_lines), encoding="utf-8")
     (folder / "write_cache.jsonl").write_text("".join(s + "\n" for s in w_lines), encoding="utf-8")
+
+
+def write_caches_v3(folder: Path, items: list[dict], **kw) -> None:
+    """PT-88 이전 테스트용: 예전 키와 새 키 캐시를 모두 쓴다(캐시 재사용 동작을 그대로 검사하려고)."""
+    write_caches(folder, items, new_keys=True, **kw)
 
 
 class FakeLLM:
@@ -244,11 +274,11 @@ class FakeLLM:
             self.by_text[x["ref"]] = ko_ref(x["ref"])
             self.by_text[x["ans"]] = ko_answer(x["ans"])
 
-    def translate(self, model, text):
+    def translate(self, model, text, seed=None, **kw):
         self.translated.append(text)
         if self.forbid:
             raise RuntimeError("translate must not be called")
-        return self.by_text.get(text, f"한국어 번역 문장 {sha_num(text)}번")
+        return self.by_text.get(text, f"한국어 번역 문장 {_tag(sha_num(text))}{_carry(text)}")
 
     def generate(self, model, prompt, system=None, fmt=None, seed=None):
         self.generated.append(prompt)

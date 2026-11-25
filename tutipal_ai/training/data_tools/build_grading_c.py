@@ -40,6 +40,7 @@ from pathlib import Path
 
 from data_tools import build_grading_train as B
 from data_tools import compare_hybrid as H
+from data_tools import quality as Q
 from data_tools.common import (
     DEFAULT_SEED,
     exit_error,
@@ -64,14 +65,19 @@ def first_sentence(text):
     return re.split(r'(?<=[.!?])\s', text.strip(), maxsplit=1)[0]
 
 
-def check(o, label):
+def check(o, label, expl: bool = False):
+    """작성 결과 검사. expl=True(v2 작성·조립)일 때만 PT-88 설명 검사를 더한다.
+
+    v1 경로와 v2 과학 행 선별(_ok_cached, 예전 키 캐시가 있는지만 본다)은 예전 규칙 그대로다.
+    """
     err = B.validate(o, label)
-    if err or label is not False:
+    if err:
         return err
-    head = first_sentence(o['feedback'])
-    if head.startswith(('네,', '네!', '네 ')) or any(p in head for p in PRAISE):
-        return 'feedback praises wrong answer'
-    return None
+    if label is False:
+        head = first_sentence(o['feedback'])
+        if head.startswith(('네,', '네!', '네 ')) or any(p in head for p in PRAISE):
+            return 'feedback praises wrong answer'
+    return Q.expl_check(o, label) if expl else None
 
 
 # 캐시 키 구성. 번역(H.translate)은 --seed 를 쓰지 않고 고정 seed(DEFAULT_SEED)로 요청하므로 번역 캐시 키에는
@@ -80,13 +86,104 @@ CACHE_KEY_FIELDS = {'trans_cache': ['source', 'source_id', 'translator'],
                     'write_cache': ['source', 'source_id', 'translator', 'writer', 'seed']}
 
 
-def tkey(x, a):
+# v2 작성 모델 입력: 한국어 번역 + 영어 원문 + (SAF) 원래 채점자 피드백. 바꾸면 작성 캐시 키(#w=)가 바뀐다.
+WRITER_USER_V2 = ("정답 여부: {kind}\n<question>{q_ko}</question>\n<model_answer>{ref_ko}</model_answer>\n"
+                  "<student_answer>{ans_ko}</student_answer>\n[영어 원문 (참고)]\n<question_en>{q}</question_en>\n"
+                  "<model_answer_en>{ref}</model_answer_en>\n<student_answer_en>{ans}</student_answer_en>{hint}")
+WRITER_HINT = "\n<hint>{hint}</hint>"
+RETRANSLATE_SEED = DEFAULT_SEED + 1  # 번역 검사에 걸린 칸을 한 번 더 번역할 때
+
+
+def _sha8(*parts) -> str:
+    return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()[:8]
+
+
+def trans_prompt_hash(text: str = '') -> str:
+    """번역 프롬프트 해시: TG_PROMPT·용어집 안내·검사 규칙 버전 + text 에 나오는 용어집 항목만.
+
+    용어를 추가해도 그 용어가 든 원문만 키가 바뀐다(다시 번역). text 가 비면 기본 프롬프트 해시(stats 에 남김).
+    모듈 속성을 호출 시점에 읽는다(테스트에서 바꿔 끼울 수 있게).
+    """
+    return _sha8(H.TG_PROMPT, H.LLM_TRANSLATE_SYSTEM, H.GLOSSARY_PROMPT, Q.CHECK_VERSION, Q.glossary_for(text))
+
+
+def writer_prompt_hash() -> str:
+    return _sha8(H.WRITER_SYSTEM_V2, WRITER_USER_V2, WRITER_HINT, B.KIND_DESC)
+
+
+def old_tkey(x, a):
+    """v1·v2(2026-11-25) 번역 캐시 키. v2 과학 행 선별(_ok_cached)은 이 키로 본다."""
     return f"{x['source']}:{x['source_id']}:{a.translator}"
 
 
-def wkey(x, a):
+def old_wkey(x, a):
     """기본 seed 면 예전 키 그대로라 기존 write_cache.jsonl 을 고치지 않고 이어 쓴다."""
     return f"{x['source']}:{x['source_id']}:{a.translator}>{a.writer}" + seed_key_suffix(a.seed)
+
+
+def _row_en(x) -> str:
+    return '\n'.join(x.get(src, '') for _, src in FIELDS)
+
+
+def tkey(x, a):
+    """v2 는 프롬프트 해시(#p=)를 붙인다. 프롬프트·용어집·검사 규칙이 바뀌면 다시 번역한다(예전 줄은 그대로 둠)."""
+    if not getattr(a, 'v2', False):
+        return old_tkey(x, a)
+    return f"{old_tkey(x, a)}#p={trans_prompt_hash(_row_en(x))}"
+
+
+def wkey(x, a):
+    if not getattr(a, 'v2', False):
+        return old_wkey(x, a)
+    return f"{old_wkey(x, a)}#w={writer_prompt_hash()}"
+
+
+def same_translation(c: dict, tr: dict) -> bool:
+    """작성 캐시가 지금 번역으로 쓴 것인가. 번역이 바뀌면(키는 같아도) 이유·피드백을 다시 쓴다.
+    작성이 예외로 끝나 out 이 없는 줄은 비교할 수 없어 그대로 둔다."""
+    return c['out'] is None or all(c['out'].get(k) == tr.get(k) for k, _ in FIELDS)
+
+
+# LLM 호출이 예외로 끝난 오류(Ollama 연결 끊김·타임아웃·GPU 메모리 부족으로 인한 HTTP 500 등).
+# 검사 규칙 위반과 달리 내용 문제가 아니므로, 같은 명령으로 이어 돌리면 그 행을 다시 시도한다.
+TRANSIENT_ERRORS = frozenset({'URLError', 'HTTPError', 'TimeoutError', 'timeout', 'OSError', 'ConnectionError',
+                              'ConnectionResetError', 'ConnectionRefusedError', 'ConnectionAbortedError',
+                              'RemoteDisconnected', 'IncompleteRead', 'BrokenPipeError'})
+
+
+def transient(err: str | None) -> bool:
+    return err in TRANSIENT_ERRORS
+
+
+def trans_error(x: dict, tr: dict) -> str | None:
+    """번역 세 칸을 trans_check 로 검사한다. 'trans_check:<규칙>:<칸>' 또는 None."""
+    for k, src in FIELDS:
+        rule = Q.trans_check(x[src], tr.get(k) or '')
+        if rule:
+            return f"trans_check:{rule}:{k}"
+    return None
+
+
+def no_answer(x: dict, a) -> bool:
+    """v2 무응답 행: 작성 모델을 부르지 않고 고정 문장(Q.NO_ANSWER_*)을 쓴다."""
+    return bool(getattr(a, 'v2', False)) and x['label'] is False and Q.is_no_answer(x['ans'])
+
+
+def writer_prompt(x: dict, tr: dict, v2: bool) -> str:
+    if not v2:
+        return (f"정답 여부: {B.KIND_DESC[x['kind']]}\n<question>{tr['question']}</question>\n"
+                f"<model_answer>{tr['model_answer']}</model_answer>\n<student_answer>{tr['student_answer']}</student_answer>")
+    hint = WRITER_HINT.format(hint=x['hint']) if x.get('hint') else ''
+    return WRITER_USER_V2.format(kind=B.KIND_DESC[x['kind']], q_ko=tr['question'], ref_ko=tr['model_answer'],
+                                 ans_ko=tr['student_answer'], q=x['q'], ref=x['ref'], ans=x['ans'], hint=hint)
+
+
+def unload(model: str) -> None:
+    """모델 언로드(keep_alive 0). 실패해도 결과에는 영향이 없어 경고만 남긴다."""
+    try:
+        H.unload(model)
+    except Exception as e:  # noqa: BLE001 - Ollama 가 꺼져 있어도 캐시·조립은 계속한다
+        print(f'경고: {model} 언로드 실패 ({type(e).__name__})', file=sys.stderr, flush=True)
 
 
 def _parse_cache_lines(path: Path) -> tuple[list[dict], bool]:
@@ -158,6 +255,7 @@ V2_KIND_ORDER = ("wrong", "partial", "unknown", "paraphrase")
 SCIENCE_SOURCE = "SciEntsBank"
 CODING_SUBJECT = "코딩"
 REVIEW_KEEP_VERDICTS = frozenset({"OK", "WEAK_KEEP"})
+REVIEW_EXCLUDE_VERDICTS = frozenset({"LABEL_ERR"})
 MISSING_CORE_MIN_WORDS = 5
 MISSING_CORE_REF_RATIO = 0.25
 CACHE_FILES = ("trans_cache.jsonl", "write_cache.jsonl")
@@ -236,8 +334,7 @@ def drop_missing_core(items: list[dict], keep_ids: set[str]) -> tuple[list[dict]
     return kept, sorted(dropped)
 
 
-def review_keep_ids(paths: Iterable[str | os.PathLike]) -> set[str]:
-    """정답 검수표(review_true_*.csv, 열 id,scope,verdict,reason)에서 verdict 가 OK·WEAK_KEEP 인 id."""
+def _review_ids(paths: Iterable[str | os.PathLike], verdicts: frozenset[str]) -> set[str]:
     out: set[str] = set()
     for path in paths:
         with open(path, encoding="utf-8-sig", newline="") as f:
@@ -245,8 +342,18 @@ def review_keep_ids(paths: Iterable[str | os.PathLike]) -> set[str]:
             missing = {"id", "verdict"} - set(reader.fieldnames or [])
             if missing:
                 raise ValueError(f"{Path(path).name}: 열이 없음: {sorted(missing)}")
-            out |= {row["id"] for row in reader if (row["verdict"] or "").strip() in REVIEW_KEEP_VERDICTS}
+            out |= {row["id"] for row in reader if (row["verdict"] or "").strip() in verdicts}
     return out
+
+
+def review_keep_ids(paths: Iterable[str | os.PathLike]) -> set[str]:
+    """정답 검수표(review_true_*.csv, 열 id,scope,verdict,reason)에서 verdict 가 OK·WEAK_KEEP 인 id."""
+    return _review_ids(paths, REVIEW_KEEP_VERDICTS)
+
+
+def review_exclude_ids(paths: Iterable[str | os.PathLike]) -> set[str]:
+    """사람 검수표(review_sheet.csv)에서 verdict 가 LABEL_ERR 인 id(원천 라벨이 틀려 학습에서 뺀다)."""
+    return _review_ids(paths, REVIEW_EXCLUDE_VERDICTS)
 
 
 def cache_source(out: Path, cache_from: Path | None, name: str) -> Path:
@@ -287,14 +394,15 @@ TEXT_CACHE = 'text_cache.jsonl'
 
 
 def text_key(translator: str, text: str) -> str:
-    return f"{translator}|{hashlib.sha256(text.encode()).hexdigest()}"
+    return f"{translator}|{hashlib.sha256(text.encode()).hexdigest()}#p={trans_prompt_hash(text)}"
 
 
 class TextMemo:
     """v2: 같은 영어 원문(문제·모범 답안이 qid 마다 반복)을 한 번만 번역하는 텍스트 단위 메모.
 
     행 캐시(trans_cache.jsonl)의 키·레코드는 그대로 두고 그 위에 얹는다. 행 캐시에 이미 있는 행은 행 캐시를
-    그대로 쓰므로 선별·조립 결과는 바뀌지 않는다. 성공한 번역만 out/text_cache.jsonl 에 한 줄씩 이어 쓴다.
+    그대로 쓰므로 선별·조립 결과는 바뀌지 않는다. 번역 검사(trans_check)에 걸리면 다른 seed 로 한 번 더 번역하고,
+    검사를 통과한 번역만 out/text_cache.jsonl 에 한 줄씩 이어 쓴다(메모에 든 번역은 검사를 통과한 것).
     """
 
     def __init__(self, path: Path, translate: Callable[[str, str], str]):
@@ -302,6 +410,9 @@ class TextMemo:
         self.translate = translate
         repair_tail(path)
         self.memo = {c['key']: c['out'] for c in load_cache(path).values()}
+        # 두 seed 모두 검사에 걸린 번역. 파일에는 쓰지 않고(메모 파일엔 통과한 번역만) 이번 실행 동안만 기억해서,
+        # 같은 문제·모범 답안이 qid 의 다른 행에서 또 나와도 다시 번역하지 않는다(seed 고정이라 결과도 같다).
+        self.failed: dict[str, str] = {}
         self.hits = 0
 
     def __call__(self, translator: str, text: str) -> str:
@@ -309,7 +420,15 @@ class TextMemo:
         if key in self.memo:
             self.hits += 1
             return self.memo[key]
-        ko = self.translate(translator, text)
+        if key in self.failed:
+            self.hits += 1
+            return self.failed[key]
+        ko = self.translate(translator, text, seed=DEFAULT_SEED, glossary=True)
+        if Q.trans_check(text, ko):
+            ko = self.translate(translator, text, seed=RETRANSLATE_SEED, glossary=True)
+            if Q.trans_check(text, ko):
+                self.failed[key] = ko
+                return ko  # 저장하지 않는다. 행은 trans_error 로 거절된다
         with open(self.path, 'a', encoding='utf-8') as f:
             f.write(json.dumps({'key': key, 'out': ko}, ensure_ascii=False) + '\n')
         self.memo[key] = ko
@@ -347,32 +466,52 @@ def build_parser():
     ap.add_argument('--assemble-only', action='store_true', help='LLM 을 부르지 않고 캐시만으로 조립한다')
     ap.add_argument('--review-true', nargs='+', default=[],
                     help='v2: 정답 검수표 CSV(review_true_*.csv). OK·WEAK_KEEP 행은 짧아도 남긴다')
+    ap.add_argument('--exclude-review', nargs='+', default=[],
+                    help='v2: 사람 검수표 CSV(review_sheet.csv). verdict 가 LABEL_ERR 인 행은 선별 전에 뺀다')
     return ap
 
 
 def _ok_cached(x: dict, a: argparse.Namespace, tcache: dict, wcache: dict) -> bool:
-    """번역·작성 캐시가 모두 있고 오류가 없으며 지금 검사 규칙도 통과하면 True(LLM 을 다시 부를 일이 없음)."""
-    t, c = tcache.get(tkey(x, a)), wcache.get(wkey(x, a))
+    """예전 키(old_tkey·old_wkey) 번역·작성 캐시가 모두 있고 오류가 없으며 예전 작성 검사도 통과하면 True.
+
+    PT-88 설명 검사(expl)는 보지 않는다. 고른 행은 어차피 새 프롬프트로 다시 쓰므로 예전 설명으로 거르지 않는다.
+
+    v2 과학 행 선별 기준(2026-11-25 v2 때 만든 캐시가 있는 행만). 고른 뒤에는 새 프롬프트로 다시 번역·작성한다.
+    """
+    t, c = tcache.get(old_tkey(x, a)), wcache.get(old_wkey(x, a))
     return bool(t and not t['error'] and c and not c['error'] and check(c['out'], x['label']) is None)
 
 
-def pick_v2(a: argparse.Namespace, out: Path, cache_from: Path | None) -> tuple[list[dict], list[str]]:
-    """v2 선별: 원천 → 핵심 누락 정답 제외 → qid 상한(과학은 캐시가 모두 있는 행만). (고른 항목, 뺀 id)."""
+def pick_v2(a: argparse.Namespace, out: Path,
+            cache_from: Path | None) -> tuple[list[dict], list[str], list[dict]]:
+    """v2 선별: 원천(라벨 규칙) → 검수 LABEL_ERR 제외 → 핵심 누락 정답 제외 → qid 상한(과학은 예전 캐시가 있는 행만).
+
+    (고른 항목, 핵심 누락으로 뺀 id, 라벨 규칙·검수로 뺀 행 {'source','source_id','error'}).
+    """
     tcache = load_cache(cache_source(out, cache_from, 'trans_cache.jsonl'))
     wcache = load_cache(cache_source(out, cache_from, 'write_cache.jsonl'))
-    items, dropped = drop_missing_core(B.load_sources_v2(a.datasets_dir), review_keep_ids(a.review_true))
-    return select_v2(items, a.seed, lambda x: _ok_cached(x, a, tcache, wcache)), dropped
+    excluded = review_exclude_ids(a.exclude_review)
+    label_drops: list[dict] = []
+    items = []
+    for x in B.load_sources_v2(a.datasets_dir, dropped=label_drops):
+        if item_id(x) in excluded:
+            label_drops.append({'source': x['source'], 'source_id': x['source_id'], 'error': 'exclude_review'})
+        else:
+            items.append(x)
+    items, dropped = drop_missing_core(items, review_keep_ids(a.review_true))
+    return select_v2(items, a.seed, lambda x: _ok_cached(x, a, tcache, wcache)), dropped, label_drops
 
 
 def main(argv: list[str] | None = None) -> None:
     ap = build_parser()
     a = ap.parse_args(argv)
     require_outside_repo(ap, a, '--out')  # 아무것도 읽거나 쓰기 전에 확인한다
-    refuse_input_as_output(ap, {'--review-true': a.review_true}, [Path(a.out) / n for n in OUTPUT_FILES])
+    refuse_input_as_output(ap, {'--review-true': a.review_true, '--exclude-review': a.exclude_review},
+                           [Path(a.out) / n for n in OUTPUT_FILES])
     if a.inject_ratio is None:
         a.inject_ratio = V2_INJECT_RATIO if a.v2 else V1_INJECT_RATIO
-    if not a.v2 and (a.cache_from or a.review_true):
-        ap.error('--cache-from, --review-true 는 --v2 와 함께만 쓴다')
+    if not a.v2 and (a.cache_from or a.review_true or a.exclude_review):
+        ap.error('--cache-from, --review-true, --exclude-review 는 --v2 와 함께만 쓴다')
     cache_from = Path(a.cache_from) if a.cache_from else None
     if cache_from is not None and not cache_from.is_dir():
         ap.error(f'--cache-from 폴더가 없음: {a.cache_from!r}')
@@ -391,9 +530,10 @@ def main(argv: list[str] | None = None) -> None:
 
     out = Path(a.out)
     missing_core_ids: list[str] = []
+    label_drops: list[dict] = []
     if a.v2:
         try:
-            picked, missing_core_ids = pick_v2(a, out, cache_from)
+            picked, missing_core_ids, label_drops = pick_v2(a, out, cache_from)
         except (OSError, ValueError) as e:  # 검수표 없음·열 없음, 캐시 손상 등
             exit_error(str(e))
         where = f'--datasets-dir {a.datasets_dir!r} (v2 는 --n 을 쓰지 않음)'
@@ -424,10 +564,12 @@ def main(argv: list[str] | None = None) -> None:
         with open(tpath, 'a', encoding='utf-8') as f:
             for i, x in enumerate(picked):
                 key = tkey(x, a)
-                if key in tcache:
+                if key in tcache and not transient(tcache[key]['error']):
                     continue
                 try:
                     tr, err = {k: translate_text(a.translator, x[src]) for k, src in FIELDS}, None
+                    if a.v2:  # 메모가 검사에 걸린 칸을 이미 한 번 다시 번역했다. 그래도 걸리면 거절
+                        err = trans_error(x, tr)
                 except Exception as e:  # noqa: BLE001 - 사유만 남기고 다음으로
                     tr, err = None, type(e).__name__
                 c = {'key': key, 'out': tr, 'error': err}
@@ -436,6 +578,8 @@ def main(argv: list[str] | None = None) -> None:
                 tcache[key] = c
                 done += 1
                 progress('번역', done, i, len(picked), t0)
+        if translate.calls:
+            unload(a.translator)  # 작성 모델을 올리기 전에 내린다(한 번에 한 모델)
 
     # 2단계: 이유·피드백 작성
     wpath = out / 'write_cache.jsonl'
@@ -449,21 +593,24 @@ def main(argv: list[str] | None = None) -> None:
             for i, x in enumerate(picked):
                 key = wkey(x, a)
                 old = wcache.get(key)
-                if old and (old['error'] or not check(old['out'], x['label'])):
-                    continue  # 이미 거절됐거나 지금 규칙으로도 통과하는 캐시는 그대로 쓴다
                 t = tcache.get(tkey(x, a))
-                if not t or t['error']:
+                if not t or t['error'] or no_answer(x, a):
                     continue
                 tr = t['out']
-                user = (f"정답 여부: {B.KIND_DESC[x['kind']]}\n<question>{tr['question']}</question>\n"
-                        f"<model_answer>{tr['model_answer']}</model_answer>\n<student_answer>{tr['student_answer']}</student_answer>")
+                if old and same_translation(old, tr) and not transient(old['error']):
+                    if old['out'] is not None and not check(old['out'], x['label'], a.v2):
+                        continue  # 지금 규칙으로 통과하는 캐시는 그대로 쓴다(규칙이 느슨해져 살아난 거절 줄 포함)
+                    if old['error']:
+                        continue  # 이미 두 번 써서 규칙 위반으로 거절됐고 지금 규칙으로도 그렇다
+                user = writer_prompt(x, tr, a.v2)
                 o, err = None, None
                 for attempt in range(2):
                     prompt = user if attempt == 0 else user + f"\n\n[다시 작성] 직전 결과가 규칙 위반({err})."
                     try:
-                        w = json.loads(generate(a.writer, prompt, system=H.WRITER_SYSTEM, fmt='json', seed=a.seed + attempt))
+                        system = H.WRITER_SYSTEM_V2 if a.v2 else H.WRITER_SYSTEM
+                        w = json.loads(generate(a.writer, prompt, system=system, fmt='json', seed=a.seed + attempt))
                         o = {**tr, 'reason': str(w.get('reason', '')), 'feedback': str(w.get('feedback', ''))}
-                        err = check(o, x['label'])
+                        err = check(o, x['label'], a.v2)
                     except Exception as e:  # noqa: BLE001
                         err = type(e).__name__
                     if not err:
@@ -474,19 +621,32 @@ def main(argv: list[str] | None = None) -> None:
                 wcache[key] = c
                 done += 1
                 progress('작성', done, i, len(picked), t0)
+        if generate.calls:
+            unload(a.writer)
 
     # 3단계: 조립 (누수 제외 · 꼼수 변형)
     rnd = random.Random(a.seed)
-    train, rejected = [], []
+    train, rejected = [], list(label_drops)
+    templated: Counter = Counter()
     for x in picked:
         c = wcache.get(wkey(x, a))
         t = tcache.get(tkey(x, a))
-        err = (t and t['error']) or (c and c['error']) or (None if c else 'missing')
+        noans = no_answer(x, a) and t is not None
+        werr = c and c['error']
+        if werr and c['out'] is not None and not check(c['out'], x['label'], a.v2):
+            werr = None  # 규칙 위반으로 거절됐지만 지금 규칙으로는 통과한다(번역 일치는 아래 stale_write 가 본다)
+        err = (t and t['error']) or (None if noans else (werr or (None if c else 'missing')))
+        if not err and a.v2:  # 캐시 번역도 지금 규칙으로 다시 검사하고, 다른 번역으로 쓴 작성 캐시는 쓰지 않는다
+            err = (('missing' if t is None else trans_error(x, t['out']))
+                   or (None if noans or same_translation(c, t['out']) else 'stale_write'))
         if err:
             rejected.append({'source': x['source'], 'source_id': x['source_id'], 'error': err})
             continue
-        o = c['out']
-        again = check(o, x['label'])
+        if noans:
+            o = {**t['out'], 'reason': Q.NO_ANSWER_REASON, 'feedback': Q.NO_ANSWER_FEEDBACK}
+        else:
+            o = c['out']
+        again = check(o, x['label'], a.v2)
         if again:
             rejected.append({'source': x['source'], 'source_id': x['source_id'], 'error': again})
             continue
@@ -513,6 +673,8 @@ def main(argv: list[str] | None = None) -> None:
             for r in new_rows:
                 r['qid'] = x['qid']  # 꼼수 행도 바탕 문제의 qid 를 가진다
         train += new_rows
+        if noans:
+            templated[x['source']] += 1
     rnd.shuffle(train)
     if not train:  # 빈 train.jsonl 로 기존 결과를 덮지 않는다(캐시는 남으므로 고친 뒤 이어서 돌릴 수 있다)
         exit_error(f"학습 행이 0개 (원본 {len(picked)}건 모두 거절: "
@@ -526,6 +688,14 @@ def main(argv: list[str] | None = None) -> None:
              'llm_translate_calls': translate.calls, 'llm_write_calls': generate.calls,
              'text_memo_hits': memo.hits if memo else 0}
     if a.v2:
+        drops: dict[str, Counter] = defaultdict(Counter)
+        for r in rejected:
+            drops[r['error'].split(' ')[0] if r['error'].startswith('eval-like') else r['error']][r['source']] += 1
+        if templated:
+            drops['unknown_template'] = templated  # 버린 행은 아니고 무응답 고정 문장으로 남긴 행
+        stats.update({'prompt_hash': {'trans': trans_prompt_hash(), 'write': writer_prompt_hash()},
+                      'drops': {k: dict(v) for k, v in sorted(drops.items())},
+                      'exclude_review_files': [Path(p).name for p in a.exclude_review]})
         stats.update({'v2': True, 'select_caps': V2_SELECT_CAPS,
                       'picked_source': Counter(x['source'] for x in picked),
                       'picked_questions': len({x['qid'] for x in picked}),

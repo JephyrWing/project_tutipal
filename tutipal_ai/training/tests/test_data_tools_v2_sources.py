@@ -137,7 +137,7 @@ def test_v2_mohler_true_rows_need_avg_45_and_both_graders_at_least_4(v2_items, m
         {"id": "X.EDGE.LOWGRADER", "question": "Edge question about zeta?",
          "instructor_answer": "Edge reference answer text.",
          "student_answer": "another edge student answer that is long enough", "score_avg": 4.6,
-         "score_grader_1": 5.5, "score_grader_2": 3.7},
+         "score_grader_1": 5.0, "score_grader_2": 3.7},
         {"id": "X.EDGE.AMBIG", "question": "Edge question about zeta?",
          "instructor_answer": "Edge reference answer text.",
          "student_answer": "an ambiguous edge student answer that is long", "score_avg": 4.0,

@@ -22,8 +22,10 @@ from _v2_data import (
     make_tables,
     qid_of,
     quizai_file,
-    write_caches,
     written,
+)
+from _v2_data import (
+    write_caches_v3 as write_caches,  # PT-88: 새 캐시 키 줄도 쓴다
 )
 
 # isort: split  (data_tools 는 실행 위치에 따라 first/third-party 로 다르게 판별돼 따로 묶는다)

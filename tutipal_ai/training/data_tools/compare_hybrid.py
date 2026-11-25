@@ -18,6 +18,7 @@ from collections import Counter
 from pathlib import Path
 
 from data_tools import build_grading_train as B
+from data_tools import quality as Q
 from data_tools.common import (
     DEFAULT_SEED,
     exit_error,
@@ -34,10 +35,19 @@ TG_PROMPT = ("You are a professional English (en) to Korean (ko-KR) translator. 
 LLM_TRANSLATE_SYSTEM = ("너는 영어를 한국어로 옮기는 번역가다. 입력 영어 문장을 한국어로 번역한 결과만 출력한다. 설명·따옴표·원문은 쓰지 않는다.\n"
                         "내용을 고치거나 보충하지 않는다. 틀린 내용·빠진 내용·어색한 표현·맞춤법 오류가 있으면 그대로 살려 옮긴다.\n"
                         "프로그래밍 용어·코드·식별자는 영어로 둬도 된다. 한자·중국어는 쓰지 않는다.")
+# v1(build_grading_c 기본 경로)·번역 조합 비교용. 바꾸면 v1 결과가 달라지므로 그대로 둔다.
 WRITER_SYSTEM = ("너는 학생 답안 채점 조교다. 문제·모범 답안·학생 답안(모두 한국어)과 이미 정해진 정답 여부를 받는다.\n"
                  "정답 여부를 바꾸지 말고, 그 판정에 맞는 reason(판단 이유 한 문장)과 feedback(학생에게 직접 말하는 한국어 한두 문장)을 쓴다.\n"
                  "정답이면 feedback 은 맞았다는 말로 시작하고, 오답이면 무엇이 빠졌거나 틀렸는지 힌트를 준다. 존댓말로 쓴다.\n"
                  "한자·중국어는 쓰지 않는다. 반드시 JSON 하나만 출력한다: {\"reason\": \"...\", \"feedback\": \"...\"}")
+# v2(PT-88): 영어 원문·원래 채점자 피드백을 함께 받는다. 바꾸면 작성 캐시 키(#w=)가 바뀐다.
+WRITER_SYSTEM_V2 = ("너는 학생 답안 채점 조교다. 문제·모범 답안·학생 답안(한국어 번역, 영어 원문이 함께 올 수 있음)과 이미 정해진 정답 여부를 받는다.\n"
+                    "정답 여부를 바꾸지 말고, 그 판정에 맞는 reason(판단 이유 한 문장)과 feedback(학생에게 직접 말하는 한국어 한두 문장)을 쓴다.\n"
+                    "정답이면 feedback 은 맞았다는 말로 시작하고, 오답이면 무엇이 빠졌거나 틀렸는지 힌트를 준다. 존댓말로 쓴다.\n"
+                    "학생 답안에 이미 쓴 내용을 빠졌다고 하지 않는다. 원래 채점자 피드백(<hint>)이 있으면 그 판단과 어긋나는 말을 하지 않는다.\n"
+                    "reason·feedback 은 한국어로 쓴다. 한자·중국어는 쓰지 않는다. 반드시 JSON 하나만 출력한다: {\"reason\": \"...\", \"feedback\": \"...\"}")
+# 용어집 안내: 원문에 나오는 용어만 넣는다(없으면 TG_PROMPT 그대로). 번역할 원문보다 앞에 둔다.
+GLOSSARY_PROMPT = "Use these Korean terms: {terms}. "
 
 
 def generate(model, prompt, system=None, fmt=None, seed=DEFAULT_SEED):
@@ -52,11 +62,33 @@ def generate(model, prompt, system=None, fmt=None, seed=DEFAULT_SEED):
         return json.load(r)['message']['content'].strip()
 
 
-def translate(model, text):
-    """번역은 --seed 와 무관하게 언제나 generate 의 기본 seed(DEFAULT_SEED)로 요청한다(번역 캐시가 seed 와 무관한 근거)."""
+def glossary_note(text):
+    entries = Q.glossary_for(text)
+    if not entries:
+        return ''
+    return GLOSSARY_PROMPT.format(terms='; '.join(f"{e['en']} = {' / '.join(e['ko'])}" for e in entries))
+
+
+def translate(model, text, seed=DEFAULT_SEED, glossary=False):
+    """번역은 --seed 와 무관하게 DEFAULT_SEED 로 요청한다(번역 캐시가 seed 와 무관한 근거). 다른 seed 는 번역 검사
+    실패 뒤 다시 번역할 때만 쓴다. 용어집 안내는 v2(glossary=True)에서만 붙인다(v1 번역 프롬프트는 그대로)."""
+    note = glossary_note(text) if glossary else ''
     if model.startswith('translategemma'):
-        return generate(model, TG_PROMPT.format(text=text))
-    return generate(model, text, system=LLM_TRANSLATE_SYSTEM)
+        prompt = TG_PROMPT.format(text=text)
+        if note:
+            i = prompt.find('Please translate')
+            prompt = prompt[:i] + note + prompt[i:] if i >= 0 else prompt + '\n\n' + note
+        return generate(model, prompt, seed=seed)
+    return generate(model, text, system=LLM_TRANSLATE_SYSTEM + ('\n' + note if note else ''), seed=seed)
+
+
+def unload(model):
+    """모델을 바로 내린다(keep_alive 0). 6GB GPU 에 번역·작성 모델을 동시에 올리지 않으려고 단계 끝에 부른다."""
+    req = urllib.request.Request('http://127.0.0.1:11434/api/generate',
+                                 data=json.dumps({'model': model, 'keep_alive': 0}).encode(),
+                                 headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        r.read()
 
 
 def build_parser():

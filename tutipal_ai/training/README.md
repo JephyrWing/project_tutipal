@@ -98,6 +98,12 @@ Jira PT-89(AI-007 효과 평가)와 PT-88(AI-006 주관식 채점 QLoRA)의 평�
   .\.venv\Scripts\python.exe -m data_tools.review_sheet check --sheet $DS\derived\grading_v2\review_sheet.csv
   ```
 
+- **학습 데이터 v3 (PT-88 품질 보강, `derived/grading_v3/`)**: 위 v2 명령에서 `--out $DS\derived\grading_v3 --cache-from $DS\derived\grading_v2 --exclude-review <1차 검수 CSV>`로 바꿔 돌린다(v2 폴더는 읽기만 한다). 원인 분석과 수용 기준은 `docs/PT-88_context.md`, `docs/PT-88_plan.md`.
+  - 번역 검사(`data_tools/quality.py`의 `trans_check`): 용어집(`GLOSSARY`), 대문자 약어, 숫자 집합, 비교·한정·부정 표현을 칸마다 본다. 걸리면 다른 seed로 한 번 더 번역하고, 또 걸리면 `trans_check:<규칙>:<칸>`으로 거절한다. 용어집은 그 행 원문에 나오는 항목만 프롬프트와 캐시 키(`#p=`)에 들어가서, 용어를 추가하면 그 용어가 든 행만 다시 번역한다. 숫자 규칙은 목록 번호(줄 맨 앞, 문장부호 뒤 `N.`), 붙임표 낱말 속 수(two-way→양방향), `2차원`·`2진` 같은 한국어 낱말 속 수, 숫자 한 쌍의 유럽식 소수점(0,6), `1 + 명사`의 1은 비교하지 않는다(`CHECK_VERSION` pt88-3).
+  - 설명 검사(`expl_check`): 학생이 이미 쓴 내용을 빠졌다고 함, 원문에 없는 수량, 정답 행에 누락·오류 표현.
+  - 이어 돌리기: Ollama 장애(`URLError`·`TimeoutError`·`HTTPError` 등 `TRANSIENT_ERRORS`)로 기록된 번역·작성 오류는 같은 명령으로 다시 돌리면 다시 시도한다. 검사 규칙 위반은 내용 문제라 다시 시도하지 않는다. 예전 규칙으로 거절된 작성 줄이 지금 규칙으로 통과하면 다시 쓰지 않고 그대로 쓴다. 두 seed 모두 실패한 원문은 같은 실행 안에서 다시 번역하지 않는다(파일에는 남기지 않음).
+  - 알려진 한계: `CHECK_VERSION`이 번역 캐시 키에 들어 있어서 검사 규칙을 바꾸면 모든 행을 다시 번역한다(약 25분). 조립 단계가 캐시 번역을 지금 규칙으로 다시 검사하므로 키에서 빼도 되지만, 키 공식을 바꾸면 이미 만든 v3 캐시 전체가 `missing`이 되어 v3 생성 중에는 바꾸지 않았다. 다음 규칙 변경 때 함께 고친다.
+
   봉인 세트 게이트(`leakcheck --sealed`)는 위 순서에 넣지 않는다. 학습 데이터 쪽은 v2 `train_aug.jsonl`의 sha256 만 봉인 관리자에게 넘기고, 봉인 관리자가 아래 [범위와 봉인 세트](#범위와-봉인-세트) 절차로 실행한다.
 - 2026-11-25 2차 재생성: 새 바탕 답안 검수(`aug_bases_new_review.csv`)에서 제외 6개를 `BAD_BASES`에 넣고 다시 만들었다. 행 수·비율은 그대로(**893행**, 정답 259, 꼼수 133행 14.9%, leakcheck(dev) 실패 0)이고 바탕 답안 6개만 바뀌었다(4개는 이미 검수한 답안, 처음 보는 답안 2개는 `aug_bases_new_for_review.csv`에서 2026-11-25 검수: MohlerASAG-E11.Q05.A26 OK, MohlerASAG-E12.Q06.A00 WEAK 유지). 검수한 바탕 답안 전체 목록은 `derived/grading_c/reviewed_bases_all.csv`(139개), 이전 결과는 `derived/grading_c/prev_20261125b/`.
 
