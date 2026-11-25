@@ -46,6 +46,7 @@ dependencies {
 tasks.named('test') {
     useJUnitPlatform()
     exclude '**/ReviewStorePostgresTest.class'
+    exclude '**/RagSearchRepositoryPostgresTest.class'
 }
 
 // PT-53: 실제 DB 검사는 별도 일회용 DB/CI에서 실행한다. env 누락은 skip 대신 실패한다.
@@ -55,6 +56,44 @@ tasks.register('reviewDbTest', Test) {
     classpath = sourceSets.test.runtimeClasspath
     useJUnitPlatform()
     include '**/ReviewStorePostgresTest.class'
+}
+
+// PT-86: RAG 검색 SQL(세션·임베딩 모델·인덱싱 필터, 정확 코사인 순서)과 V20 을 일회용 PostgreSQL/pgvector 에서 확인한다.
+tasks.register('ragDbTest', Test) {
+    description = 'Runs RAG search repository checks against disposable PostgreSQL/pgvector'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    include '**/RagSearchRepositoryPostgresTest.class'
+}
+
+// PT-86: RAG 평가 하네스 (src/ragEval). test · build 에 포함되지 않는다. 사용법은 docs/PT-86_RAG_EVAL.md
+sourceSets {
+    ragEval {
+        // testCompileClasspath carries compile-only API jars (apiguardian) used by the JUnit guard tests
+        compileClasspath += sourceSets.main.output + sourceSets.test.output + configurations.testCompileClasspath + configurations.testRuntimeClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.test.output + configurations.testRuntimeClasspath
+    }
+}
+
+tasks.register('ragEval', JavaExec) {
+    description = 'PT-86 RAG evaluation harness (needs local FastAPI/Ollama; not part of test or build)'
+    group = 'verification'
+    classpath = sourceSets.ragEval.runtimeClasspath
+    mainClass = 'com.my.tutipal_back.materials.service.RagEvalMain'
+    workingDir = projectDir
+    maxHeapSize = '512m'
+    args((project.findProperty('evalArgs') ?: '').toString().split(' ').findAll { it })
+}
+
+// PT-86: unit tests of the harness guards (sealed hash abort, scored-once rule). Not part of test/build; CI runs it.
+tasks.register('ragEvalTest', Test) {
+    description = 'Runs the PT-86 eval harness guard tests (src/ragEval)'
+    group = 'verification'
+    testClassesDirs = sourceSets.ragEval.output.classesDirs
+    classpath = sourceSets.ragEval.runtimeClasspath
+    useJUnitPlatform()
+    include '**/*Test.class'
 }
 
 tasks.named('bootJar') {

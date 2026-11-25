@@ -41,7 +41,8 @@ jobs:
         working-directory: tutipal_back
         run: |
           chmod +x gradlew
-          ./gradlew test --no-daemon
+          # PT-86: the ragEval harness compiles and its guard tests run here (running the eval needs local models).
+          ./gradlew test ragEvalTest --no-daemon
       - name: Summarize test results
         if: always()
         working-directory: tutipal_back
@@ -112,6 +113,10 @@ jobs:
           docker compose --env-file infra/.env.local.example -f infra/docker-compose.local.yml config --quiet
           docker compose --env-file infra/.env.local.example -f infra/docker-compose.local.yml -f infra/docker-compose.dev.yml config --quiet
           docker compose --env-file infra/.env.prod.example -f infra/docker-compose.prod.yml --profile cloudflare config --quiet
+      - name: Build FastAPI image (default, without reranker model)
+        # PT-86: the multi-stage Dockerfile must build before deploy does. WITH_RERANKER defaults to false, so this
+        # step needs no huggingface.co access; the model stage is built with --build-arg WITH_RERANKER=true on adoption.
+        run: docker build --pull -t tutipal-fastapi-ci tutipal_ai
 
   python-test:
     runs-on: ubuntu-24.04
