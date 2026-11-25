@@ -1,6 +1,6 @@
 import { test, expect, _electron } from '@playwright/test'
 import electronPath from 'electron'
-import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -145,7 +145,9 @@ async function decoded(teacher, testInfo) {
     })
     return frames
   }).toBeGreaterThan(2)
-  await testInfo.attach('synthetic-media-count.json', { body: Buffer.from(JSON.stringify({ framesDecoded: frames, actualScreenCaptured: false })), contentType: 'application/json' })
+  const evidence = testInfo.outputPath('synthetic-media-count.json')
+  await writeFile(evidence, JSON.stringify({ framesDecoded: frames, actualScreenCaptured: false }))
+  await testInfo.attach('synthetic-media-count.json', { path: evidence, contentType: 'application/json' })
 }
 async function disconnected(app, grant, testInfo, label) {
   let passed = false
@@ -171,9 +173,9 @@ async function disconnected(app, grant, testInfo, label) {
       sdk: values[0].status === 'fulfilled' ? values[0].value : { unavailable: true },
       serverParticipantCount: values[1].status === 'fulfilled' ? values[1].value : null,
       springValidationStatus: values[2].status === 'fulfilled' ? values[2].value : null }
-    await testInfo.attach(`revocation-${label}.json`, {
-      body: Buffer.from(JSON.stringify(diagnostic)), contentType: 'application/json',
-    })
+    const evidence = testInfo.outputPath(`revocation-${label}.json`)
+    await writeFile(evidence, JSON.stringify(diagnostic))
+    await testInfo.attach(`revocation-${label}.json`, { path: evidence, contentType: 'application/json' })
   }
 }
 
