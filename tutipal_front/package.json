@@ -19,6 +19,7 @@
     "start": "electron .",
     "test:e2e": "playwright test",
     "test:e2e:list": "playwright test --list",
+    "test:livekit-media": "playwright test --config=playwright.livekit.config.js",
     "pretest:help-access": "node --check tests/helpAccess.integration.mjs && node --check tests/helpers/fakeLiveKit.mjs && node --check scripts/e2e-server.mjs && node -e \"require('node:fs').mkdirSync('test-results',{recursive:true})\"",
     "test:help-access": "node --test --test-concurrency=1 --test-reporter=spec --test-reporter=junit --test-reporter-destination=stdout --test-reporter-destination=test-results/help-access.xml tests/helpAccess.integration.mjs",
     "pack": "npm run build && electron-builder --dir --publish never",

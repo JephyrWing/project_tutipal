@@ -1,0 +1,145 @@
+name: Real LiveKit media checks
+
+on:
+  pull_request:
+    branches: [develop]
+    paths: ['tutipal_front/**', 'tutipal_back/**', 'infra/postgres/**', '.github/workflows/livekit-media-checks.yml', '.nvmrc']
+  push:
+    branches: [develop]
+    paths: ['tutipal_front/**', 'tutipal_back/**', 'infra/postgres/**', '.github/workflows/livekit-media-checks.yml', '.nvmrc']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  livekit-media:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: tutipal_front/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Start disposable PostgreSQL and pgvector
+        shell: bash
+        run: |
+          set -euo pipefail
+          password=$(openssl rand -hex 24)
+          echo "::add-mask::$password"
+          echo "E2E_DB_PASSWORD=$password" >> "$GITHUB_ENV"
+          echo "E2E_DB_URL=jdbc:postgresql://127.0.0.1:25432/tutipal_e2e" >> "$GITHUB_ENV"
+          docker build -f infra/postgres/Dockerfile -t tutipal-media-postgres .
+          docker run --detach --rm --name "tutipal-media-${GITHUB_RUN_ID}" \
+            -p 127.0.0.1:25432:5432 \
+            -e POSTGRES_DB=tutipal_e2e -e POSTGRES_USER=tutipal_e2e \
+            -e POSTGRES_PASSWORD="$password" tutipal-media-postgres
+          ready=false
+          for attempt in $(seq 1 30); do
+            if docker exec "tutipal-media-${GITHUB_RUN_ID}" pg_isready -h 127.0.0.1 -U tutipal_e2e -d tutipal_e2e; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = true
+      - name: Start private real LiveKit server
+        shell: bash
+        run: |
+          set -euo pipefail
+          secret=$(openssl rand -hex 32)
+          echo "::add-mask::$secret"
+          echo "E2E_LIVEKIT_SECRET=$secret" >> "$GITHUB_ENV"
+          config=$(cat <<EOF
+          port: 28082
+          bind_addresses: ["127.0.0.1"]
+          keys:
+            disposable-e2e: "$secret"
+          rtc:
+            tcp_port: 28084
+            udp_port: 28085
+            node_ip: 127.0.0.1
+            use_external_ip: false
+            enable_loopback_candidate: true
+            ips:
+              includes: ["127.0.0.0/8"]
+            stun_servers: []
+          logging:
+            level: error
+            pion_level: error
+          EOF
+          )
+          docker run --detach --rm --network host --name "tutipal-media-livekit-${GITHUB_RUN_ID}" \
+            --env LIVEKIT_CONFIG="$config" livekit/livekit-server:v1.13.11
+          ready=false
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:28082/ >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = true
+      - name: Build real Spring application
+        working-directory: tutipal_back
+        run: |
+          chmod +x gradlew
+          ./gradlew bootJar --no-daemon
+      - name: Install Electron and test dependencies
+        working-directory: tutipal_front
+        run: |
+          npm ci
+          npm run postinstall
+          npx --no-install playwright install-deps chromium
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+      - name: Build renderer
+        working-directory: tutipal_front
+        run: |
+          npm run check
+          npm run build
+      - name: Transmit generated video and verify revocation
+        working-directory: tutipal_front
+        run: xvfb-run -a npm run test:livekit-media
+      - name: Publish actual test counts
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os, sys, xml.etree.ElementTree as ET
+          path = 'tutipal_front/test-results/livekit-media.xml'
+          if not os.path.exists(path):
+              sys.exit('LiveKit media test report is missing; no successful test execution can be claimed')
+          root = ET.parse(path).getroot()
+          cases = root.findall('.//testcase')
+          skipped = sum(c.find('skipped') is not None for c in cases)
+          failed = sum(c.find('failure') is not None or c.find('error') is not None for c in cases)
+          ran = len(cases) - skipped
+          summary = f'LiveKit media: collected={len(cases)} ran={ran} failed={failed} skipped={skipped}'
+          print(summary)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
+              output.write('### ' + summary + '\n')
+          if ran == 0 or failed:
+              sys.exit(1)
+          PY
+      - name: Upload synthetic test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: livekit-media-report
+          path: |
+            tutipal_front/test-results
+          retention-days: 7
+      - name: Stop this run's private LiveKit
+        if: always()
+        shell: bash
+        run: docker stop "tutipal-media-livekit-${GITHUB_RUN_ID}" || true
+      - name: Stop this run's disposable database
+        if: always()
+        shell: bash
+        run: docker stop "tutipal-media-${GITHUB_RUN_ID}" || true
