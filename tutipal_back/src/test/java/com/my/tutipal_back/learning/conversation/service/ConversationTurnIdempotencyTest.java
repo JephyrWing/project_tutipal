@@ -1,5 +1,6 @@
 package com.my.tutipal_back.learning.conversation.service;
 
+import static com.my.tutipal_back.learning.conversation.ConversationTestSupport.JSON;
 import static com.my.tutipal_back.learning.conversation.ConversationTestSupport.NOW;
 import static com.my.tutipal_back.learning.conversation.ConversationTestSupport.scriptTutor;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -117,6 +118,73 @@ class ConversationTurnIdempotencyTest {
         assertThat(store.messagesOf(c.id())).hasSize(2);
         assertThat(store.conversation(c.id()).orElseThrow().messageCount()).isEqualTo(2);
         assertThat(insertPairs(store)).isEqualTo(1);
+    }
+
+    @Test
+    void losingRequestWithADifferentModelAnswerGetsTheStoredAnswerInSaved() {
+        FakeConversationStore store = new FakeConversationStore();
+        ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
+        when(tutor.openChat(anyLong(), any())).thenReturn(opened);
+        AtomicInteger calls = new AtomicInteger();
+        scriptTutor(tutor, (request, onDelta) -> onDelta.accept(calls.incrementAndGet() == 1 ? "첫 답" : "둘째 답"));
+        ConversationTurnService serverA = turnsOn(store);
+        ConversationTurnService serverB = turnsOn(store);
+
+        ConversationTurnService.OpenedTurn a = serverA.open(ME, c.id(), "질문", KEY);
+        ConversationTurnService.OpenedTurn b = serverB.open(ME, c.id(), "질문", KEY);
+        ConversationDtos.Saved savedA = run(serverA, a, new ArrayList<>());
+        List<String> streamedB = new ArrayList<>();
+        ConversationDtos.Saved savedB = run(serverB, b, streamedB);
+
+        assertThat(streamedB).containsExactly("둘째 답");
+        assertThat(savedA.answer()).isNull();
+        assertThat(savedA.replaced()).isNull();
+        assertThat(savedB.userMessageId()).isEqualTo(savedA.userMessageId());
+        assertThat(savedB.assistantMessageId()).isEqualTo(savedA.assistantMessageId());
+        assertThat(savedB.answer()).isEqualTo("첫 답");
+        assertThat(savedB.replaced()).isTrue();
+        assertThat(store.messagesOf(c.id())).extracting(ConversationStore.Message::content)
+                .containsExactly("질문", "첫 답");
+        assertThat(store.conversation(c.id()).orElseThrow().messageCount()).isEqualTo(2);
+    }
+
+    @Test
+    void duplicateInsertWithADifferentModelAnswerAlsoSendsTheStoredAnswer() {
+        AtomicInteger hidden = new AtomicInteger(4);
+        FakeConversationStore store = new FakeConversationStore() {
+            @Override
+            public synchronized Optional<SavedPair> findPairByClientMessageId(long conversationId, UUID key) {
+                Optional<SavedPair> real = super.findPairByClientMessageId(conversationId, key);
+                return hidden.getAndDecrement() > 0 ? Optional.empty() : real;
+            }
+        };
+        ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
+        when(tutor.openChat(anyLong(), any())).thenReturn(opened);
+        AtomicInteger calls = new AtomicInteger();
+        scriptTutor(tutor, (request, onDelta) -> onDelta.accept(calls.incrementAndGet() == 1 ? "첫 답" : "둘째 답"));
+        ConversationTurnService serverA = turnsOn(store);
+        ConversationTurnService serverB = turnsOn(store);
+
+        ConversationTurnService.OpenedTurn a = serverA.open(ME, c.id(), "질문", KEY);
+        ConversationTurnService.OpenedTurn b = serverB.open(ME, c.id(), "질문", KEY);
+        run(serverA, a, new ArrayList<>());
+        ConversationDtos.Saved savedB = run(serverB, b, new ArrayList<>());
+
+        assertThat(savedB.answer()).isEqualTo("첫 답");
+        assertThat(savedB.replaced()).isTrue();
+        assertThat(store.messagesOf(c.id())).extracting(ConversationStore.Message::content)
+                .containsExactly("질문", "첫 답");
+    }
+
+    @Test
+    void savedJsonCarriesAnswerOnlyWhenReplaced() {
+        var plain = JSON.readTree(JSON.writeValueAsString(new ConversationDtos.Saved("1", "2")));
+        var replaced = JSON.readTree(JSON.writeValueAsString(new ConversationDtos.Saved("1", "2", "첫 답", true)));
+
+        assertThat(plain.has("answer")).isFalse();
+        assertThat(plain.has("replaced")).isFalse();
+        assertThat(replaced.get("answer").asString()).isEqualTo("첫 답");
+        assertThat(replaced.get("replaced").asBoolean()).isTrue();
     }
 
     @Test

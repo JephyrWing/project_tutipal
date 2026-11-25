@@ -166,7 +166,15 @@ public class ConversationTurnService {
         if (answer.toString().isBlank()) {
             throw new ApiException(HttpStatus.BAD_GATEWAY, EMPTY_ANSWER);
         }
-        return saved(save(turn, answer.toString()));
+        String streamed = answer.toString();
+        ConversationStore.SavedPair pair = save(turn, streamed);
+        String stored = pair.assistant().content();
+        if (!stored.equals(streamed)) {
+            // another request with the same key saved first: the ids point at its answer, so send that text too
+            return new ConversationDtos.Saved(String.valueOf(pair.user().id()), String.valueOf(pair.assistant().id()),
+                    stored, true);
+        }
+        return saved(pair);
     }
 
     /**

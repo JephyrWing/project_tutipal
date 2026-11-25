@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
@@ -71,7 +73,16 @@ public final class ConversationDtos {
     public record MessagePage(List<MessageView> items, String nextBefore, boolean hasMore) {
     }
 
-    /** SSE saved event. */
-    public record Saved(String userMessageId, String assistantMessageId) {
+    /**
+     * SSE saved event. answer / replaced are sent only when the stored answer is not the one just streamed (a
+     * concurrent request with the same clientMessageId saved first): the screen then shows {@code answer}.
+     */
+    public record Saved(String userMessageId, String assistantMessageId,
+                        @JsonInclude(JsonInclude.Include.NON_NULL) String answer,
+                        @JsonInclude(JsonInclude.Include.NON_NULL) Boolean replaced) {
+
+        public Saved(String userMessageId, String assistantMessageId) {
+            this(userMessageId, assistantMessageId, null, null);
+        }
     }
 }

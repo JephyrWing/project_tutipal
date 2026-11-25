@@ -124,6 +124,8 @@ class ConversationTurnIdempotencyWebTest {
         var ids = event(again, "saved").json();
         assertThat(ids.get("userMessageId").asString()).isEqualTo(firstIds.get("userMessageId").asString());
         assertThat(ids.get("assistantMessageId").asString()).isEqualTo(firstIds.get("assistantMessageId").asString());
+        assertThat(firstIds.has("answer")).isFalse();
+        assertThat(ids.has("answer")).isFalse();
         verify(tutor, never()).openChat(anyLong(), any());
         verifyNoInteractions(tutor, opened);
         assertThat(store.messagesOf(c.id())).hasSize(2);

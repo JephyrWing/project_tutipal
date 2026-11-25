@@ -86,5 +86,7 @@ export async function sendMessage(id, content, handlers = {}, signal, clientMess
   } catch (error) {
     if (!saved) throw error
   }
+  // saved.answer: the stored answer differs from the streamed one (a concurrent resend saved first)
+  if (typeof saved?.answer === 'string') text = saved.answer
   return { text, saved }
 }

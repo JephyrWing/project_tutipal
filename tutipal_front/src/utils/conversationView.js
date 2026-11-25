@@ -146,10 +146,14 @@ export function turnDelta(state, delta) {
   return { ...state, pending: { ...state.pending, answer: state.pending.answer + delta } }
 }
 
-/** The server stored the pair: show it with the server ids. */
+/**
+ * The server stored the pair: show it with the server ids. saved.answer (sent when a concurrent resend with the same
+ * key saved first) replaces the streamed text, so the bubble matches what a reload shows.
+ */
 export function turnSaved(state, saved, now = new Date().toISOString()) {
   if (!state.pending) return state
-  const { question, answer } = state.pending
+  const { question } = state.pending
+  const answer = typeof saved.answer === 'string' ? saved.answer : state.pending.answer
   const added = [
     { id: saved.userMessageId, role: 'user', content: question, createdAt: now },
     { id: saved.assistantMessageId, role: 'assistant', content: answer, createdAt: now },

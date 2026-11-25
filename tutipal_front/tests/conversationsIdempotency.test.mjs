@@ -149,3 +149,23 @@ test('a lost saved event, then a resend with the same key, shows the replayed pa
   assert.deepEqual(visibleMessages(state).map((m) => [m.id, m.content]),
     [['3', '미분?'], ['4', '변화율'], ['7', '적분은?'], ['8', '저장된 답']])
 })
+
+test('turnSaved with answer replaces the streamed text (a concurrent resend saved first)', () => {
+  let state = turnDelta(turnStarted(loaded(), '적분은?', 'key-8'), '둘째 답')
+  state = turnSaved(state, { userMessageId: '7', assistantMessageId: '8', answer: '첫 답', replaced: true })
+
+  assert.deepEqual(visibleMessages(state).slice(-2).map((m) => [m.id, m.content]), [['7', '적분은?'], ['8', '첫 답']])
+  const plain = turnSaved(turnDelta(turnStarted(loaded(), '적분은?', 'key-9'), '그대로'),
+    { userMessageId: '9', assistantMessageId: '10' })
+  assert.equal(visibleMessages(plain).at(-1).content, '그대로')
+})
+
+test('sendMessage returns the stored answer as text when saved carries one', async () => {
+  serve(() => sseResponse([ev('delta', { t: '둘째 답' }),
+    ev('saved', { userMessageId: '7', assistantMessageId: '8', answer: '첫 답', replaced: true }), ev('done', {})]))
+
+  const result = await sendMessage('5', '적분은?', {}, undefined, 'key-10')
+
+  assert.equal(result.text, '첫 답')
+  assert.equal(result.saved.answer, '첫 답')
+})
