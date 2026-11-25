@@ -10,11 +10,13 @@ import org.springframework.stereotype.Service;
 import com.my.tutipal_back.learning.screen.dto.ScreenRequest;
 import com.my.tutipal_back.ai.client.AiClient;
 import com.my.tutipal_back.ai.client.AiSlots;
+import com.my.tutipal_back.ai.quota.AiFeature;
+import com.my.tutipal_back.ai.quota.AiQuota;
 import com.my.tutipal_back.common.exception.ApiException;
 
 /**
  * 화면 요약 · 화면 질문 (로컬 비전 모델 gemma3:12b). 이미지와 결과는 저장하지 않고, 로그에도 남기지 않는다.
- * ponytail: 사용자별 호출 간격 제한 없음 (GPU 동시 제한 AiSlots 만). 공개 운영 전에 사용자별 제한 추가
+ * 사용자별 한도(PT-97): 요약은 SCREEN_AUTO, 질문은 SCREEN_MANUAL 로 따로 센다. GPU 동시 제한은 AiSlots.
  */
 @Service
 public class ScreenService {
@@ -36,20 +38,25 @@ public class ScreenService {
 
     private final AiClient ai;
     private final AiSlots slots;
+    private final AiQuota quota;
 
-    public ScreenService(AiClient ai, AiSlots slots) {
+    public ScreenService(AiClient ai, AiSlots slots, AiQuota quota) {
         this.ai = ai;
         this.slots = slots;
+        this.quota = quota;
     }
 
-    public String describe(ScreenRequest req) {
+    /** 이미지 검사 → (질문 유무로 기능을 골라) 사용자 한도 예약 → GPU 자리 대기 → 모델 호출. */
+    public String describe(long userId, ScreenRequest req) {
         String image = checkImage(req.image());
         boolean summary = req.question() == null || req.question().isBlank();
         String user = summary ? "지금 화면을 요약해 줘" : req.question().strip();
         List<AiClient.Message> messages = List.of(new AiClient.Message("user", user, List.of(image)));
         String out = summary
-                ? slots.run(SUMMARY_WAIT, () -> ai.complete(SUMMARY_SYSTEM, messages, false))
-                : slots.run(() -> ai.complete(QUESTION_SYSTEM, messages, false));
+                ? quota.run(userId, AiFeature.SCREEN_AUTO,
+                        () -> slots.run(SUMMARY_WAIT, () -> ai.complete(SUMMARY_SYSTEM, messages, false)))
+                : quota.run(userId, AiFeature.SCREEN_MANUAL,
+                        () -> slots.run(() -> ai.complete(QUESTION_SYSTEM, messages, false)));
         out = out.strip();
         return out.length() <= MAX_ANSWER ? out : out.substring(0, MAX_ANSWER);
     }

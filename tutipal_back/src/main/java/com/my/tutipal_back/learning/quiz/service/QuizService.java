@@ -29,6 +29,9 @@ import com.my.tutipal_back.learning.quiz.entity.QuizAnswer;
 import com.my.tutipal_back.learning.quiz.entity.QuizType;
 import com.my.tutipal_back.learning.quiz.repository.QuizAnswerRepository;
 import com.my.tutipal_back.learning.quiz.repository.QuizRepository;
+import com.my.tutipal_back.ai.quota.AiFeature;
+import com.my.tutipal_back.ai.quota.AiQuota;
+import com.my.tutipal_back.sessions.dto.ChatSettings;
 import com.my.tutipal_back.sessions.entity.SessionRole;
 import com.my.tutipal_back.sessions.service.StudySessionService;
 import com.my.tutipal_back.users.service.UserService;
@@ -56,22 +59,24 @@ public class QuizService {
     private final UserService users;
     private final QuizAi quizAi;
     private final SessionEvents events;
+    private final AiQuota quota;
     private final Clock clock;
 
     @Autowired
     public QuizService(QuizRepository quizzes, QuizAnswerRepository answers, StudySessionService sessions,
-                       UserService users, QuizAi quizAi, SessionEvents events) {
-        this(quizzes, answers, sessions, users, quizAi, events, Clock.systemUTC());
+                       UserService users, QuizAi quizAi, SessionEvents events, AiQuota quota) {
+        this(quizzes, answers, sessions, users, quizAi, events, quota, Clock.systemUTC());
     }
 
     QuizService(QuizRepository quizzes, QuizAnswerRepository answers, StudySessionService sessions,
-                UserService users, QuizAi quizAi, SessionEvents events, Clock clock) {
+                UserService users, QuizAi quizAi, SessionEvents events, AiQuota quota, Clock clock) {
         this.quizzes = quizzes;
         this.answers = answers;
         this.sessions = sessions;
         this.users = users;
         this.quizAi = quizAi;
         this.events = events;
+        this.quota = quota;
         this.clock = clock;
     }
 
@@ -105,10 +110,14 @@ public class QuizService {
         return summaries(sessionId).getLast();
     }
 
-    /** 목업 22 "AI로 문제 만들기": 저장하지 않고 초안만 돌려준다. */
+    /**
+     * 목업 22 "AI로 문제 만들기": 저장하지 않고 초안만 돌려준다.
+     * 선생님 확인 → 설정 조회 → QUIZ_GENERATE 한도 예약 순서라 권한 · 세션 오류는 한도를 쓰지 않는다 (PT-97).
+     */
     public QuizDraft generate(Long userId, Long sessionId, GenerateQuizRequest req) {
         sessions.requireTeacherOf(userId, sessionId);
-        return quizAi.generate(sessions.chatSettings(userId, sessionId), req.type(), req.hint());
+        ChatSettings settings = sessions.chatSettings(userId, sessionId);
+        return quota.run(userId, AiFeature.QUIZ_GENERATE, () -> quizAi.generate(settings, req.type(), req.hint()));
     }
 
     /** 목업 23: 질문별 정답률 (선생님). */
