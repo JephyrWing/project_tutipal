@@ -96,7 +96,16 @@ app:
       quiz-generate:
         limit: 20
         window: 1h
+      # PT-87 개념 분석(질문 군집화). 캐시 적중 · 데이터 부족 응답은 세지 않는다 (임시값)
+      insights:
+        limit: 10
+        window: 1h
       cleanup-interval: 10m
+  # PT-87 학생 질문 원문 임시 보관 (PT-13 보관 기간 미결: 임시 30일). 코드 기본값 없음
+  insights:
+    questions:
+      retention: 30d
+      cleanup-interval: 1h
   livekit:
     api-key: ${LIVEKIT_API_KEY:}
     api-secret: ${LIVEKIT_API_SECRET:}

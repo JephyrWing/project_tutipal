@@ -42,12 +42,14 @@ class AiQuotaPropertiesTest {
         var manual = new AiQuotaProperties.Limit(2, HOUR);
         var chat = new AiQuotaProperties.Limit(3, HOUR);
         var quiz = new AiQuotaProperties.Limit(4, HOUR);
-        var props = new AiQuotaProperties(auto, manual, chat, quiz, Duration.ofMinutes(10));
+        var insights = new AiQuotaProperties.Limit(5, HOUR);
+        var props = new AiQuotaProperties(auto, manual, chat, quiz, insights, Duration.ofMinutes(10));
 
         assertThat(props.of(AiFeature.SCREEN_AUTO)).isEqualTo(auto);
         assertThat(props.of(AiFeature.SCREEN_MANUAL)).isEqualTo(manual);
         assertThat(props.of(AiFeature.CHAT)).isEqualTo(chat);
         assertThat(props.of(AiFeature.QUIZ_GENERATE)).isEqualTo(quiz);
+        assertThat(props.of(AiFeature.INSIGHTS)).isEqualTo(insights);
     }
 
     @Test
@@ -63,6 +65,7 @@ class AiQuotaPropertiesTest {
         assertThat(props.screenManual()).isEqualTo(new AiQuotaProperties.Limit(30, HOUR));
         assertThat(props.chat()).isEqualTo(new AiQuotaProperties.Limit(60, HOUR));
         assertThat(props.quizGenerate()).isEqualTo(new AiQuotaProperties.Limit(20, HOUR));
+        assertThat(props.insights()).isEqualTo(new AiQuotaProperties.Limit(10, HOUR));
         assertThat(props.cleanupInterval()).isEqualTo(Duration.ofMinutes(10));
     }
 }

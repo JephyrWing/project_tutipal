@@ -57,7 +57,7 @@ class TutorServiceQuotaTest {
     private final AiSlots slots = mock(AiSlots.class);
     private final MutableClock clock = new MutableClock(Instant.parse("2026-11-25T00:00:00Z"));
     private AiQuota quota = AiQuotaFixtures.quota(1, Duration.ofHours(1), clock);
-    private TutorService service = new TutorService(ai, sessions, rag, slots, quota, null, null, false);
+    private TutorService service = new TutorService(ai, sessions, rag, slots, quota, null, null, false, StudentQuestionSink.NONE);
 
     private final List<String> deltas = new ArrayList<>();
 
@@ -123,7 +123,7 @@ class TutorServiceQuotaTest {
     @Test
     void oneQuestionCountsExactlyOneChat() {
         quota = AiQuotaFixtures.quota(2, Duration.ofHours(1), clock);
-        service = new TutorService(ai, sessions, rag, slots, quota, null, null, false);
+        service = new TutorService(ai, sessions, rag, slots, quota, null, null, false, StudentQuestionSink.NONE);
         modelStreams("미분은 ", "변화율이에요");
 
         service.chat(USER, IN_SESSION, service.openChat(USER, IN_SESSION), s -> { }, deltas::add);

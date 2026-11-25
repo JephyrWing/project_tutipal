@@ -9,6 +9,7 @@ import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -54,10 +55,25 @@ public class TutorService {
      * openChat 에서 넣고 OpenedChat.release (chat 의 finally) 에서 뺀다.
      */
     private final Set<Long> agentTurns = ConcurrentHashMap.newKeySet();
+    /** PT-87: stores session STUDENT questions for the teacher's concept insights (NONE when not wired). */
+    private final StudentQuestionSink questionSink;
 
+    /**
+     * Without the PT-87 question sink (records nothing). Kept so callers written against the 8-argument constructor
+     * (other branches' tests, e.g. PT-106) still compile and keep their meaning.
+     */
     public TutorService(AiClient ai, StudySessionService sessions, RagSearchService ragSearch, AiSlots slots,
                         AiQuota quota, QuizVariantAccess variants, AgentContextAssembler contextAssembler,
-                        @Value("${app.ai.agent.enabled:false}") boolean agentEnabled) {
+                        boolean agentEnabled) {
+        this(ai, sessions, ragSearch, slots, quota, variants, contextAssembler, agentEnabled, StudentQuestionSink.NONE);
+    }
+
+    /** The constructor Spring uses (two public constructors, so it is marked). */
+    @Autowired
+    public TutorService(AiClient ai, StudySessionService sessions, RagSearchService ragSearch, AiSlots slots,
+                        AiQuota quota, QuizVariantAccess variants, AgentContextAssembler contextAssembler,
+                        @Value("${app.ai.agent.enabled:false}") boolean agentEnabled,
+                        StudentQuestionSink questionSink) {
         if (agentEnabled && (variants == null || contextAssembler == null)) {
             throw new IllegalArgumentException("Agent 경로를 켜려면 QuizVariantAccess 와 AgentContextAssembler 가 필요해요");
         }
@@ -69,6 +85,7 @@ public class TutorService {
         this.variants = variants;
         this.contextAssembler = contextAssembler;
         this.agentEnabled = agentEnabled;
+        this.questionSink = questionSink == null ? StudentQuestionSink.NONE : questionSink;
     }
 
     /**
@@ -139,6 +156,7 @@ public class TutorService {
     public void chat(Long userId, ChatRequest request, OpenedChat opened, Consumer<List<String>> onSources,
                      Consumer<String> onDelta, Consumer<AgentDtos.AgentEvent> onAgent, Runnable heartbeat) {
         try {
+            recordStudentQuestion(userId, request, opened);
             if (!agentEnabled || opened.role() == SessionRole.TEACHER) {
                 legacyChat(userId, request, opened.ticket(), onSources, onDelta);
             } else {
@@ -146,6 +164,27 @@ public class TutorService {
             }
         } finally {
             opened.release();
+        }
+    }
+
+    /**
+     * PT-87 AC-6: a session STUDENT turn without variantQuizId hands its last user message to the sink, before the
+     * answer is generated (the question counts even if the answer fails). Sink failures never stop the chat and
+     * only the exception class name is logged (never the question text).
+     */
+    private void recordStudentQuestion(Long userId, ChatRequest request, OpenedChat opened) {
+        if (opened.role() != SessionRole.STUDENT || request.sessionId() == null || request.variantQuizId() != null
+                || request.messages() == null || request.messages().isEmpty()) {
+            return;
+        }
+        ChatRequest.Message last = request.messages().getLast();
+        if (!"user".equals(last.role())) {
+            return;
+        }
+        try {
+            questionSink.record(userId, request.sessionId(), last.content());
+        } catch (RuntimeException e) {
+            log.warn("student question not recorded: {}", e.getClass().getSimpleName());
         }
     }
 

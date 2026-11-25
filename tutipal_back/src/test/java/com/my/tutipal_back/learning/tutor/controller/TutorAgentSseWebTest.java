@@ -63,6 +63,7 @@ import com.my.tutipal_back.rag.service.RagSearchService;
 import com.my.tutipal_back.sessions.dto.ChatSettings;
 import com.my.tutipal_back.sessions.entity.SessionRole;
 import com.my.tutipal_back.sessions.service.StudySessionService;
+import com.my.tutipal_back.learning.tutor.service.StudentQuestionSink;
 
 /**
  * PT-85 AC-8 / AC-9 / AC-12 / AC-16 / AC-18 over HTTP: SSE stays sources -> delta -> agent -> done, pings stay
@@ -98,7 +99,7 @@ class TutorAgentSseWebTest {
         when(sessions.chatSettings(2L, 10L)).thenReturn(new ChatSettings("파이썬", 2, true, true));
         when(rag.search(eq(10L), anyString(), anyInt())).thenReturn(List.of(new RagHit("a.pdf", 1, "자료", 0.9)));
         TutorService tutor = new TutorService(ai, sessions, rag, slots, quota, variants,
-                new AgentContextAssembler(new NoStoredConversationMemory()), true);
+                new AgentContextAssembler(new NoStoredConversationMemory()), true, StudentQuestionSink.NONE);
         mvc = MockMvcBuilders.standaloneSetup(new TutorController(tutor))
                 .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
                 .setControllerAdvice(new GlobalExceptionHandler())

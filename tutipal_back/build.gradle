@@ -46,6 +46,7 @@ dependencies {
 tasks.named('test') {
     useJUnitPlatform()
     exclude '**/ReviewStorePostgresTest.class'
+    exclude '**/ConceptInsightsPostgresTest.class'
 }
 
 // PT-53: 실제 DB 검사는 별도 일회용 DB/CI에서 실행한다. env 누락은 skip 대신 실패한다.
@@ -55,6 +56,17 @@ tasks.register('reviewDbTest', Test) {
     classpath = sourceSets.test.runtimeClasspath
     useJUnitPlatform()
     include '**/ReviewStorePostgresTest.class'
+}
+
+// PT-87: V22 / chat_questions / concept stores against a disposable PostgreSQL. env 누락은 skip 대신 실패한다.
+// INSIGHTS_TEST_DB_URL=jdbc:postgresql://127.0.0.1:PORT/tutipal_insights_e2e, INSIGHTS_TEST_DB_ALLOW_RESET=disposable,
+// INSIGHTS_TEST_DB_PASSWORD (user tutipal_insights_e2e). The test runs Flyway clean on that database.
+tasks.register('insightsDbTest', Test) {
+    description = 'Runs PT-87 concept insights storage checks against disposable PostgreSQL/pgvector'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    include '**/ConceptInsightsPostgresTest.class'
 }
 
 tasks.named('bootJar') {

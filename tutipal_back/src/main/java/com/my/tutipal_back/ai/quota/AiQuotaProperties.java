@@ -16,6 +16,7 @@ public record AiQuotaProperties(
         Limit screenManual,
         Limit chat,
         Limit quizGenerate,
+        Limit insights,
         Duration cleanupInterval) {
 
     public AiQuotaProperties {
@@ -23,6 +24,7 @@ public record AiQuotaProperties(
         require(screenManual, "screen-manual");
         require(chat, "chat");
         require(quizGenerate, "quiz-generate");
+        require(insights, "insights");
         if (cleanupInterval == null || cleanupInterval.isZero() || cleanupInterval.isNegative()) {
             throw new IllegalArgumentException("app.ai.quota.cleanup-interval 은 0보다 커야 해요");
         }
@@ -34,6 +36,7 @@ public record AiQuotaProperties(
             case SCREEN_MANUAL -> screenManual;
             case CHAT -> chat;
             case QUIZ_GENERATE -> quizGenerate;
+            case INSIGHTS -> insights;
         };
     }
 
