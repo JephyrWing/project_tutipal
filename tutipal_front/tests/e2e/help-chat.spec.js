@@ -16,8 +16,11 @@ async function accepted(apps,title,{third=false}={}) {
   await login(teacher,1);await login(student,2)
   const room=await createRoom(teacher,title)
   await joinRoom(student,room.code)
+  await expect(student.page).toHaveURL(new RegExp(`/sessions/${room.id}$`))
+  await expect(student.page.getByRole('heading',{name:title,exact:true})).toBeVisible()
+  expect((await api(student,`/api/sessions/${room.id}`)).status).toBe(200)
   const requested=await api(student,`/api/sessions/${room.id}/help`,'POST',{message:'채팅만 도움 요청',shareScreen:false})
-  expect(requested.status).toBe(201)
+  expect(requested.status,JSON.stringify(requested.body)).toBe(201)
   const helpId=requested.body.id
   expect((await api(teacher,`/api/help/${helpId}/accept`,'POST')).status).toBe(200)
   const other=third?await apps.launch():null
