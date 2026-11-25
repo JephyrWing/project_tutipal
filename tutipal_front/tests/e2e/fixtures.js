@@ -11,11 +11,11 @@ export { expect }
 export const test = base.extend({
   apps: async ({}, use, testInfo) => {
     const opened = []
-    const launch = async () => {
+    const launch = async ({ fakeMedia = false } = {}) => {
       const profile = await mkdtemp(path.join(os.tmpdir(), 'tutipal-e2e-profile-'))
       const application = await _electron.launch({
         executablePath: electronPath,
-        args: [path.join(front, 'tests/e2e/entry.cjs')],
+        args: [...(fakeMedia ? ['--use-fake-device-for-media-stream'] : []), path.join(front, 'tests/e2e/entry.cjs')],
         cwd: front,
         chromiumSandbox: true,
         env: { ...process.env, TUTIPAL_E2E_PROFILE: profile, TUTIPAL_SPRING_URL: 'http://127.0.0.1:28080' },
