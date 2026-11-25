@@ -18,9 +18,9 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.my.tutipal_back.learning.tutor.dto.ChatRequest;
+import com.my.tutipal_back.learning.tutor.service.OpenedChat;
 import com.my.tutipal_back.learning.tutor.service.TutorService;
 import com.my.tutipal_back.ai.client.AiUnavailableException;
-import com.my.tutipal_back.ai.quota.AiQuotaTicket;
 import com.my.tutipal_back.common.exception.ApiException;
 
 @RestController
@@ -43,12 +43,16 @@ public class TutorController {
         this.tutor = tutor;
     }
 
-    /** SSE 이벤트: (자료를 찾았으면) sources {"items": [출처]} → delta {"t": 조각} 여러 번 → done, 실패하면 error {"message": …}. */
+    /**
+     * SSE 이벤트: (자료를 찾았으면) sources {"items": [출처]} → delta {"t": 조각} 여러 번 → (PT-85 Agent 경로면)
+     * agent {route, suggestHelp, variant, answerHidden, retryable} → done, 실패하면 error {"message": …}.
+     */
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chat(@AuthenticationPrincipal OAuth2User me, @Valid @RequestBody ChatRequest request) {
         Long userId = Long.valueOf(me.getName());
-        // 권한 확인 + CHAT 한도 예약은 스트림을 열기 전에: 거절은 SSE 가 아니라 HTTP 403/410/429 로 나간다
-        AiQuotaTicket ticket = tutor.openChat(userId, request);
+        // 권한 확인 + CHAT 한도 예약(+ Agent 턴이면 사용자당 동시 턴 자리)은 스트림을 열기 전에:
+        // 거절은 SSE 가 아니라 HTTP 403/410/429 로 나간다
+        OpenedChat opened = tutor.openChat(userId, request);
         SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
         AtomicBoolean gone = new AtomicBoolean(false);
         emitter.onTimeout(() -> gone.set(true));
@@ -59,12 +63,19 @@ public class TutorController {
         try {
             Thread.ofVirtual().name("tutor-chat").start(() -> {
                 try {
-                    tutor.chat(userId, request, ticket,
+                    tutor.chat(userId, request, opened,
                             sources -> send(emitter, "sources", Map.of("items", sources)), delta -> {
                                 if (gone.get()) {
                                     throw new ClientGone();   // 다음 조각에서 멈춤 → AI 스트림 닫힘 → GPU 자리 반납
                                 }
                                 send(emitter, "delta", Map.of("t", delta));
+                            },
+                            event -> send(emitter, "agent", event),
+                            () -> {
+                                // PT-85: 출력 없는 구간(판단 · 변형)의 ping 줄마다 확인. ping 자체는 SSE 로 안 보냄
+                                if (gone.get()) {
+                                    throw new ClientGone();
+                                }
                             });
                     send(emitter, "done", Map.of());
                     emitter.complete();
@@ -77,7 +88,7 @@ public class TutorController {
                 }
             });
         } catch (RuntimeException | Error e) {
-            ticket.releaseIfUnused();                 // 스레드를 못 띄웠으면 모델을 안 불렀으니 예약 반납
+            opened.release();                         // 스레드를 못 띄웠으면 모델을 안 불렀으니 예약 · 턴 자리 반납
             throw e;
         }
 

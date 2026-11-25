@@ -63,7 +63,7 @@ class AiQuotaRealClientTest {
         server.start();
         AiClient ai = new AiClient("http://127.0.0.1:" + server.getAddress().getPort(), "k", JsonMapper.builder().build());
         return new TutorService(ai, mock(StudySessionService.class), mock(RagSearchService.class),
-                new AiSlots(2, Duration.ofSeconds(1)), quota);
+                new AiSlots(2, Duration.ofSeconds(1)), quota, null, null, false);
     }
 
     @Test

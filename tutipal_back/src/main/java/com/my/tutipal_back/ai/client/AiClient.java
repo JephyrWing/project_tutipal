@@ -5,6 +5,7 @@ import java.io.InputStreamReader;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -19,9 +20,11 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.ResourceAccessException;
 
+import com.my.tutipal_back.ai.dto.AgentDtos;
 import com.my.tutipal_back.common.support.TransientConnectionFailure;
 
 import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -165,6 +168,87 @@ public class AiClient {
         } catch (RestClientException | JacksonException e) {
             throw unavailable(emitted[0]);
         }
+    }
+
+    /**
+     * PT-85 Agent 한 번 호출 (POST /v1/agent/chat, 계약 7.5). 줄마다 listener 를 부르고, need_search 줄이나
+     * 마지막 meta 줄로 끝난 방식을 돌려준다.
+     * AI 서버 연결 실패 · 오류 응답 · error 줄 · 깨진 줄 · meta 없이 끝난 스트림은 AiUnavailableException.
+     * delta 또는 variant 줄을 받은 뒤의 실패면 afterOutput (계약 7.6: 모델이 이미 일함 → 환불 안 함).
+     * ping · start · need_search 는 출력으로 세지 않는다. listener 가 던진 예외는 그대로 올라간다.
+     */
+    public AgentOutcome agentStream(AgentDtos.AgentChatRequest body, AgentListener listener) {
+        boolean[] emitted = {false};
+        try {
+            AgentOutcome outcome = rest.post().uri("/v1/agent/chat")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .exchange((request, response) -> {
+                        if (!response.getStatusCode().is2xxSuccessful()) {
+                            throw new AiUnavailableException();
+                        }
+                        try (BufferedReader reader = new BufferedReader(
+                                new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                if (line.isBlank()) {
+                                    continue;
+                                }
+                                AgentOutcome done = agentLine(json.readTree(line), listener, emitted);
+                                if (done != null) {
+                                    return done;
+                                }
+                            }
+                        }
+                        return null;
+                    });
+            if (outcome == null) {
+                throw unavailable(emitted[0]);   // meta · need_search 없이 끊김
+            }
+            return outcome;
+        } catch (RestClientException | JacksonException e) {
+            throw unavailable(emitted[0]);
+        }
+    }
+
+    /** 줄 하나 처리. 끝을 알리는 줄이면 결과, 아니면 null. 모르는 종류의 줄은 건너뛴다. */
+    @SuppressWarnings("unchecked")
+    private AgentOutcome agentLine(JsonNode line, AgentListener listener, boolean[] emitted) {
+        if (!line.isObject()) {
+            throw unavailable(emitted[0]);
+        }
+        if (line.has("error")) {
+            throw unavailable(emitted[0]);
+        }
+        if (line.has("ping")) {
+            listener.onPing();
+        } else if (line.has("start")) {
+            JsonNode ids = line.get("start").path("materialIds");
+            List<String> materialIds = new ArrayList<>();
+            for (JsonNode id : ids) {
+                materialIds.add(id.asString());
+            }
+            listener.onStart(List.copyOf(materialIds));
+        } else if (line.has("delta")) {
+            JsonNode delta = line.get("delta");
+            if (!delta.isString()) {
+                throw unavailable(emitted[0]);
+            }
+            emitted[0] = true;
+            listener.onDelta(delta.asString());
+        } else if (line.has("variant")) {
+            AgentDtos.VariantResult result = json.treeToValue(line.get("variant"), AgentDtos.VariantResult.class);
+            emitted[0] = true;   // 변형 도구가 모델을 이미 썼다
+            listener.onVariant(result);
+        } else if ("need_search".equals(line.path("status").asString(""))) {
+            JsonNode state = line.get("state");
+            Map<String, Object> parsed = state != null && state.isObject()
+                    ? json.treeToValue(state, Map.class) : null;
+            return new AgentOutcome.NeedSearch(line.path("query").asString(""), parsed);
+        } else if (line.has("meta")) {
+            return new AgentOutcome.Completed(json.treeToValue(line.get("meta"), AgentDtos.Meta.class));
+        }
+        return null;
     }
 
     private static AiUnavailableException unavailable(boolean afterOutput) {
