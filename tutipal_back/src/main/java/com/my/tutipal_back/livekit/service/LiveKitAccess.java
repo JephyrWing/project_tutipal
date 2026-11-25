@@ -1,11 +1,16 @@
 package com.my.tutipal_back.livekit.service;
 
 import jakarta.servlet.http.HttpSession;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.stereotype.Service;
+import com.my.tutipal_back.common.config.SessionTimeouts;
 import com.my.tutipal_back.common.exception.ApiException;
 import com.my.tutipal_back.livekit.dto.ScreenShareDtos.JoinInfo;
 
@@ -16,15 +21,24 @@ public class LiveKitAccess {
     private final ConcurrentHashMap<String, Access> entries = new ConcurrentHashMap<>();
     private final ScreenShareService shares;
     private final LiveKitAdmin admin;
-    public LiveKitAccess(ScreenShareService shares,LiveKitAdmin admin) { this.shares=shares;this.admin=admin; }
+    private final Clock clock;
+    private final Duration absoluteTimeout;
+    @Autowired
+    public LiveKitAccess(ScreenShareService shares,LiveKitAdmin admin,
+            @Value("${app.session.absolute-timeout:12h}") Duration absoluteTimeout) {
+        this(shares,admin,Clock.systemUTC(),SessionTimeouts.requireValidAbsolute(absoluteTimeout));
+    }
+    LiveKitAccess(ScreenShareService shares,LiveKitAdmin admin,Clock clock,Duration absoluteTimeout) {
+        this.shares=shares;this.admin=admin;this.clock=clock;this.absoluteTimeout=absoluteTimeout;
+    }
     public JoinInfo issue(Long user, boolean help, Long target, HttpSession session) {
         if(!admin.ready())throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,"실시간 서버를 준비하고 있어요");
         JoinInfo info=help ? shares.helpToken(user,target) : shares.classToken(user,target);
-        long now=System.currentTimeMillis();
+        long now=clock.millis();
         entries.entrySet().removeIf(e->e.getValue().expires()<now || !sessionValid(e.getValue()));
         if(entries.size()>=10000) throw new ApiException(HttpStatus.TOO_MANY_REQUESTS,"접속 요청이 많아요");
         String key=UUID.randomUUID().toString();
-        entries.put(key,new Access(user,help,target,session.getId(),session,now+12*3600_000L));
+        entries.put(key,new Access(user,help,target,session.getId(),session,now+absoluteTimeout.toMillis()));
         return new JoinInfo("/livekit/"+key,"session-bound",info.room(),info.identity());
     }
     public Access resolve(String key, HttpSession session) {
@@ -41,8 +55,8 @@ public class LiveKitAccess {
     }
     private boolean sessionValid(Access a) {
         try {
-            long now=System.currentTimeMillis();
-            if(a.expires()<now || now-a.session().getCreationTime()>12*3600_000L
+            long now=clock.millis();
+            if(a.expires()<now || now-a.session().getCreationTime()>absoluteTimeout.toMillis()
                     || now-a.session().getLastAccessedTime()>a.session().getMaxInactiveInterval()*1000L) return false;
             Object c=a.session().getAttribute("SPRING_SECURITY_CONTEXT");
             return c instanceof SecurityContext ctx && ctx.getAuthentication()!=null

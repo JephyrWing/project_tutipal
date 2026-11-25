@@ -33,8 +33,13 @@ public class SessionEventAccessInterceptor implements ExecutorChannelInterceptor
         if (SimpMessageHeaderAccessor.getMessageType(headers) != SimpMessageType.MESSAGE) {
             return message;
         }
-        SessionTopic topic = StompAuthInterceptor.sessionTopic(SimpMessageHeaderAccessor.getDestination(headers));
+        String destination = SimpMessageHeaderAccessor.getDestination(headers);
+        SessionTopic topic = StompAuthInterceptor.sessionTopic(destination);
         if (topic == null) {
+            // 개인 큐(/user/queue/events, /user/queue/draw → /queue/events-*, /queue/draw-*)는 로그인 세션이 살아 있는 연결에만 보낸다.
+            if (privateQueue(destination) && socketGuard.subscriber(SimpMessageHeaderAccessor.getSessionId(headers)) == null) {
+                return null;
+            }
             return message;
         }
         Principal recipient = socketGuard.subscriber(SimpMessageHeaderAccessor.getSessionId(headers));
@@ -45,5 +50,9 @@ public class SessionEventAccessInterceptor implements ExecutorChannelInterceptor
                 .filter(role -> !topic.teacherOnly() || role == SessionRole.TEACHER)
                 .map(role -> message)
                 .orElse(null);
+    }
+
+    private static boolean privateQueue(String destination) {
+        return destination != null && (destination.startsWith("/queue/events-") || destination.startsWith("/queue/draw-"));
     }
 }

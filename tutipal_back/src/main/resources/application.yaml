@@ -31,7 +31,8 @@ server:
   forward-headers-strategy: none
   servlet:
     session:
-      timeout: 2h
+      # 유휴 제한. 절대 제한은 app.session.absolute-timeout
+      timeout: ${SESSION_IDLE_TIMEOUT:2h}
       cookie:
         name: TUTIPAL_SESSION
         http-only: true
@@ -66,8 +67,13 @@ tutipal:
       bucket: ${S3_BUCKET:}
 
 app:
+  # local 프로필(prod 제외)에서만 true 허용. 그 밖에서 true 면 DevLoginGuard 가 시작을 막는다.
   dev-login: ${DEV_LOGIN:false}
-  allowed-origins: ${APP_ALLOWED_ORIGINS:http://127.0.0.1:*,http://localhost:*}
+  session:
+    # 로그인 세션 절대 제한 (HTTP 필터 · STOMP · LiveKit 공통)
+    absolute-timeout: ${SESSION_ABSOLUTE_TIMEOUT:12h}
+  # 포트 자리는 [*] 로 쓴다 ("*" 는 localhost:5173.evil.com 같은 호스트도 맞아 버린다)
+  allowed-origins: "${APP_ALLOWED_ORIGINS:http://127.0.0.1:[*],http://localhost:[*]}"
   ai:
     base-url: ${FAST_API_BASE_URL:http://fastapi:8000}
     internal-key: ${AI_INTERNAL_KEY:}
