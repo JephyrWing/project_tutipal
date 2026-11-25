@@ -29,7 +29,7 @@ function check(name, passed, detail) {
 }
 function payload(marker, profile) {
   // No original application imports, windows, protocol registration or network calls.
-  return `const {app}=require('electron');const fs=require('node:fs');fs.mkdirSync(${JSON.stringify(profile)},{recursive:true});app.setPath('userData',${JSON.stringify(profile)});app.setPath('sessionData',${JSON.stringify(profile)});app.whenReady().then(()=>{fs.writeFileSync(${JSON.stringify(marker)},'safe-probe');app.exit(0)});`
+  return `const {app}=require('electron');const fs=require('node:fs');app.disableHardwareAcceleration();fs.mkdirSync(${JSON.stringify(profile)},{recursive:true});app.setPath('userData',${JSON.stringify(profile)});app.setPath('sessionData',${JSON.stringify(profile)});app.whenReady().then(()=>{fs.writeFileSync(${JSON.stringify(marker)},'safe-probe');setTimeout(()=>app.quit(),250)});`
 }
 async function run(root, marker, profile) {
   const child = spawnSync(path.join(root, 'TUTIPAL.exe'), ['--no-error-dialogs', '--noerrdialogs',
