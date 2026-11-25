@@ -25,6 +25,7 @@ class StoredConversationMemoryBeanTest {
         new ApplicationContextRunner()
                 .withBean(ConversationStore.class, FakeConversationStore::new)
                 .withBean(ConversationBinding.class)
+                .withBean(ConversationRecallReader.class)
                 .withBean(StoredConversationMemory.class)
                 .withUserConfiguration(ConversationMemoryConfig.class)
                 .run(context -> assertThat(context).hasNotFailed().hasSingleBean(ConversationMemory.class)
