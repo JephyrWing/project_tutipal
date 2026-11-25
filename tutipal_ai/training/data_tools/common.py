@@ -251,6 +251,25 @@ def write_files_atomic(files: dict[Path, tuple[str, str]]) -> None:
                     os.remove(bak)
 
 
+def _norm(path: str | os.PathLike) -> str:
+    return os.path.normcase(os.path.abspath(os.path.realpath(path)))
+
+
+def refuse_input_as_output(parser: argparse.ArgumentParser, inputs: dict[str, list],
+                           outputs: list[Path]) -> None:
+    """사람이 채운 입력 파일(검수표·override 등)이 이번 실행의 출력 파일과 같은 경로면 종료 코드 2.
+
+    출력은 임시 파일 + 바꿔 넣기로 쓰므로, 같은 경로를 입력으로 주면 사람이 채운 내용이 생성물로 덮인다.
+    inputs: {옵션 이름: [경로, ...]} (None 은 건너뜀).
+    """
+    targets = {_norm(p): Path(p).name for p in outputs}
+    for name, paths in inputs.items():
+        for p in paths or []:
+            if p is not None and _norm(p) in targets:
+                parser.error(f"{name} {p!r} 는 이 명령이 덮어쓰는 출력 파일({targets[_norm(p)]})이다. "
+                             "다른 이름으로 저장한 뒤 지정한다")
+
+
 def exit_error(message: str) -> NoReturn:
     """입력·데이터 문제를 stderr 에 알리고 종료 코드 2로 끝낸다(argparse 인자 오류와 같은 코드)."""
     print(f"오류: {message}", file=sys.stderr)

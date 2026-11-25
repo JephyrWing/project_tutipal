@@ -16,9 +16,18 @@
   3. 검증: 시스템 프롬프트 동일, messages 와 필드 일치, 모순 검사, 분류에 맞는 reason/feedback,
      (문제, 학생 답안) 중복 없음, 새 행과 최종 파일 모두 leakcheck 실패 0. 어기면 ValueError(CLI 종료 코드 2).
 
+v2 옵션(2026-11-25, PT-88 학습 데이터 v2):
+  --datasets-dir: 검수 제외(EXCLUDE_QUESTIONS_OF)를 한국어 번역이 아닌 영어 (문제, 모범 답안) 쌍으로 맞춘다
+                  (원천은 build_grading_train.load_sources_v2). 대표 행이 데이터에 없어도 원천에서 찾는다.
+  --max-science N: 누수·문자 검사 뒤, 꼼수 예산 계산 전에 과학 행을 N 개로 줄인다((kind, label) 층별 최대 잔여 배분).
+  --base-subjects 코딩: 새 꼼수 행의 바탕 답안을 이 과목에서만 고른다.
+  보강 행은 바탕 행의 qid 를 물려받는다. aug_stats.json 의 composition 에 최종 구성을 남긴다.
+
 사용 (tutipal_ai/training 에서):
   python -m data_tools.augment_tricks --dir <저장소 밖 derived/grading_c> --eval-set eval/grading_set.jsonl \\
       [--per-kind 48] [--seed 20261125] [--reviewed-bases <aug_bases_review.csv>]
+  python -m data_tools.augment_tricks --dir <derived/grading_v2> --eval-set eval/grading_set.jsonl \\
+      --datasets-dir <datasets 폴더> --max-science 250 --base-subjects 코딩
 """
 
 from __future__ import annotations
@@ -35,18 +44,21 @@ from collections.abc import Callable
 from fractions import Fraction
 from pathlib import Path
 
-from data_tools import build_grading_train as B
-from data_tools import clean_grading_c as C
-from data_tools.common import (
+from eval.leakcheck import RULE_VERSION, check_leaks, normalize_n2
+
+from . import build_grading_train as B
+from . import clean_grading_c as C
+from .common import (
     jsonl_text,
     load_jsonl,
+    refuse_input_as_output,
     require_outside_repo,
     utf8_stdout,
     write_files_atomic,
 )
-from eval.leakcheck import RULE_VERSION, check_leaks, normalize_n2
 
 CHEAT = C.CHEAT
+SCIENCE_SUBJECT = "과학"
 MAX_TRICK_SHARE = 0.15
 PER_QUESTION = 2
 DEFAULT_SEED = 20261125
@@ -273,20 +285,95 @@ def fix_questions(rows: list[dict]) -> tuple[list[dict], list[str], list[str]]:
     return out, fixed, missing
 
 
-def review_drop(rows: list[dict]) -> tuple[list[dict], dict]:
-    """라벨 검수 제외 목록(EXCLUDE_ROWS, EXCLUDE_QUESTIONS_OF — 호출 시점의 모듈 값)을 적용한다."""
+Origin = dict[tuple[str, str], tuple[str, str]]
+CHEAT_SUFFIXES = tuple(sorted((f"-{k}" for k in CHEAT), key=len, reverse=True))  # 긴 꼬리부터 뗀다
+
+
+def strip_cheat_suffix(rid: str) -> str:
+    """'<원본 id>-injection' 같은 꼼수 행 id 를 원본 행 id 로 되돌린다."""
+    for suffix in CHEAT_SUFFIXES:
+        if rid.endswith(suffix):
+            return rid[: -len(suffix)]
+    return rid
+
+
+def english_pair(r: dict, origin: Origin, by_rid: dict[str, tuple[str, str]]) -> tuple[str, str] | None:
+    """행의 영어 (문제, 모범 답안). 보강 행(source=augment)은 바탕 행 id(source_id)로 찾는다."""
+    pair = origin.get((r["source"], r["source_id"]))
+    if pair is None and r["source"] == "augment":
+        pair = by_rid.get(strip_cheat_suffix(r["source_id"]))
+    return pair
+
+
+def review_drop(rows: list[dict], origin: Origin | None = None) -> tuple[list[dict], dict]:
+    """라벨 검수 제외 목록(EXCLUDE_ROWS, EXCLUDE_QUESTIONS_OF — 호출 시점의 모듈 값)을 적용한다.
+
+    origin({(source, source_id): (영어 문제, 영어 모범 답안)})을 주면 문제 단위 제외를 영어 쌍으로 맞춘다
+    (같은 영어 문제가 다르게 번역돼도 빠지고, 대표 행이 데이터에 없어도 origin 에서 찾는다).
+    없으면 v1 처럼 한국어 (question, model_answer) 쌍으로 맞춘다.
+    """
     exclude_rows, exclude_questions = EXCLUDE_ROWS, EXCLUDE_QUESTIONS_OF
     ids = {r["id"] for r in rows}
-    pairs = {(r["question"], r["model_answer"]) for r in rows if r["id"] in exclude_questions}
-    by_question = sorted(r["id"] for r in rows if (r["question"], r["model_answer"]) in pairs)
+    unresolved: list[str] = []
+    if origin is None:
+        pairs = {(r["question"], r["model_answer"]) for r in rows if r["id"] in exclude_questions}
+        by_question = sorted(r["id"] for r in rows if (r["question"], r["model_answer"]) in pairs)
+    else:
+        by_rid = {f"{src}-{sid}": pair for (src, sid), pair in origin.items()}
+        en_pairs = set()
+        for anchor in sorted(exclude_questions):
+            pair = by_rid.get(strip_cheat_suffix(anchor))
+            if pair is None:
+                unresolved.append(anchor)
+            else:
+                en_pairs.add(pair)
+        by_question = sorted(r["id"] for r in rows if english_pair(r, origin, by_rid) in en_pairs)
     q_set = set(by_question)
     by_row = sorted(r["id"] for r in rows if r["id"] in exclude_rows and r["id"] not in q_set)
     dropped = q_set | set(by_row)
     info = {
         "rows": by_row, "questions": by_question,
         "missing_ids": sorted((exclude_rows | exclude_questions) - ids),
+        "unresolved_question_anchors": unresolved,
     }
     return [r for r in rows if r["id"] not in dropped], info
+
+
+def largest_remainder(counts: dict, total: int) -> dict:
+    """counts 비율대로 total 을 정수로 나눈다(최대 잔여 방식). 각 몫은 정확한 몫과 1 미만 차이, 개수 이하.
+
+    total 이 counts 합 이상이면 counts 그대로. 잔여가 같으면 키의 repr 순(재현성).
+    """
+    n = sum(counts.values())
+    if total >= n:
+        return dict(counts)
+    if total <= 0 or n == 0:
+        return {k: 0 for k in counts}
+    exact = {k: Fraction(total * c, n) for k, c in counts.items()}
+    alloc = {k: int(q) for k, q in exact.items()}
+    left = total - sum(alloc.values())
+    for k in sorted(counts, key=lambda k: (-(exact[k] - alloc[k]), repr(k)))[:left]:
+        alloc[k] += 1
+    return alloc
+
+
+def downsample_science(rows: list[dict], max_science: int, seed: int) -> tuple[list[dict], list[str]]:
+    """과학 행을 max_science 개로 줄인다. (남은 행(입력 순서), 뺀 id 정렬). 입력은 바꾸지 않는다.
+
+    층은 (kind, label), 층별 개수는 largest_remainder, 층 안에서는 sha256(seed, id) 순으로 앞에서부터 남긴다.
+    """
+    science = [r for r in rows if r["subject"] == SCIENCE_SUBJECT]
+    if len(science) <= max_science:
+        return list(rows), []
+    strata: dict[tuple, list[dict]] = {}
+    for r in science:
+        strata.setdefault((r["kind"], r["label"]), []).append(r)
+    alloc = largest_remainder({k: len(v) for k, v in strata.items()}, max_science)
+    keep: set[str] = set()
+    for k, v in strata.items():
+        keep |= {r["id"] for r in sorted(v, key=lambda r: _key(seed, "science", r["id"]))[: alloc[k]]}
+    kept = [r for r in rows if r["subject"] != SCIENCE_SUBJECT or r["id"] in keep]
+    return kept, sorted(r["id"] for r in science if r["id"] not in keep)
 
 
 def leak_drop(train: list[dict], dev: list[dict], check_leaks: CheckLeaks) -> tuple[list[dict], dict]:
@@ -328,13 +415,17 @@ def trick_budget(n_rows: int, n_cheat: int, share: float, n_kinds: int, per_kind
     return max(0, min(per_kind, int(n_max) // n_kinds))
 
 
-def pick_bases(rows: list[dict], n_total: int, seed: int, normalize_n2: Normalize) -> list[dict]:
+def pick_bases(rows: list[dict], n_total: int, seed: int, normalize_n2: Normalize,
+               subjects: frozenset[str] | set[str] | None = None) -> list[dict]:
     """문제마다 1개씩 먼저, 모자라면 2번째. 문제·후보 순서는 sha256(seed, 문제/ID) 로 정한다.
 
     자리(slot)는 (순위, 문제 순서)로 정해지므로, 고른 바탕 하나가 빠지면 같은 문제의 다음 후보가 그 자리를 잇는다.
+    subjects 를 주면 그 과목의 행만 바탕으로 쓴다(모자라면 ValueError).
     """
     by_q: dict[str, list[dict]] = {}
     for r in rows:
+        if subjects is not None and r["subject"] not in subjects:
+            continue
         if base_reject(r, normalize_n2) is None:
             by_q.setdefault(r["question"], []).append(r)
     qs = sorted(by_q, key=lambda q: _key(seed, "question", q))
@@ -368,9 +459,12 @@ def build(bases: list[dict], seed: int) -> list[dict]:
         rid = f"aug-{kind}-{slot + 1:03d}"
         ans = TEMPLATES[kind][ti].format(ans=base["student_answer"].strip())
         src = {"source": "augment", "source_id": base["id"]}
-        new.append(B.record(rid, src, base["question"], base["model_answer"], ans, False, kind,
-                            _choose(seed, REASONS[cat], "reason", rid), _choose(seed, FEEDBACKS[cat], "feedback", rid),
-                            base["subject"]))
+        row = B.record(rid, src, base["question"], base["model_answer"], ans, False, kind,
+                       _choose(seed, REASONS[cat], "reason", rid), _choose(seed, FEEDBACKS[cat], "feedback", rid),
+                       base["subject"])
+        if "qid" in base:
+            row["qid"] = base["qid"]  # 보강 행은 바탕 문제의 qid 를 물려받는다
+        new.append(row)
     return new
 
 
@@ -407,8 +501,10 @@ def validate(new: list[dict], kept: list[dict], dev: list[dict], check_leaks: Ch
     bad = C.check_input(new)
     if bad:
         raise ValueError(f"messages 와 필드가 어긋난 새 행: {bad[:5]}")
+    # 새 행이 낀 (문제, 학생 답안) 중복만 막는다. 기존 행끼리의 중복은 정리 단계(clean_grading_c)의 몫이고,
+    # 출처가 다른 같은 문장 행(v2 합성 데이터 등)을 여기서 오류로 만들지 않는다.
     keys = Counter((r["question"], r["student_answer"]) for r in kept + new)
-    if keys and max(keys.values()) > 1:
+    if any(keys[(r["question"], r["student_answer"])] > 1 for r in new):
         raise ValueError("(문제, 학생 답안) 중복")
     res_new = check_leaks(new, dev)
     if res_new["failures"]:
@@ -419,9 +515,24 @@ def validate(new: list[dict], kept: list[dict], dev: list[dict], check_leaks: Ch
     return res_new, res_all
 
 
+def composition(final: list[dict]) -> dict:
+    """최종 구성 숫자(수용 기준 확인용)."""
+    n = len(final)
+    return {
+        "total": n,
+        "science": sum(r["subject"] == SCIENCE_SUBJECT for r in final),
+        "label_true_share": round(sum(r["label"] is True for r in final) / n, 4) if n else 0.0,
+        "mohler_non_trick": sum(r["source"] == "MohlerASAG" and r["kind"] not in CHEAT for r in final),
+        "saf_non_trick": sum(r["source"] == "SAF-communication-networks" and r["kind"] not in CHEAT for r in final),
+    }
+
+
 def run(train: list[dict], dev: list[dict], *, seed: int, per_kind: int, check_leaks: CheckLeaks,
-        normalize_n2: Normalize) -> tuple[list[dict], list[dict], dict]:
+        normalize_n2: Normalize, max_science: int | None = None, base_subjects: frozenset[str] | None = None,
+        origin: Origin | None = None) -> tuple[list[dict], list[dict], dict]:
     """전체 보강. (최종 행 = 남은 행(id 순) + 새 행, 새 행, 통계). 입력 순서와 무관하게 같은 결과를 낸다.
+
+    순서: 질문 수정 → 검수 제외 → 누수 제외 → 깨진 번역 제외 → 과학 다운샘플(max_science) → 꼼수 예산·보강.
 
     학습 행이나 평가 세트가 비어 있으면 ValueError(평가 세트가 비면 누수 검사가 아무것도 걸러내지 못한다).
     """
@@ -435,14 +546,21 @@ def run(train: list[dict], dev: list[dict], *, seed: int, per_kind: int, check_l
         raise ValueError(f"id 중복: {dup[:5]}")
     rows = sorted(train, key=lambda r: r["id"])
     rows, fixed, fix_missing = fix_questions(rows)
-    rows, review = review_drop(rows)
+    rows, review = review_drop(rows, origin)
+    if review["unresolved_question_anchors"]:
+        # 영어 쌍을 못 찾은 검수 대상 문제가 조용히 학습에 남지 않게 멈춘다(원천이 바뀌었거나 id 오타).
+        raise ValueError(f"원천에서 영어 문제를 찾지 못한 검수 제외 대표 행: {review['unresolved_question_anchors'][:5]}")
     kept, leaks = leak_drop(rows, dev, check_leaks)
     script_dropped = sorted(r["id"] for r in kept if not scripts_ok(r))
     kept = [r for r in kept if scripts_ok(r)]
+    science_before = sum(r["subject"] == SCIENCE_SUBJECT for r in kept)
+    science_dropped: list[str] = []
+    if max_science is not None:
+        kept, science_dropped = downsample_science(kept, max_science, seed)
 
     n_cheat = sum(r["kind"] in CHEAT for r in kept)
     k = trick_budget(len(kept), n_cheat, MAX_TRICK_SHARE, len(TEMPLATES), per_kind)
-    bases = pick_bases(kept, k * len(TEMPLATES), seed, normalize_n2)
+    bases = pick_bases(kept, k * len(TEMPLATES), seed, normalize_n2, subjects=base_subjects)
     new = build(bases, seed)
     res_new, res_all = validate(new, kept, dev, check_leaks)
 
@@ -477,6 +595,13 @@ def run(train: list[dict], dev: list[dict], *, seed: int, per_kind: int, check_l
         "leakcheck_rule_version": RULE_VERSION,
         "leakcheck_review_new_vs_dev": res_new.get("review_total", {}),
         "leakcheck_review_final_vs_dev": res_all.get("review_total", {}),
+        "review_by_english_pair": origin is not None,
+        "review_unresolved_question_anchors": review["unresolved_question_anchors"],
+        "science_before": science_before,
+        "science_after": sum(r["subject"] == SCIENCE_SUBJECT for r in kept),
+        "science_dropped_ids": science_dropped, "max_science": max_science,
+        "base_subjects": sorted(base_subjects) if base_subjects is not None else None,
+        "composition": composition(final),
     }
     return final, new, stats
 
@@ -496,6 +621,8 @@ def output_problem(final: list[dict]) -> str | None:
     return None
 
 
+# 이 명령이 --dir 에 쓰는 파일. 사람이 채운 검수표(--reviewed-bases)는 다른 이름이어야 한다.
+OUTPUT_FILES = ("train_aug.jsonl", "aug_bases.csv", "aug_bases_new_for_review.csv", "aug_stats.json")
 BASES_HEADER = ["new_id", "kind", "template", "base_id", "subject", "question", "model_answer", "base_answer"]
 NEW_BASES_HEADER = ["new_id", "base_id", "question", "model_answer", "base_answer"]
 # 입력 행에 꼭 있어야 하는 필드(없으면 `파일:줄: 필수 필드 없음: <필드>` 로 종료 코드 2).
@@ -561,6 +688,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--seed", type=int, default=DEFAULT_SEED)
     ap.add_argument("--reviewed-bases", help="이전 바탕 답안 검수표(base_id 열). 주면 새 바탕만 "
                                              "aug_bases_new_for_review.csv 에 적는다")
+    ap.add_argument("--datasets-dir", help="원본 parquet 폴더. 주면 검수 제외를 영어 (문제, 모범 답안) 쌍으로 맞춘다(v2)")
+    ap.add_argument("--max-science", type=_non_negative_int, default=None, help="과학 행 최대 개수(층별 비례 다운샘플)")
+    ap.add_argument("--base-subjects", nargs="+", default=None, help="새 꼼수 행의 바탕 답안 과목(예: 코딩)")
     return ap
 
 
@@ -568,14 +698,19 @@ def main(argv: list[str] | None = None) -> None:
     ap = build_parser()
     a = ap.parse_args(argv)
     require_outside_repo(ap, a, "--dir")  # 아무것도 읽거나 쓰기 전에 확인한다
+    refuse_input_as_output(ap, {"--reviewed-bases": [a.reviewed_bases]}, [Path(a.dir) / n for n in OUTPUT_FILES])
     utf8_stdout()
     d = Path(a.dir)
     try:
         train = load_jsonl(d / "train_clean.jsonl", TRAIN_FIELDS)
         dev = load_jsonl(a.eval_set, DEV_FIELDS)
         reviewed = reviewed_base_ids(a.reviewed_bases) if a.reviewed_bases else None
+        origin = None
+        if a.datasets_dir:
+            origin = {(x["source"], x["source_id"]): (x["q"], x["ref"]) for x in B.load_sources_v2(a.datasets_dir)}
         final, new, stats = run(train, dev, seed=a.seed, per_kind=a.per_kind, check_leaks=check_leaks,
-                                normalize_n2=normalize_n2)
+                                normalize_n2=normalize_n2, max_science=a.max_science,
+                                base_subjects=frozenset(a.base_subjects) if a.base_subjects else None, origin=origin)
         why = output_problem(final)
         if why:
             raise ValueError(why)  # 아무것도 쓰기 전에 종료 코드 2로 끝낸다
@@ -595,7 +730,8 @@ def main(argv: list[str] | None = None) -> None:
         print(f"오류: {e}", file=sys.stderr)
         raise SystemExit(2) from e
 
-    skip = {"leak_dropped_ids", "review_dropped_row_ids", "review_dropped_question_ids", "question_fixed_ids"}
+    skip = {"leak_dropped_ids", "review_dropped_row_ids", "review_dropped_question_ids", "question_fixed_ids",
+            "science_dropped_ids"}
     print(json.dumps({k: v for k, v in stats.items() if k not in skip}, ensure_ascii=False, indent=1))
 
 

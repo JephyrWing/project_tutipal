@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import json
 import random
 import re
@@ -26,7 +27,9 @@ import urllib.request
 from collections import Counter
 from pathlib import Path
 
-from data_tools.common import (
+from eval.run_eval import GRADE_SYSTEM
+
+from .common import (
     DEFAULT_SEED,
     exit_error,
     jsonl_text,
@@ -36,7 +39,6 @@ from data_tools.common import (
     utf8_stdout,
     write_files_atomic,
 )
-from eval.run_eval import GRADE_SYSTEM
 
 # 백엔드 원본 위치(저장소 기준). --quizai 기본값.
 QUIZAI_REL = Path("tutipal_back/src/main/java/com/my/tutipal_back/learning/quiz/service/QuizAi.java")
@@ -45,6 +47,8 @@ SOURCE_FILES = {
     "mohler_open": "nkazi__MohlerASAG/raw/open_ended-0000.parquet",
     "mohler_close": "nkazi__MohlerASAG/raw/close_ended-0000.parquet",
     "saf": "Short-Answer-Feedback__saf_communication_networks_english/default/train-0000.parquet",
+    # v2 (PT-88): SAF validation split 도 학습에 쓴다. test_unseen_* split 은 어떤 버전에서도 읽지 않는다.
+    "saf_validation": "Short-Answer-Feedback__saf_communication_networks_english/default/validation-0000.parquet",
 }
 
 TRANSLATE_SYSTEM = (
@@ -116,34 +120,86 @@ def strip_stop(s):
     return (s or '').replace('<STOP>', '').strip()
 
 
-def load_sources(datasets_dir):
-    """원본 parquet 3종을 공통 항목(dict) 목록으로 읽는다."""
+SCI_NAMES = ['correct', 'contradictory', 'partially_correct_incomplete', 'irrelevant', 'non_domain']
+SCI_KIND = {'correct': (True, 'paraphrase'), 'contradictory': (False, 'wrong'),
+            'partially_correct_incomplete': (False, 'partial'), 'irrelevant': (False, 'wrong'),
+            'non_domain': (False, 'unknown')}
+SAF_KIND = {'Correct': (True, 'paraphrase'), 'Partially correct': (False, 'partial'), 'Incorrect': (False, 'wrong')}
+
+
+def question_id(source: str, q_en: str) -> str:
+    """영어 원문 문제의 식별자: <source>|sha256(문제)[:16]. 번역이 달라도 같은 문제면 같은 값이다."""
+    return f"{source}|{hashlib.sha256(q_en.encode('utf-8')).hexdigest()[:16]}"
+
+
+def _sci_items(datasets_dir) -> list[dict]:
     items = []
-    names = ['correct', 'contradictory', 'partially_correct_incomplete', 'irrelevant', 'non_domain']
-    kind_map = {'correct': (True, 'paraphrase'), 'contradictory': (False, 'wrong'),
-                'partially_correct_incomplete': (False, 'partial'), 'irrelevant': (False, 'wrong'),
-                'non_domain': (False, 'unknown')}
     for r in rows(datasets_dir, SOURCE_FILES['scientsbank']):
-        label, kind = kind_map[names[r['label']]]
+        label, kind = SCI_KIND[SCI_NAMES[r['label']]]
         items.append({"source": 'SciEntsBank', "source_id": r['id'], "subject": '과학', "q": r['question'],
-                          "ref": r['reference_answer'], "ans": r['student_answer'], "label": label, "kind": kind, "hint": ''})
+                      "ref": r['reference_answer'], "ans": r['student_answer'], "label": label, "kind": kind, "hint": ''})
+    return items
+
+
+def mohler_label_v2(avg: float, g1: float, g2: float) -> bool | None:
+    """v2 Mohler 정답 규칙. True 정답, False 오답, None 버림.
+
+    3.5 < 평균 < 4.5 는 애매해서 버린다. 정답은 평균 >= 4.5 이면서 두 채점자 모두 >= 4.
+    평균 >= 4.5 인데 한 채점자가 4 미만이면 채점자끼리 갈린 행이라 버린다.
+    """
+    if 3.5 < avg < 4.5:
+        return None
+    if avg >= 4.5:
+        return True if (g1 >= 4 and g2 >= 4) else None
+    return False
+
+
+def _mohler_items(datasets_dir, v2: bool) -> list[dict]:
+    items = []
     for r in (rows(datasets_dir, SOURCE_FILES['mohler_open'])
               + rows(datasets_dir, SOURCE_FILES['mohler_close'])):
         s = float(r['score_avg'])
-        if 3.5 < s < 4.5:
-            continue  # 애매한 점수는 버린다
-        label = s >= 4.5
+        if v2:
+            label = mohler_label_v2(s, float(r['score_grader_1']), float(r['score_grader_2']))
+            if label is None:
+                continue
+        else:
+            if 3.5 < s < 4.5:
+                continue  # 애매한 점수는 버린다
+            label = s >= 4.5
         kind = 'paraphrase' if label else ('partial' if s >= 2.0 else 'wrong')
         items.append({"source": 'MohlerASAG', "source_id": r['id'], "subject": '코딩', "q": strip_stop(r['question']),
-                          "ref": strip_stop(r['instructor_answer']), "ans": strip_stop(r['student_answer']),
-                          "label": label, "kind": kind, "hint": ''})
-    vmap = {'Correct': (True, 'paraphrase'), 'Partially correct': (False, 'partial'), 'Incorrect': (False, 'wrong')}
-    for r in rows(datasets_dir, SOURCE_FILES['saf']):
-        label, kind = vmap[r['verification_feedback']]
-        items.append({"source": 'SAF-communication-networks', "source_id": r['id'], "subject": '코딩', "q": r['question'],
-                          "ref": r['reference_answer'], "ans": r['provided_answer'], "label": label, "kind": kind,
-                          "hint": r['answer_feedback'] or ''})
+                      "ref": strip_stop(r['instructor_answer']), "ans": strip_stop(r['student_answer']),
+                      "label": label, "kind": kind, "hint": ''})
+    return items
+
+
+def _saf_items(datasets_dir, keys: tuple[str, ...]) -> list[dict]:
+    items = []
+    for key in keys:
+        for r in rows(datasets_dir, SOURCE_FILES[key]):
+            label, kind = SAF_KIND[r['verification_feedback']]
+            items.append({"source": 'SAF-communication-networks', "source_id": r['id'], "subject": '코딩',
+                          "q": r['question'], "ref": r['reference_answer'], "ans": r['provided_answer'],
+                          "label": label, "kind": kind, "hint": r['answer_feedback'] or ''})
+    return items
+
+
+def load_sources(datasets_dir):
+    """원본 parquet 3종을 공통 항목(dict) 목록으로 읽는다(v1: SAF 는 train split 만)."""
+    items = _sci_items(datasets_dir) + _mohler_items(datasets_dir, v2=False) + _saf_items(datasets_dir, ('saf',))
     return [x for x in items if x['q'] and x['ref'] and x['ans']]
+
+
+def load_sources_v2(datasets_dir) -> list[dict]:
+    """v2 원천: SciEntsBank train, Mohler open+close(v2 점수 규칙), SAF train+validation. 항목마다 qid 를 붙인다."""
+    items = (_sci_items(datasets_dir) + _mohler_items(datasets_dir, v2=True)
+             + _saf_items(datasets_dir, ('saf', 'saf_validation')))
+    out = []
+    for x in items:
+        if x['q'] and x['ref'] and x['ans']:
+            out.append({**x, "qid": question_id(x['source'], x['q'])})
+    return out
 
 
 def sample(items, n, seed):

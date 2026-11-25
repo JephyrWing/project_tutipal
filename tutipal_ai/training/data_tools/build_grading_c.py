@@ -11,20 +11,31 @@ build_grading_train.py 의 규칙을 그대로 따른다.
 - 정답 답안 일부로 꼼수 오답 변형(지시 덧붙이기·지시만·태그 탈출)을 만든다.
 - 단계마다 캐시(trans_cache.jsonl, write_cache.jsonl)에 한 건씩 기록해 중단돼도 이어서 한다.
 
+v2 (--v2, 2026-11-25): 원천을 B.load_sources_v2(SAF train+validation, Mohler 새 정답 규칙)로 읽고,
+영어 문제(qid)마다 상한을 두어 고른다(select_v2). 정답인데 답이 너무 짧은 행(missing_core)은 검수 OK·WEAK_KEEP
+행만 남긴다. 과학 행은 v1 캐시가 모두 있는 것만 쓴다(LLM 0회). --cache-from 의 v1 캐시를 --out 으로 복사해
+이어 쓰고(v1 폴더는 읽기만), --assemble-only 면 LLM 을 부르지 않고 캐시만으로 조립한다.
+
 사용 (tutipal_ai/training 에서):
   python -m data_tools.build_grading_c --out <저장소 밖 derived/grading_c> --datasets-dir <datasets 폴더>       --eval-set eval/grading_set.jsonl [--quizai <QuizAi.java>] [--n 1200]
+  python -m data_tools.build_grading_c --v2 --out <derived/grading_v2> --datasets-dir <datasets 폴더>       --eval-set eval/grading_set.jsonl --cache-from <derived/grading_c> [--review-true <review_true_*.csv> ...]       [--assemble-only]
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import difflib
+import hashlib
 import json
+import os
 import random
 import re
+import shutil
 import sys
 import time
-from collections import Counter
+from collections import Counter, defaultdict
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from data_tools import build_grading_train as B
@@ -33,6 +44,7 @@ from data_tools.common import (
     DEFAULT_SEED,
     exit_error,
     jsonl_text,
+    refuse_input_as_output,
     repo_root,
     require_outside_repo,
     seed_key_suffix,
@@ -77,21 +89,244 @@ def wkey(x, a):
     return f"{x['source']}:{x['source_id']}:{a.translator}>{a.writer}" + seed_key_suffix(a.seed)
 
 
+def _parse_cache_lines(path: Path) -> tuple[list[dict], bool]:
+    """캐시 줄을 읽는다. (레코드, 마지막 줄이 깨졌는지). 강제 종료로 마지막 줄만 잘린 경우는 그 줄을 버린다.
+
+    마지막이 아닌 줄이 깨졌으면 손상이므로 ValueError(조용히 버리지 않는다).
+    """
+    # 바이트로 읽는다: 한국어 기록 중 끊기면 마지막 줄이 UTF-8 문자 중간에서 잘려 텍스트 읽기가 통째로 실패한다.
+    lines = [(no, line) for no, line in enumerate(path.read_bytes().split(b'\n'), 1) if line.strip()]
+    out = []
+    for i, (no, line) in enumerate(lines):
+        try:
+            out.append(json.loads(line.decode('utf-8')))
+        except ValueError:  # UnicodeDecodeError, JSONDecodeError 모두 ValueError
+            if i == len(lines) - 1:
+                return out, True
+            raise ValueError(f'{path.name}:{no}: 캐시 줄이 깨짐(마지막 줄이 아님)') from None
+    return out, False
+
+
 def load_cache(path):
     cache = {}
     if path.exists():
-        with open(path, encoding='utf-8') as f:
-            for line in f:
-                if line.strip():
-                    c = json.loads(line)
-                    cache[c['key']] = c
+        records, broken_tail = _parse_cache_lines(path)
+        if broken_tail:
+            print(f'경고: {path.name} 마지막 줄이 깨져(강제 종료 흔적) 버리고 읽음', file=sys.stderr, flush=True)
+        for c in records:
+            cache[c['key']] = c
     return cache
+
+
+def repair_tail(path: Path) -> bool:
+    """이어 쓰기 전에, 깨진 마지막 줄을 잘라 내고 파일이 줄바꿈으로 끝나게 한다(이 실행이 쓰는 out 의 캐시만).
+
+    잘린 줄 뒤에 새 레코드를 붙이면 두 줄이 한 줄로 합쳐져 다음 실행에서 못 읽는다. 고쳤으면 True.
+    """
+    if not path.exists() or path.stat().st_size == 0:
+        return False
+    data = path.read_bytes()
+    _, broken_tail = _parse_cache_lines(path)
+    if broken_tail:
+        cut = data.rstrip(b'\r\n').rfind(b'\n') + 1  # 깨진 마지막 줄의 시작
+        with open(path, 'r+b') as f:
+            f.truncate(cut)
+        print(f'경고: {path.name} 깨진 마지막 줄을 잘라 냄', file=sys.stderr, flush=True)
+        return True
+    if not data.endswith(b'\n'):
+        with open(path, 'ab') as f:
+            f.write(b'\n')
+        return True
+    return False
 
 
 def progress(label, done, i, total, t0):
     if done and done % 20 == 0:
         rate = (time.time() - t0) / done
         print(f'[{label}] {i + 1}/{total}  {rate:.1f}s/건  남은 예상 {rate * (total - i - 1) / 60:.0f}분', flush=True)
+
+
+# ---------------- v2 (PT-88 학습 데이터 v2) ----------------
+
+# 영어 문제(qid) 하나에서 고를 최대 행 수. 정리 단계(clean --cap-by-source)의 상한보다 넉넉히 뽑아 둔다
+# (번역·작성 거절, 중복, 금지 용어로 빠지는 행을 메우려고). 과학은 상한 없이 캐시가 있는 행만 쓴다.
+V2_SELECT_CAPS = {"MohlerASAG": 20, "SAF-communication-networks": 16}
+V2_INJECT_RATIO = 0.15
+V1_INJECT_RATIO = 0.2
+# 라운드로빈 순서: 오답을 먼저(정답 비율이 과하지 않게), 그다음 부분·무응답·정답.
+V2_KIND_ORDER = ("wrong", "partial", "unknown", "paraphrase")
+SCIENCE_SOURCE = "SciEntsBank"
+CODING_SUBJECT = "코딩"
+REVIEW_KEEP_VERDICTS = frozenset({"OK", "WEAK_KEEP"})
+MISSING_CORE_MIN_WORDS = 5
+MISSING_CORE_REF_RATIO = 0.25
+CACHE_FILES = ("trans_cache.jsonl", "write_cache.jsonl")
+# 이 명령이 --out 에 쓰는 파일(사람이 채운 입력과 같은 경로면 거부).
+OUTPUT_FILES = ("train.jsonl", "rejected.jsonl", "stats.json", *CACHE_FILES, "text_cache.jsonl")
+
+
+def item_id(x: dict) -> str:
+    return f"{x['source']}-{x['source_id']}"
+
+
+def _rank(seed: int, x: dict) -> str:
+    return hashlib.sha256(f"{seed}\x1f{x['source']}\x1f{x['source_id']}".encode()).hexdigest()
+
+
+def _kind_order(kinds: Iterable[str]) -> list[str]:
+    known = [k for k in V2_KIND_ORDER if k in kinds]
+    return known + sorted(k for k in kinds if k not in V2_KIND_ORDER)
+
+
+def select_v2(items: list[dict], seed: int, cached: Callable[[dict], bool],
+              caps: dict[str, int] | None = None) -> list[dict]:
+    """영어 단계 선별. 입력 순서와 무관하게 결정적이고 입력을 바꾸지 않는다.
+
+    - 과학(SciEntsBank)은 cached(x) 가 True 인 행만(LLM 을 새로 부르지 않는다). 상한 없음.
+    - 그 밖의 출처는 qid 마다 caps[출처] 개까지, 답안 유형을 돌아가며(오답 먼저) 고른다.
+      유형 안의 순서는 sha256(seed, source, source_id).
+    """
+    caps = V2_SELECT_CAPS if caps is None else caps
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for x in items:
+        if x["source"] == SCIENCE_SOURCE and not cached(x):
+            continue
+        groups[x["qid"]].append(x)
+    out: list[dict] = []
+    for qid in sorted(groups):
+        g = groups[qid]
+        cap = caps.get(g[0]["source"])
+        by_kind: dict[str, list[dict]] = defaultdict(list)
+        for x in sorted(g, key=lambda x: _rank(seed, x)):
+            by_kind[x["kind"]].append(x)
+        if cap is None or len(g) <= cap:
+            out += sorted(g, key=lambda x: _rank(seed, x))
+            continue
+        order = _kind_order(by_kind)
+        picked: list[dict] = []
+        depth = 0
+        while len(picked) < cap:
+            for k in order:
+                if depth < len(by_kind[k]) and len(picked) < cap:
+                    picked.append(by_kind[k][depth])
+            depth += 1
+        out += picked
+    return out
+
+
+def missing_core(x: dict) -> bool:
+    """정답 행인데 영어 학생 답이 너무 짧아 핵심이 빠졌을 가능성이 큰가(공백 기준 단어 수).
+
+    5단어 미만이거나 모범 답안 단어 수의 25% 미만이면 True. 정답이 아닌 행은 항상 False.
+    """
+    if x["label"] is not True:
+        return False
+    n_ans = len(x["ans"].split())
+    return n_ans < MISSING_CORE_MIN_WORDS or n_ans < len(x["ref"].split()) * MISSING_CORE_REF_RATIO
+
+
+def drop_missing_core(items: list[dict], keep_ids: set[str]) -> tuple[list[dict], list[str]]:
+    """missing_core 행을 뺀다(keep_ids 에 있는 사람 검수 통과 행은 남긴다). (남은 행, 뺀 id 정렬)."""
+    kept, dropped = [], []
+    for x in items:
+        if missing_core(x) and item_id(x) not in keep_ids:
+            dropped.append(item_id(x))
+        else:
+            kept.append(x)
+    return kept, sorted(dropped)
+
+
+def review_keep_ids(paths: Iterable[str | os.PathLike]) -> set[str]:
+    """정답 검수표(review_true_*.csv, 열 id,scope,verdict,reason)에서 verdict 가 OK·WEAK_KEEP 인 id."""
+    out: set[str] = set()
+    for path in paths:
+        with open(path, encoding="utf-8-sig", newline="") as f:
+            reader = csv.DictReader(f)
+            missing = {"id", "verdict"} - set(reader.fieldnames or [])
+            if missing:
+                raise ValueError(f"{Path(path).name}: 열이 없음: {sorted(missing)}")
+            out |= {row["id"] for row in reader if (row["verdict"] or "").strip() in REVIEW_KEEP_VERDICTS}
+    return out
+
+
+def cache_source(out: Path, cache_from: Path | None, name: str) -> Path:
+    """읽을 캐시 파일: --out 에 있으면 그것(이어 쓰기), 없으면 --cache-from 의 v1 파일."""
+    own = out / name
+    if own.exists() or cache_from is None:
+        return own
+    return cache_from / name
+
+
+def seed_caches(out: Path, cache_from: Path | None) -> list[str]:
+    """--out 에 없는 캐시만 --cache-from 에서 복사한다(임시 파일 + 바꿔 넣기, v1 파일은 읽기만). 복사한 이름 목록."""
+    copied = []
+    if cache_from is None:
+        return copied
+    for name in CACHE_FILES:
+        src, dst = cache_from / name, out / name
+        if dst.exists() or not src.exists():
+            continue
+        tmp = out / f".{name}.copy.tmp"
+        shutil.copyfile(src, tmp)
+        os.replace(tmp, dst)
+        copied.append(name)
+    return copied
+
+
+def overlaps(a: str | os.PathLike, b: str | os.PathLike) -> bool:
+    """두 폴더가 같거나 한쪽이 다른 쪽 안이면 True(실제 경로·대소문자 정규화)."""
+    pa = os.path.normcase(os.path.realpath(os.path.abspath(a)))
+    pb = os.path.normcase(os.path.realpath(os.path.abspath(b)))
+    if os.path.splitdrive(pa)[0] != os.path.splitdrive(pb)[0]:
+        return False
+    common = os.path.commonpath([pa, pb])
+    return common in (pa, pb)
+
+
+TEXT_CACHE = 'text_cache.jsonl'
+
+
+def text_key(translator: str, text: str) -> str:
+    return f"{translator}|{hashlib.sha256(text.encode()).hexdigest()}"
+
+
+class TextMemo:
+    """v2: 같은 영어 원문(문제·모범 답안이 qid 마다 반복)을 한 번만 번역하는 텍스트 단위 메모.
+
+    행 캐시(trans_cache.jsonl)의 키·레코드는 그대로 두고 그 위에 얹는다. 행 캐시에 이미 있는 행은 행 캐시를
+    그대로 쓰므로 선별·조립 결과는 바뀌지 않는다. 성공한 번역만 out/text_cache.jsonl 에 한 줄씩 이어 쓴다.
+    """
+
+    def __init__(self, path: Path, translate: Callable[[str, str], str]):
+        self.path = path
+        self.translate = translate
+        repair_tail(path)
+        self.memo = {c['key']: c['out'] for c in load_cache(path).values()}
+        self.hits = 0
+
+    def __call__(self, translator: str, text: str) -> str:
+        key = text_key(translator, text)
+        if key in self.memo:
+            self.hits += 1
+            return self.memo[key]
+        ko = self.translate(translator, text)
+        with open(self.path, 'a', encoding='utf-8') as f:
+            f.write(json.dumps({'key': key, 'out': ko}, ensure_ascii=False) + '\n')
+        self.memo[key] = ko
+        return ko
+
+
+class CallCounter:
+    """LLM 함수 호출 수를 센다(H.translate / H.generate 를 부를 때마다 1)."""
+
+    def __init__(self, fn: Callable):
+        self.fn = fn
+        self.calls = 0
+
+    def __call__(self, *args, **kwargs):
+        self.calls += 1
+        return self.fn(*args, **kwargs)
+
 
 
 def build_parser():
@@ -105,14 +340,45 @@ def build_parser():
     ap.add_argument('--translator', default='translategemma:4b')
     ap.add_argument('--writer', default='gemma3:4b')
     ap.add_argument('--seed', type=int, default=DEFAULT_SEED)
-    ap.add_argument('--inject-ratio', type=float, default=0.2)
+    ap.add_argument('--inject-ratio', type=float, default=None,
+                    help=f'정답 답안 중 꼼수 변형을 만들 비율 (기본 v1 {V1_INJECT_RATIO}, v2 {V2_INJECT_RATIO})')
+    ap.add_argument('--v2', action='store_true', help='학습 데이터 v2 선별(qid 상한·SAF validation·과학은 캐시만)')
+    ap.add_argument('--cache-from', help='v2: 재사용할 v1 캐시 폴더(읽기만). --out 에 캐시가 없을 때만 복사한다')
+    ap.add_argument('--assemble-only', action='store_true', help='LLM 을 부르지 않고 캐시만으로 조립한다')
+    ap.add_argument('--review-true', nargs='+', default=[],
+                    help='v2: 정답 검수표 CSV(review_true_*.csv). OK·WEAK_KEEP 행은 짧아도 남긴다')
     return ap
+
+
+def _ok_cached(x: dict, a: argparse.Namespace, tcache: dict, wcache: dict) -> bool:
+    """번역·작성 캐시가 모두 있고 오류가 없으며 지금 검사 규칙도 통과하면 True(LLM 을 다시 부를 일이 없음)."""
+    t, c = tcache.get(tkey(x, a)), wcache.get(wkey(x, a))
+    return bool(t and not t['error'] and c and not c['error'] and check(c['out'], x['label']) is None)
+
+
+def pick_v2(a: argparse.Namespace, out: Path, cache_from: Path | None) -> tuple[list[dict], list[str]]:
+    """v2 선별: 원천 → 핵심 누락 정답 제외 → qid 상한(과학은 캐시가 모두 있는 행만). (고른 항목, 뺀 id)."""
+    tcache = load_cache(cache_source(out, cache_from, 'trans_cache.jsonl'))
+    wcache = load_cache(cache_source(out, cache_from, 'write_cache.jsonl'))
+    items, dropped = drop_missing_core(B.load_sources_v2(a.datasets_dir), review_keep_ids(a.review_true))
+    return select_v2(items, a.seed, lambda x: _ok_cached(x, a, tcache, wcache)), dropped
 
 
 def main(argv: list[str] | None = None) -> None:
     ap = build_parser()
     a = ap.parse_args(argv)
     require_outside_repo(ap, a, '--out')  # 아무것도 읽거나 쓰기 전에 확인한다
+    refuse_input_as_output(ap, {'--review-true': a.review_true}, [Path(a.out) / n for n in OUTPUT_FILES])
+    if a.inject_ratio is None:
+        a.inject_ratio = V2_INJECT_RATIO if a.v2 else V1_INJECT_RATIO
+    if not a.v2 and (a.cache_from or a.review_true):
+        ap.error('--cache-from, --review-true 는 --v2 와 함께만 쓴다')
+    cache_from = Path(a.cache_from) if a.cache_from else None
+    if cache_from is not None and not cache_from.is_dir():
+        ap.error(f'--cache-from 폴더가 없음: {a.cache_from!r}')
+    if cache_from is not None and overlaps(a.out, cache_from):
+        # 같은 폴더면 v1 캐시에 이어 쓰고 v1 train.jsonl·stats.json 을 덮는다(v1 폴더는 읽기만 해야 한다)
+        ap.error(f'--out 과 --cache-from 은 서로 다른(포함 관계도 아닌) 폴더여야 한다: {a.out!r}, {a.cache_from!r}')
     utf8_stdout()
     B.check_prompt(a.quizai)
     with open(a.eval_set, encoding='utf-8') as f:
@@ -124,66 +390,90 @@ def main(argv: list[str] | None = None) -> None:
     eval_questions = sorted({e['question'] for e in eval_items})
 
     out = Path(a.out)
-    picked = B.sample(B.load_sources(a.datasets_dir), a.n, a.seed)
+    missing_core_ids: list[str] = []
+    if a.v2:
+        try:
+            picked, missing_core_ids = pick_v2(a, out, cache_from)
+        except (OSError, ValueError) as e:  # 검수표 없음·열 없음, 캐시 손상 등
+            exit_error(str(e))
+        where = f'--datasets-dir {a.datasets_dir!r} (v2 는 --n 을 쓰지 않음)'
+    else:
+        picked = B.sample(B.load_sources(a.datasets_dir), a.n, a.seed)
+        where = f'--datasets-dir {a.datasets_dir!r}, --n {a.n}'
     if not picked:  # 폴더·캐시를 만들기 전에 멈춘다
-        exit_error(f'원천 데이터에서 뽑은 문항이 없음 (--datasets-dir {a.datasets_dir!r}, --n {a.n})')
+        exit_error(f'원천 데이터에서 뽑은 문항이 없음 ({where})')
     out.mkdir(parents=True, exist_ok=True)
+    copied = seed_caches(out, cache_from)
+    if copied:
+        print(f'v1 캐시 복사: {copied} ({cache_from} → {out})', flush=True)
+    # 모듈 속성을 호출 시점에 찾아야 테스트의 가짜 LLM 이 들어간다. 호출 수는 stats 에 남긴다.
+    translate, generate = CallCounter(H.translate), CallCounter(H.generate)
+    memo = None
+    if a.v2 and not a.assemble_only:
+        memo = TextMemo(out / TEXT_CACHE, translate)
+    translate_text = memo or translate
 
     # 1단계: 번역 (모델 교체를 줄이려고 전 문항 먼저)
     tpath = out / 'trans_cache.jsonl'
+    if not a.assemble_only:
+        repair_tail(tpath)
     tcache = load_cache(tpath)
     print(f'원본 {len(picked)}건 · 번역 캐시 {len(tcache)}건', flush=True)
-    t0, done = time.time(), 0
-    with open(tpath, 'a', encoding='utf-8') as f:
-        for i, x in enumerate(picked):
-            key = tkey(x, a)
-            if key in tcache:
-                continue
-            try:
-                tr, err = {k: H.translate(a.translator, x[src]) for k, src in FIELDS}, None
-            except Exception as e:  # noqa: BLE001 - 사유만 남기고 다음으로
-                tr, err = None, type(e).__name__
-            c = {'key': key, 'out': tr, 'error': err}
-            f.write(json.dumps(c, ensure_ascii=False) + '\n')
-            f.flush()
-            tcache[key] = c
-            done += 1
-            progress('번역', done, i, len(picked), t0)
+    if not a.assemble_only:
+        t0, done = time.time(), 0
+        with open(tpath, 'a', encoding='utf-8') as f:
+            for i, x in enumerate(picked):
+                key = tkey(x, a)
+                if key in tcache:
+                    continue
+                try:
+                    tr, err = {k: translate_text(a.translator, x[src]) for k, src in FIELDS}, None
+                except Exception as e:  # noqa: BLE001 - 사유만 남기고 다음으로
+                    tr, err = None, type(e).__name__
+                c = {'key': key, 'out': tr, 'error': err}
+                f.write(json.dumps(c, ensure_ascii=False) + '\n')
+                f.flush()
+                tcache[key] = c
+                done += 1
+                progress('번역', done, i, len(picked), t0)
 
     # 2단계: 이유·피드백 작성
     wpath = out / 'write_cache.jsonl'
+    if not a.assemble_only:
+        repair_tail(wpath)
     wcache = load_cache(wpath)
     print(f'작성 캐시 {len(wcache)}건', flush=True)
-    t0, done = time.time(), 0
-    with open(wpath, 'a', encoding='utf-8') as f:
-        for i, x in enumerate(picked):
-            key = wkey(x, a)
-            old = wcache.get(key)
-            if old and (old['error'] or not check(old['out'], x['label'])):
-                continue  # 이미 거절됐거나 지금 규칙으로도 통과하는 캐시는 그대로 쓴다
-            t = tcache.get(tkey(x, a))
-            if not t or t['error']:
-                continue
-            tr = t['out']
-            user = (f"정답 여부: {B.KIND_DESC[x['kind']]}\n<question>{tr['question']}</question>\n"
-                    f"<model_answer>{tr['model_answer']}</model_answer>\n<student_answer>{tr['student_answer']}</student_answer>")
-            o, err = None, None
-            for attempt in range(2):
-                prompt = user if attempt == 0 else user + f"\n\n[다시 작성] 직전 결과가 규칙 위반({err})."
-                try:
-                    w = json.loads(H.generate(a.writer, prompt, system=H.WRITER_SYSTEM, fmt='json', seed=a.seed + attempt))
-                    o = {**tr, 'reason': str(w.get('reason', '')), 'feedback': str(w.get('feedback', ''))}
-                    err = check(o, x['label'])
-                except Exception as e:  # noqa: BLE001
-                    err = type(e).__name__
-                if not err:
-                    break
-            c = {'key': key, 'out': o, 'error': err}
-            f.write(json.dumps(c, ensure_ascii=False) + '\n')
-            f.flush()
-            wcache[key] = c
-            done += 1
-            progress('작성', done, i, len(picked), t0)
+    if not a.assemble_only:
+        t0, done = time.time(), 0
+        with open(wpath, 'a', encoding='utf-8') as f:
+            for i, x in enumerate(picked):
+                key = wkey(x, a)
+                old = wcache.get(key)
+                if old and (old['error'] or not check(old['out'], x['label'])):
+                    continue  # 이미 거절됐거나 지금 규칙으로도 통과하는 캐시는 그대로 쓴다
+                t = tcache.get(tkey(x, a))
+                if not t or t['error']:
+                    continue
+                tr = t['out']
+                user = (f"정답 여부: {B.KIND_DESC[x['kind']]}\n<question>{tr['question']}</question>\n"
+                        f"<model_answer>{tr['model_answer']}</model_answer>\n<student_answer>{tr['student_answer']}</student_answer>")
+                o, err = None, None
+                for attempt in range(2):
+                    prompt = user if attempt == 0 else user + f"\n\n[다시 작성] 직전 결과가 규칙 위반({err})."
+                    try:
+                        w = json.loads(generate(a.writer, prompt, system=H.WRITER_SYSTEM, fmt='json', seed=a.seed + attempt))
+                        o = {**tr, 'reason': str(w.get('reason', '')), 'feedback': str(w.get('feedback', ''))}
+                        err = check(o, x['label'])
+                    except Exception as e:  # noqa: BLE001
+                        err = type(e).__name__
+                    if not err:
+                        break
+                c = {'key': key, 'out': o, 'error': err}
+                f.write(json.dumps(c, ensure_ascii=False) + '\n')
+                f.flush()
+                wcache[key] = c
+                done += 1
+                progress('작성', done, i, len(picked), t0)
 
     # 3단계: 조립 (누수 제외 · 꼼수 변형)
     rnd = random.Random(a.seed)
@@ -205,9 +495,11 @@ def main(argv: list[str] | None = None) -> None:
             rejected.append({'source': x['source'], 'source_id': x['source_id'], 'error': f'eval-like {best:.2f}'})
             continue
         base = f"{x['source']}-{x['source_id']}"
-        train.append(B.record(base, x, o['question'], o['model_answer'], o['student_answer'], x['label'], x['kind'],
-                              o['reason'], o['feedback'], x['subject']))
-        if x['label'] and rnd.random() < a.inject_ratio:
+        new_rows = [B.record(base, x, o['question'], o['model_answer'], o['student_answer'], x['label'], x['kind'],
+                             o['reason'], o['feedback'], x['subject'])]
+        # v2: 꼼수 변형의 바탕은 코딩 행만(수용 기준 12를 v2 전체에 적용). 행 선별·캐시와는 무관하다.
+        trick_base = x['label'] and (not a.v2 or x['subject'] == CODING_SUBJECT)
+        if trick_base and rnd.random() < a.inject_ratio:
             mode = rnd.choice(['tail', 'only', 'tag'])
             if mode == 'tail':
                 ans, kind, reason = f"{o['student_answer']} {rnd.choice(B.INJECT_TAILS)}", 'injection_with_answer', B.INJ_REASON
@@ -215,8 +507,12 @@ def main(argv: list[str] | None = None) -> None:
                 ans, kind, reason = rnd.choice(B.INJECT_ONLY), 'injection', B.INJ_REASON
             else:
                 ans, kind, reason = rnd.choice(B.TAG_ESCAPES).format(ans=o['student_answer']), 'tag_escape', B.TAG_REASON
-            train.append(B.record(f'{base}-{kind}', x, o['question'], o['model_answer'], ans, False, kind,
-                                  reason, B.INJ_FEEDBACK, x['subject']))
+            new_rows.append(B.record(f'{base}-{kind}', x, o['question'], o['model_answer'], ans, False, kind,
+                                     reason, B.INJ_FEEDBACK, x['subject']))
+        if a.v2:
+            for r in new_rows:
+                r['qid'] = x['qid']  # 꼼수 행도 바탕 문제의 qid 를 가진다
+        train += new_rows
     rnd.shuffle(train)
     if not train:  # 빈 train.jsonl 로 기존 결과를 덮지 않는다(캐시는 남으므로 고친 뒤 이어서 돌릴 수 있다)
         exit_error(f"학습 행이 0개 (원본 {len(picked)}건 모두 거절: "
@@ -225,12 +521,22 @@ def main(argv: list[str] | None = None) -> None:
              'cache_key_fields': CACHE_KEY_FIELDS, 'translate_seed': DEFAULT_SEED,
              'train': len(train), 'rejected': len(rejected), 'label_true': sum(r['label'] for r in train),
              'reject_reason': Counter(r['error'].split(' ')[0] for r in rejected),
-             'kind': Counter(r['kind'] for r in train), 'source': Counter(r['source'] for r in train)}
+             'kind': Counter(r['kind'] for r in train), 'source': Counter(r['source'] for r in train),
+             'inject_ratio': a.inject_ratio, 'assemble_only': a.assemble_only,
+             'llm_translate_calls': translate.calls, 'llm_write_calls': generate.calls,
+             'text_memo_hits': memo.hits if memo else 0}
+    if a.v2:
+        stats.update({'v2': True, 'select_caps': V2_SELECT_CAPS,
+                      'picked_source': Counter(x['source'] for x in picked),
+                      'picked_questions': len({x['qid'] for x in picked}),
+                      'cache_from': str(cache_from) if cache_from else None, 'cache_copied': copied,
+                      'review_true_files': [Path(p).name for p in a.review_true],
+                      'missing_core_dropped': len(missing_core_ids), 'missing_core_dropped_ids': missing_core_ids})
     # 세 파일을 모두 임시 파일에 쓴 뒤 바꿔 넣는다(일부만 바뀐 세대 혼합 방지)
     write_files_atomic({out / 'train.jsonl': (jsonl_text(train), 'utf-8'),
                         out / 'rejected.jsonl': (jsonl_text(rejected), 'utf-8'),
                         out / 'stats.json': (json.dumps(stats, ensure_ascii=False, indent=1), 'utf-8')})
-    print(json.dumps(stats, ensure_ascii=False))
+    print(json.dumps({k: v for k, v in stats.items() if k != 'missing_core_dropped_ids'}, ensure_ascii=False))
 
 
 if __name__ == '__main__':

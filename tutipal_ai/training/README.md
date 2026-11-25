@@ -56,7 +56,7 @@ Jira PT-89(AI-007 효과 평가)와 PT-88(AI-006 주관식 채점 QLoRA)의 평�
 
 ### 채점 학습 데이터 (저장소 밖)
 
-- QLoRA 학습에는 `tutipal_datasets/derived/grading_c/train_aug.jsonl`을 쓴다. `train.jsonl`, `train_clean.jsonl`은 중간 산출물이다.
+- QLoRA 학습에는 `tutipal_datasets/derived/grading_c/train_aug.jsonl`(v1)을 썼고, v2가 생성·검사(아래)를 통과하면 `derived/grading_v2/train_aug.jsonl`을 쓴다. `train.jsonl`, `train_clean.jsonl`은 중간 산출물이다.
 - 만드는 코드는 `data_tools/`에 있다(2026-11-25 저장소로 옮김). `tutipal_ai/training`에서 아래 순서로 실행하고, 출력 폴더는 git 저장소 밖 로컬 드라이브 경로여야 한다. 어느 git 작업 트리 안이든(이 저장소, 워크트리의 원래 체크아웃, `C:\CODE-SPACE`처럼 상위 폴더 저장소 포함), UNC·장치 경로(`\\server\share`, `\\?\...`), 빈 값이면 아무것도 쓰지 않고 종료 코드 2. 판정은 대상과 위 폴더들의 `.git` 표식으로 하고(git이 없어도 동작), git이 있으면 `git rev-parse --show-toplevel`로 한 번 더 확인한다. 판정할 수 없으면 거부한다.
 
   ```powershell
@@ -72,6 +72,33 @@ Jira PT-89(AI-007 효과 평가)와 PT-88(AI-006 주관식 채점 QLoRA)의 평�
 - `augment_tricks`가 하는 일: 라벨 검수 결과(`review_true_*.csv`, `aug_bases_review.csv`)를 코드 상수로 반영한다. 질문에 정답 표시가 새던 SciEntsBank 검수 14건 중 13건(질문 11개)의 괄호 표시를 고치고(`QUESTION_FIXES`, 괄호 안에 두 선택지가 다 있는 1건은 다시 보니 누출이 아니어서 고치지 않음 `QUESTION_REVIEWED_NO_LEAK`), 나쁜 정답 행(`EXCLUDE_ROWS`, BAD·WEAK_CORE 31개)과 모범 답안·질문이 깨진 문제 전체(`EXCLUDE_QUESTIONS_OF`, MA_BAD 32개 문제)를 뺀다. 그다음 누수 검사 실패 행과 번역이 깨진 행을 빼고, 꼼수 답안을 꼼수 비율 15% 이하·문제당 2개 이하로 보강한다. 바탕 답안 선택은 seed 기반 해시 순서라 입력 순서와 무관하다. 고른 바탕 답안은 `aug_bases.csv`, `--reviewed-bases`를 주면 검수표에 없는 새 바탕 답안만 `aug_bases_new_for_review.csv`에 남긴다. 바탕 답안 검수에서 뺀 답안은 `BAD_BASES`(1차 4개 + 검수표 15개 + 2차 검수 6개).
 - `augment_tricks` 입력: JSONL은 UTF-8(BOM 허용, `eval.leakcheck`와 같음), 줄마다 JSON 객체이고 필수 필드가 있어야 한다. 학습 행이나 평가 세트가 비었거나, 형식·필드가 틀렸거나, `--per-kind`가 음수면 `파일:줄` 메시지와 함께 종료 코드 2로 끝나고 아무것도 쓰지 않는다. 입력(검수·누수 제외 뒤)의 꼼수 행이 이미 15%를 넘으면 행을 몰래 버리지 않고 비율을 알린 뒤 종료 코드 2로 끝난다(이때도 아무것도 쓰지 않음). CSV(`--reviewed-bases`)도 BOM을 허용하고 `base_id` 열이 있어야 한다. 결과 파일은 모두 만든 뒤 임시 파일 + 바꿔 넣기로 쓰므로 쓰기 도중 실패해도 기존 파일이 남는다.
 - 2026-11-25 재생성(seed 20261125): 입력 993행 → 질문 수정 45행, 검수 제외 146행(행 단위 24, 문제 단위 122), 누수 제외 27행, 깨진 번역 9행, 보강 82행(종류별 41) → **893행**(정답 259, 꼼수 133행 14.9%). leakcheck(dev) 실패 0. 이전 결과(1050행)는 `derived/grading_c/prev_20261125/`에 있다. 새 바탕 답안 43개는 검수를 마쳤다(신규 중 제외 4개 + 1차에서 유지했던 2개를 제외로 변경 → `BAD_BASES` 25개, 아래 2차 재생성).
+- **학습 데이터 v2 (PT-88, `derived/grading_v2/`)**: v1 폴더(`derived/grading_c/`)는 읽기만 하고 산출물은 모두 `--out`/`--dir`(v2 폴더)에 쓴다. 원천은 SciEntsBank train, Mohler open+close, SAF **train+validation**(SAF `test_unseen_*` split 은 읽지 않는다). Mohler 정답은 평균 ≥ 4.5 이면서 두 채점자 모두 ≥ 4(평균 ≥ 4.5 인데 한 명이 4 미만이면 버림), 3.5 < 평균 < 4.5 는 버린다. 행마다 `qid`(= `<source>|sha256(영어 문제)[:16]`)가 있고 꼼수·보강 행은 바탕 행의 qid 를 물려받는다.
+  - 생성(`build_grading_c --v2`): 영어 문제(qid)마다 Mohler 20·SAF 16행까지 오답부터 유형을 돌아가며 고른다. 과학은 v1 캐시(번역·작성)가 모두 있는 행만 쓴다(LLM 0회). 정답인데 영어 답이 5단어 미만이거나 모범 답안 단어 수의 25% 미만이면 뺀다(`--review-true`의 OK·WEAK_KEEP 행은 남김). `--cache-from`의 v1 캐시는 v2 폴더에 캐시가 없을 때만 복사하고 이후 v2 폴더에 이어 쓰므로, **중단돼도 같은 명령으로 다시 실행하면 이어서 한다**. `--assemble-only`는 LLM 을 부르지 않고 캐시만으로 조립한다(캐시 없는 행은 `rejected.jsonl`에 `missing`). 꼼수 변형 비율 기본 0.15이고 v2에서는 코딩 정답 행에만 붙인다. `stats.json`에 `llm_translate_calls`(필드마다 1)·`llm_write_calls`·`text_memo_hits`·`missing_core_dropped_ids`. 같은 영어 원문(qid마다 반복되는 문제·모범 답안)은 `text_cache.jsonl` 메모로 한 번만 번역한다(행 캐시에 이미 있는 행은 행 캐시를 그대로 씀). `--out`과 `--cache-from`이 같거나 한쪽이 다른 쪽 안이면 종료 코드 2. 강제 종료로 캐시 마지막 줄이 잘렸으면 경고하고 그 줄을 버린 뒤 이어서 한다.
+  - 정리(`clean_grading_c --sources v2`): 금지 용어(`FORBIDDEN_TERMS`: 핑거링·밀고 내보내·서드 시작)가 남은 행은 빼고(`dropped.csv` 사유 `term:<용어>`, `clean_stats.json`의 `term_dropped`), 문제·모범 답안에 있으면 `--overrides`로 고친 번역을 주면 살아남는다. `--cap-by-source`로 출처별 문제당 상한을 주며(원천 3종·데이터에 있는 출처 이름만, 오타면 2) 꼼수 행은 상한에 세지도 버리지도 않는다. 이 두 규칙은 v2(`--sources v2`, `--cap-by-source`, 또는 qid가 있는 행)에서만 켜지고, v1 산출물을 기본 옵션으로 돌리면 예전과 같은 결과가 나온다. 주의: qid와 override 그룹은 영어 **문제 문장** 기준이라, 문장은 같고 모범 답안이 다른 Mohler 문제 2개(`MohlerASAG|3e1ef85b01a24872`, `MohlerASAG|b51a3685728b28a5`)는 각각 한 그룹을 같이 쓴다. 이 그룹에 `--overrides`를 쓸 때는 모범 답안이 둘 다 맞는지 확인한다.
+  - 보강(`augment_tricks`): `--datasets-dir`를 주면 검수 제외(`EXCLUDE_QUESTIONS_OF`)를 영어 (문제, 모범 답안) 쌍으로 맞춘다(번역이 달라도, 대표 행이 데이터에 없어도 빠짐). 순서는 질문 수정 → 검수 제외 → 누수 제외 → 깨진 번역 제외 → 과학 다운샘플(`--max-science`, (kind, label) 층별 최대 잔여 배분, seed 해시 순) → 꼼수 보강(`--base-subjects 코딩`이면 바탕 답안은 코딩만). `aug_stats.json`의 `composition`(전체·과학·정답 비율·Mohler/SAF 비꼼수)으로 구성 목표(과학 ≤ 250, 전체 1,300–1,800, 정답 0.30–0.45, Mohler 비꼼수 ≥ 600, SAF 비꼼수 ≥ 200)를 확인한다.
+  - 사람 확인 시트(`data_tools.review_sheet`): 꼼수가 아닌 코딩 30행(SAF ≥ 8)을 영어 원문·한국어·라벨·이유·피드백과 함께 `review_sheet.csv`로 만들고, `verdict`(OK·LABEL_ERR·TRANS_ERR·EXPL_ERR)를 채운 뒤 `check`가 0(OK 아닌 행 3개 이하)이어야 학습에 쓴다(1 = 4개 이상, 2 = 빈칸·모르는 값·UTF-8이 아닌 파일). `make`는 `review_sheet.meta.json`에 만든 `train_aug.jsonl`의 sha256과 행 id를 남기고, `check`는 같은 폴더의 `train_aug.jsonl`과 대조한다(바뀌었거나 id가 다르면 2). verdict가 채워진 시트는 `--force` 없이 덮지 않는다(`--force`면 `review_sheet.<시각>.bak.csv` 백업). `=`·`+`·`-`·`@`로 시작하는 칸은 엑셀 수식이 되지 않게 앞에 `'`를 붙인다. 엑셀에서 다시 저장할 때는 'CSV UTF-8' 형식으로 저장한다. 후보가 모자라 30행 또는 SAF 8행(`--n`·`--min-saf`)을 못 채우면 시트를 만들지 않고(2, 가능한 수를 알려 줌), check도 meta의 n·min_saf보다 작은 시트는 2로 본다. `--force` 백업은 배타 생성이라 같은 초에 다시 실행해도 기존 백업을 덮지 않는다(`-1`, `-2` 번호). 사람이 채우는 입력(`--review-true`, `--overrides`, `--reviewed-bases`)이 그 명령의 출력 파일과 같은 경로면 아무것도 쓰지 않고 종료 코드 2. review_sheet.meta.json은 시트와 같은 폴더에 둔다. meta가 없으면 check는 2.
+
+  ```powershell
+  # tutipal_ai/training 에서. $DS = C:\Users\<사용자>\tutipal_datasets
+  # 1. 생성(Ollama: translategemma:4b, gemma3:4b). 오래 걸리므로 로그를 남기고 백그라운드로. 중단되면 같은 명령으로 이어서 한다.
+  .\.venv\Scripts\python.exe -u -m data_tools.build_grading_c --v2 --out $DS\derived\grading_v2 --datasets-dir $DS\datasets `
+      --eval-set eval/grading_set.jsonl --cache-from $DS\derived\grading_c `
+      --review-true $DS\derived\grading_c\review_true_mohler.csv $DS\derived\grading_c\review_true_saf.csv $DS\derived\grading_c\review_true_scientsbank.csv
+  # 2. 정리
+  .\.venv\Scripts\python.exe -m data_tools.clean_grading_c --dir $DS\derived\grading_v2 --datasets-dir $DS\datasets `
+      --eval-set eval/grading_set.jsonl --sources v2 --cap-by-source MohlerASAG=12 SAF-communication-networks=10 SciEntsBank=10
+  # 3. 보강
+  .\.venv\Scripts\python.exe -m data_tools.augment_tricks --dir $DS\derived\grading_v2 --eval-set eval/grading_set.jsonl `
+      --datasets-dir $DS\datasets --max-science 250 --base-subjects 코딩
+  # 4. 검사: 구성(코딩 ≥ 0.6, 꼼수 ≤ 0.15), dev 누수(봉인 세트 없이)
+  .\.venv\Scripts\python.exe -m eval.trainmix --train $DS\derived\grading_v2\train_aug.jsonl
+  .\.venv\Scripts\python.exe -m eval.leakcheck --train $DS\derived\grading_v2\train_aug.jsonl --dev eval/grading_set.jsonl --report results/leakcheck_v2
+  # 5. 사람 확인 시트
+  .\.venv\Scripts\python.exe -m data_tools.review_sheet make --dir $DS\derived\grading_v2 --datasets-dir $DS\datasets
+  .\.venv\Scripts\python.exe -m data_tools.review_sheet check --sheet $DS\derived\grading_v2\review_sheet.csv
+  ```
+
+  봉인 세트 게이트(`leakcheck --sealed`)는 위 순서에 넣지 않는다. 학습 데이터 쪽은 v2 `train_aug.jsonl`의 sha256 만 봉인 관리자에게 넘기고, 봉인 관리자가 아래 [범위와 봉인 세트](#범위와-봉인-세트) 절차로 실행한다.
 - 2026-11-25 2차 재생성: 새 바탕 답안 검수(`aug_bases_new_review.csv`)에서 제외 6개를 `BAD_BASES`에 넣고 다시 만들었다. 행 수·비율은 그대로(**893행**, 정답 259, 꼼수 133행 14.9%, leakcheck(dev) 실패 0)이고 바탕 답안 6개만 바뀌었다(4개는 이미 검수한 답안, 처음 보는 답안 2개는 `aug_bases_new_for_review.csv`에서 2026-11-25 검수: MohlerASAG-E11.Q05.A26 OK, MohlerASAG-E12.Q06.A00 WEAK 유지). 검수한 바탕 답안 전체 목록은 `derived/grading_c/reviewed_bases_all.csv`(139개), 이전 결과는 `derived/grading_c/prev_20261125b/`.
 
 ## 준비
@@ -135,9 +162,15 @@ docker build -t tutipal-eval-sandbox:1 -f eval/sandbox.Dockerfile eval
 
 개발 세트는 다과목 120건이고 프롬프트·학습 데이터를 만들며 여러 번 보게 되므로, 파인튜닝 효과는 **처음 보는 코딩 문항으로 만든 봉인(sealed) 세트**로 한 번만 잰다. 봉인 세트는 저장소에 넣지 않는다.
 
-1. 작성: 코딩 과목, 한두 문장 주관식(짧은 코드 포함). 행마다 `answer_form`(`text`|`code`)을 넣는다.
+역할 분리(학습 데이터 v2부터):
+
+- 봉인 세트는 학습 데이터를 만드는 담당(세션·사람)이 아닌 **별도 세션 또는 사람이 작성**하고, **봉인 관리자(사용자)가 보관**한다. 학습 데이터 쪽은 봉인 세트 파일을 열거나 경로를 알 필요가 없다.
+- 라벨은 작성자 라벨을 보지 않은 채 **사용자가 블라인드로 다시 매기고**, 가능하면 두 라벨의 일치율을 남긴다.
+- 누수 게이트 `leakcheck --sealed`는 **봉인 관리자가 실행**한다. 학습 데이터 쪽에는 봉인 세트의 sha256(과 게이트 통과 여부)만 공유한다.
+
+1. 작성(위 역할 분리대로 학습 데이터 담당이 아닌 쪽에서): 코딩 과목, 한두 문장 주관식(짧은 코드 포함). 행마다 `answer_form`(`text`|`code`)을 넣는다.
 2. 형식 검사: `python -m eval.gradeset <sealed.jsonl> --profile sealed` 가 0이어야 한다.
-3. 누수 검사: `python -m eval.leakcheck --train <train.jsonl> --sealed <sealed.jsonl>` 가 0이어야 한다.
+3. 누수 검사(봉인 관리자가 실행): `python -m eval.leakcheck --train <train.jsonl> --sealed <sealed.jsonl>` 가 0이어야 한다.
 4. 기록: gradeset이 출력한 `sha256`과 `profile_version`을 일감(Jira)에 남긴다. 이후 파일이 바뀌면 다른 세트다.
 5. 평가: 학습이 끝난 뒤 **모델당 한 번만** `run_eval --grade-set <sealed.jsonl> --sealed`로 잰다. 결과를 보고 학습·프롬프트를 고친 뒤 다시 재면 봉인 세트가 아니다.
 6. 결과 보관: `--sealed` 실행은 `results.jsonl`에 지표·재개에 필요한 필드(과제·모델·과목·답안 유형·형식·라벨·판정·상태·속도)만 쓰고, 모델 응답 원문·피드백·오류 본문·qid는 쓰지 않으며 문항 id는 해시(`h:` + 16자)로 바꾼다. `grade_errors.csv`는 만들지 않으며 같은 폴더에 예전 것이 있으면 지우고, 진행 표시에도 id를 찍지 않는다. 그래도 `results/<run-name>/`는 **봉인 세트 관리자만 보관**하고, 팀·발표에는 `summary.md`·`summary.json`만 공유한다.

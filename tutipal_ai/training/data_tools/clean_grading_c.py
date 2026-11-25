@@ -10,7 +10,11 @@ derived/grading_c/train.jsonl 은 그대로 두고 train_clean.jsonl 을 새로 
      (빈도로 고르면 틀린 번역이 다수일 때 맞는 번역을 덮어씀 — 2026-11-23 queue 문제 LIFO/FIFO 사례).
      --overrides JSON 에 사람이 고른 번역이 있으면 그 문제의 행을 모두 그 번역으로 다시 만든다.
   3. 중복 제거: 1·2 뒤 (문제, 학생 답안)이 같은 행은 하나만 남긴다. 라벨이 서로 다르면 모두 뺀다.
+  2b. 금지 용어: 잘못 굳은 번역 용어(FORBIDDEN_TERMS)가 남은 행은 뺀다(사유 term:<용어>). 문제·모범 답안에
+     있으면 --overrides 로 고친 번역을 주면 살아남고, 고친 뒤에도 남으면 뺀다.
   4. 문제당 상한: 같은 원문 문제의 행이 --cap 개를 넘으면 답안 유형을 돌아가며 골라 줄인다.
+     꼼수 행(injection·injection_with_answer·tag_escape)은 상한에 세지도 버리지도 않는다.
+     --cap-by-source 로 출처마다 다른 상한을 줄 수 있다(없는 출처는 --cap).
 뺀 행은 dropped.csv(엑셀용 UTF-8 BOM)에 사유와 함께 남겨 사람이 다시 볼 수 있게 한다.
 
 overrides 형식 (translation_review.csv 의 group 열 값을 키로 쓴다):
@@ -18,6 +22,9 @@ overrides 형식 (translation_review.csv 의 group 열 값을 키로 쓴다):
 
 사용 (tutipal_ai/training 에서):
   python -m data_tools.clean_grading_c --dir <저장소 밖 derived/grading_c> --datasets-dir <datasets 폴더>       --eval-set eval/grading_set.jsonl [--cap 10] [--overrides overrides.json]
+  python -m data_tools.clean_grading_c --dir <derived/grading_v2> --datasets-dir <datasets 폴더> \
+      --eval-set eval/grading_set.jsonl --sources v2 --cap-by-source MohlerASAG=12 SAF-communication-networks=10 \
+      SciEntsBank=10
   python -m data_tools.clean_grading_c --self-test
 """
 
@@ -39,6 +46,7 @@ from data_tools.common import (
     exit_error,
     jsonl_text,
     load_jsonl,
+    refuse_input_as_output,
     require_args,
     require_outside_repo,
     utf8_stdout,
@@ -46,6 +54,8 @@ from data_tools.common import (
 )
 
 CHEAT = ('injection', 'injection_with_answer', 'tag_escape')
+OUTPUT_FILES = ('train_clean.jsonl', 'dropped.csv', 'translation_review.csv', 'clean_stats.json')
+KNOWN_SOURCES = ('MohlerASAG', 'SAF-communication-networks', 'SciEntsBank')
 # 정답 판정과 어긋나는 "핵심이 빠졌다"류 결론 (정답 행은 마지막 절에 이게 있으면 모순)
 NEG = ('부족', '누락', '언급하지 않', '언급이 없', '언급되지 않', '포함하지 않', '명시하지 않', '설명하지 않',
        '다루지 않', '설명하지 못', '제시하지 못', '파악하지 못', '충족하지 못', '이해하지 못', '정확하지 않',
@@ -72,6 +82,19 @@ PRAISE = ('잘하셨', '잘했', '잘 이해', '잘 설명', '잘 알고', '잘 
 PRAISE_RE = re.compile(r'잘\s?(하|찾|짚|맞|이해|설명|파악|알|정리|표현|지적|답|생각|관찰|연결|제시)')
 CONTRAST = re.compile(r'지만|으나|는데|다만|하지만|그러나|그렇지만')
 JUNK = re.compile(r'["\']\s*\}|\{\s*["\']|\b[A-Z]:\s*\d\.\d')
+# v1 검수(2026-11-25)에서 나온 잘못 굳은 번역 용어 → 원래 뜻. 이 용어가 남은 행은 학습에 넣지 않는다.
+FORBIDDEN_TERMS = {"핑거링": "piggybacking", "밀고 내보내": "push/pop", "서드 시작": "slow start"}
+TERM_FIELDS = ('question', 'model_answer', 'student_answer', 'reason', 'feedback')
+
+
+def term_hit(r: dict) -> tuple[str, str] | None:
+    """금지 용어가 처음 나온 (필드, 용어). 필드 순서는 TERM_FIELDS, 용어 순서는 FORBIDDEN_TERMS. 없으면 None."""
+    for field in TERM_FIELDS:
+        text = r.get(field) or ''
+        for term in FORBIDDEN_TERMS:
+            if term in text:
+                return field, term
+    return None
 
 
 def last_clause(text):
@@ -133,12 +156,28 @@ def group_id(r, origin):
 
 
 def rebuild(r, q, ref):
-    return B.record(r['id'], r, q, ref, r['student_answer'], r['label'], r['kind'], r['reason'], r['feedback'], r['subject'])
+    out = B.record(r['id'], r, q, ref, r['student_answer'], r['label'], r['kind'], r['reason'], r['feedback'],
+                   r['subject'])
+    if 'qid' in r:
+        out['qid'] = r['qid']  # 다시 만든 행도 영어 문제 식별자를 유지한다
+    return out
 
 
-def clean(rows, origin, cap, seed, overrides=None):
-    """(남은 행, 뺀 행[(행, 사유)], 번역 검토 목록, 덮어쓴 행 수). 입력 rows 는 바꾸지 않는다."""
+def v2_rules(rows, cap_by_source=None):
+    """v2 규칙(금지 용어 거르기, 꼼수 행을 상한에서 제외)을 켤지. qid 가 있는 행(build --v2 산출물)이거나
+    출처별 상한을 줬을 때만 켠다. v1 산출물(qid 없음)을 v1 방식으로 돌리면 HEAD 와 같은 결과가 나온다."""
+    return bool(cap_by_source) or any('qid' in r for r in rows)
+
+
+def clean(rows, origin, cap, seed, overrides=None, cap_by_source=None, v2=None):
+    """(남은 행, 뺀 행[(행, 사유)], 번역 검토 목록, 덮어쓴 행 수). 입력 rows 는 바꾸지 않는다.
+
+    cap_by_source: {출처: 문제당 상한}. 없는 출처는 cap.
+    v2: True 면 금지 용어 행을 빼고 꼼수 행을 상한에 세지 않는다. None 이면 v2_rules 로 정한다.
+    """
+    v2 = v2_rules(rows, cap_by_source) if v2 is None else v2
     overrides = overrides or {}
+    cap_by_source = cap_by_source or {}
     dropped = []
 
     # 1. 모순 제거 (중복 제거보다 먼저: 정상 행이 모순 행의 중복으로 버려지지 않게)
@@ -180,9 +219,18 @@ def clean(rows, origin, cap, seed, overrides=None):
         review.append({'group': gid, 'rows': len(g), 'question_variants': dict(qs), 'model_answer_variants': dict(refs)})
         out += g
 
+    # 2b. 금지 용어 (사람이 고친 번역을 적용한 뒤에 본다)
+    clean_rows = []
+    for r in out:
+        hit = term_hit(r) if v2 else None
+        if hit:
+            dropped.append((r, f'term:{hit[1]}'))
+        else:
+            clean_rows.append(r)
+
     # 3. 중복 제거
     seen = defaultdict(list)
-    for r in out:
+    for r in clean_rows:
         seen[(r['question'], r['student_answer'])].append(r)
     kept = []
     for dup in seen.values():
@@ -201,10 +249,13 @@ def clean(rows, origin, cap, seed, overrides=None):
     final = []
     for gid in sorted(groups):
         g = sorted(groups[gid], key=lambda r: r['id'])
-        if len(g) > cap:
-            g, extra = round_robin(g, cap, rnd)
-            dropped += [(r, f'over cap {cap}') for r in extra]
-        final += g
+        cheat = [r for r in g if r['kind'] in CHEAT] if v2 else []
+        g = [r for r in g if r['kind'] not in CHEAT] if v2 else g
+        limit = cap_by_source.get(g[0]['source'], cap) if g else cap
+        if len(g) > limit:
+            g, extra = round_robin(g, limit, rnd)
+            dropped += [(r, f'over cap {limit}') for r in extra]
+        final += g + cheat
     rnd.shuffle(final)
     return final, dropped, review, applied
 
@@ -311,9 +362,28 @@ def build_parser():
     ap.add_argument('--eval-set', help='평가 세트 grading_set.jsonl (비슷한 문제 재검사)')
     ap.add_argument('--overrides', help='사람이 고른 번역 JSON (translation_review.csv 의 group 값을 키로)')
     ap.add_argument('--cap', type=int, default=10)
+    ap.add_argument('--cap-by-source', nargs='+', metavar='SOURCE=N', default=None,
+                    help='출처별 문제당 상한(예: MohlerASAG=12). 없는 출처는 --cap')
+    ap.add_argument('--sources', choices=['v1', 'v2'], default='v1',
+                    help='원본 문제를 찾을 원천 규칙(v2: SAF validation 포함, build_grading_c --v2 결과용)')
     ap.add_argument('--seed', type=int, default=20261120)
     ap.add_argument('--self-test', action='store_true', help='내장 자체 검사만 실행')
     return ap
+
+
+def parse_cap_by_source(values: list[str] | None) -> dict[str, int] | None:
+    """['MohlerASAG=12', ...] → {'MohlerASAG': 12}. 형식이 틀리면 ValueError."""
+    if values is None:
+        return None
+    out: dict[str, int] = {}
+    for v in values:
+        key, sep, num = v.partition('=')
+        if not sep or not key.strip() or not num.strip().isdigit() or int(num) < 1:
+            raise ValueError(f'SOURCE=N(N 은 1 이상 정수) 형식이 아님: {v!r}')
+        if key.strip() in out:
+            raise ValueError(f'출처가 두 번 나옴: {key.strip()!r}')
+        out[key.strip()] = int(num)
+    return out
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -323,14 +393,20 @@ def main(argv: list[str] | None = None) -> None:
         self_test()
         return
     require_args(ap, a, '--dir', '--datasets-dir', '--eval-set')
+    try:
+        cap_by_source = parse_cap_by_source(a.cap_by_source)
+    except ValueError as e:
+        ap.error(f'--cap-by-source: {e}')
     require_outside_repo(ap, a, '--dir')  # 아무것도 읽거나 쓰기 전에 확인한다
+    refuse_input_as_output(ap, {'--overrides': [a.overrides]}, [Path(a.dir) / n for n in OUTPUT_FILES])
     utf8_stdout()
 
     d = Path(a.dir)
     rows = load_jsonl(d / 'train.jsonl')
     if not rows:
         exit_error(f"학습 데이터({d / 'train.jsonl'})에 행이 없음")
-    origin = {(x['source'], x['source_id']): x['q'] for x in B.load_sources(a.datasets_dir)}
+    load = B.load_sources_v2 if a.sources == 'v2' else B.load_sources
+    origin = {(x['source'], x['source_id']): x['q'] for x in load(a.datasets_dir)}
     missing = sum((r['source'], r['source_id']) not in origin for r in rows)
     if missing:
         sys.exit(f'원본에서 찾지 못한 행 {missing}개 — 원본 데이터가 바뀌었는지 확인')
@@ -341,7 +417,14 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(f'messages 와 필드가 어긋난 행 {len(bad)}개: {bad[:5]}')
     overrides = json.loads(Path(a.overrides).read_text(encoding='utf-8')) if a.overrides else {}
 
-    final, dropped, review, applied = clean(rows, origin, a.cap, a.seed, overrides)
+    if cap_by_source:
+        known = set(KNOWN_SOURCES) | {r['source'] for r in rows}  # 원천 3종은 이번 데이터에 없어도 허용
+        typo = sorted(set(cap_by_source) - known)
+        if typo:
+            ap.error(f'--cap-by-source: 데이터에 없는 출처 {typo} (있는 출처: {sorted(known)})')
+    # v1(기본)은 예전 호출 형태 그대로 부른다(clean 을 바꿔 끼우는 기존 호출자와 호환, v2 규칙은 qid 로 자동 판정).
+    extra = {'cap_by_source': cap_by_source, 'v2': True} if (cap_by_source or a.sources == 'v2') else {}
+    final, dropped, review, applied = clean(rows, origin, a.cap, a.seed, overrides, **extra)
     groups = {group_id(r, origin) for r in rows}
     unknown = sorted(set(overrides) - groups)
     if unknown:
@@ -378,7 +461,11 @@ def main(argv: list[str] | None = None) -> None:
              'drop_reason': Counter(why for _, why in dropped),
              'label_true': sum(r['label'] for r in final), 'kind': Counter(r['kind'] for r in final),
              'subject': Counter(r['subject'] for r in final), 'source': Counter(r['source'] for r in final),
-             'questions': len({group_id(r, origin) for r in final})}
+             'questions': len({group_id(r, origin) for r in final}),
+             'sources': a.sources, 'cap_by_source': cap_by_source,
+             'v2_rules': bool(extra) or v2_rules(rows),
+             'term_dropped': dict(sorted(Counter(why[len('term:'):] for _, why in dropped
+                                                 if why.startswith('term:')).items()))}
     # 네 파일을 모두 임시 파일에 쓴 뒤에야 바꿔 넣는다(중간 실패 시 이전 세대가 그대로 남는다)
     write_files_atomic({d / 'train_clean.jsonl': (jsonl_text(final), 'utf-8'),
                         d / 'dropped.csv': (dropped_buf.getvalue(), 'utf-8-sig'),
