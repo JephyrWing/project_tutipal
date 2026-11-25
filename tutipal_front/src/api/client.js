@@ -1,10 +1,12 @@
 /** 서버가 4xx/5xx 를 보내면 던지는 오류 (GlobalExceptionHandler 의 {status, message}). */
 export class ApiRequestError extends Error {
   status
+  retryAfterSeconds
 
   constructor(error) {
     super(error.message)
     this.status = error.status
+    this.retryAfterSeconds = error.retryAfterSeconds
   }
 }
 
@@ -94,5 +96,11 @@ export async function toApiError(res, generation = null) {
     if (typeof window !== 'undefined') window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
   }
   const body = await res.json().catch(() => null)
-  return new ApiRequestError({ status: res.status, message: body?.message ?? res.statusText })
+  const retryAfterHeader = res.status === 429 ? res.headers.get('Retry-After') : null
+  const retryAfter = /^[0-9]+$/.test(retryAfterHeader ?? '') ? Number(retryAfterHeader) : 0
+  return new ApiRequestError({
+    status: res.status,
+    message: body?.message ?? res.statusText,
+    retryAfterSeconds: Number.isSafeInteger(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
+  })
 }
