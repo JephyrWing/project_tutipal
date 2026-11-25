@@ -1,0 +1,93 @@
+name: Help access integration
+
+on:
+  pull_request:
+    branches: [develop]
+    paths: ['tutipal_front/**', 'tutipal_back/**', 'infra/postgres/**', '.github/workflows/help-access-checks.yml', '.nvmrc']
+  push:
+    branches: [develop]
+    paths: ['tutipal_front/**', 'tutipal_back/**', 'infra/postgres/**', '.github/workflows/help-access-checks.yml', '.nvmrc']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  help-access:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: tutipal_front/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Start disposable PostgreSQL and pgvector
+        shell: bash
+        run: |
+          set -euo pipefail
+          password=$(openssl rand -hex 24)
+          echo "::add-mask::$password"
+          echo "E2E_DB_PASSWORD=$password" >> "$GITHUB_ENV"
+          echo "E2E_DB_URL=jdbc:postgresql://127.0.0.1:25432/tutipal_e2e" >> "$GITHUB_ENV"
+          docker build -f infra/postgres/Dockerfile -t tutipal-help-access-postgres .
+          docker run --detach --rm --name "tutipal-help-access-${GITHUB_RUN_ID}" \
+            -p 127.0.0.1:25432:5432 \
+            -e POSTGRES_DB=tutipal_e2e -e POSTGRES_USER=tutipal_e2e \
+            -e POSTGRES_PASSWORD="$password" tutipal-help-access-postgres
+          ready=false
+          for attempt in $(seq 1 30); do
+            if docker exec "tutipal-help-access-${GITHUB_RUN_ID}" pg_isready -h 127.0.0.1 -U tutipal_e2e -d tutipal_e2e; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = true
+      - name: Build real Spring application
+        working-directory: tutipal_back
+        run: |
+          chmod +x gradlew
+          ./gradlew bootJar --no-daemon
+      - name: Install locked dependencies
+        working-directory: tutipal_front
+        run: npm ci --ignore-scripts
+      - name: Check help connection revocation through real Spring
+        working-directory: tutipal_front
+        run: npm run test:help-access
+      - name: Publish actual test counts
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os, sys, xml.etree.ElementTree as ET
+          path = 'tutipal_front/test-results/help-access.xml'
+          if not os.path.exists(path):
+              sys.exit('Help access test report is missing; no successful test execution can be claimed')
+          root = ET.parse(path).getroot()
+          cases = root.findall('.//testcase')
+          skipped = sum(c.find('skipped') is not None for c in cases)
+          failed = sum(c.find('failure') is not None or c.find('error') is not None for c in cases)
+          ran = len(cases) - skipped
+          summary = f'Help access: collected={len(cases)} ran={ran} failed={failed} skipped={skipped}'
+          print(summary)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as output:
+              output.write('### ' + summary + '\n')
+          if ran == 0 or failed:
+              sys.exit(1)
+          PY
+      - name: Upload synthetic test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: help-access-report
+          path: tutipal_front/test-results/help-access.xml
+          retention-days: 7
+      - name: Stop this run's disposable database
+        if: always()
+        shell: bash
+        run: docker stop "tutipal-help-access-${GITHUB_RUN_ID}" || true

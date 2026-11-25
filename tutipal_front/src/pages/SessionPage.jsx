@@ -9,7 +9,7 @@ import { ChatPanel } from './ChatPage'
 import SubjectPicker from '../components/SubjectPicker'
 import { BoardPanel, MaterialsPanel, NoticesPanel } from './BoardPanels'
 import { StudentHelp, StudentLiveTab, TeacherHelpTab, TeacherShareTab } from './LivePanels'
-import { notices } from '../api/board'
+import { materials, notices } from '../api/board'
 import { StudentQuizModal, TeacherQuizTab } from './QuizPanels'
 
 /** 세션 화면: 내 역할에 따라 학생 홈(목업 13) 또는 선생님 모드(목업 20 · 21) */
@@ -74,7 +74,7 @@ function SessionHead({ session, badge, live, actions }) {
 function StudentView({ session, reload }) {
   const [tab, setTab] = useState('chat')
   const [keys, setKeys] = useState({ notice: 0, board: 0, materials: 0 })
-  const [toast, setToast] = useState('')
+  const [toast, setToast] = useState(null)
   const bump = (k) => setKeys((v) => ({ ...v, [k]: v[k] + 1 }))
   const [quiz, setQuiz] = useState(null)
   const [dismissed, setDismissed] = useState([])
@@ -101,14 +101,22 @@ function StudentView({ session, reload }) {
       setDismissed((d) => d.filter((x) => x !== e.id))
       refreshQuiz(e.id)
     } else if ((e.type === 'quizResult' || e.type === 'quizClosed') && quiz?.id === e.id) refreshQuiz(e.id)
-    else if (e.type === 'helpAccepted' || e.type === 'helpDeclined' || e.type === 'helpEnded') setHelpKey((k) => k + 1)
+    else if (e.type === 'helpAccepted' || e.type === 'helpDeclined' || e.type === 'helpEnded' || e.type === 'helpChat') setHelpKey((k) => k + 1)
     else if (e.type === 'notice') {
       bump('notice')
-      // 목업 31 알림: 새 공지 제목을 잠깐 띄움
-      notices.list(session.id).then((l) => l[0] && setToast(l[0].title), () => undefined)
+      notices.list(session.id).then((list) => {
+        const notice = list.find((n) => n.id === e.id)
+        if (notice) setToast({ tab: 'notice', title: notice.title })
+      }, () => undefined)
     } else if (e.type === 'notices') bump('notice')
     else if (e.type === 'posts') bump('board')
-    else if (e.type === 'materials') bump('materials')
+    else if (e.type === 'materialAlert') {
+      bump('materials')
+      materials.list(session.id).then((list) => {
+        const material = list.find((m) => m.id === e.id)
+        if (material) setToast({ tab: 'materials', title: material.filename })
+      }, () => undefined)
+    } else if (e.type === 'materials') bump('materials')
     else if (e.type === 'reconnect') {
       reload()
       loadOpen()
@@ -157,16 +165,16 @@ function StudentView({ session, reload }) {
       {tab === 'materials' && <MaterialsPanel sessionId={session.id} teacher={false} reloadKey={keys.materials} />}
       {toast && (
         <div className="toast" role="status">
-          <span>📢 새 공지: <b>{toast}</b></span>
-          <button className="btn btn-sm" onClick={() => { setTab('notice'); setToast('') }}>보기</button>
-          <button className="btn-link small" onClick={() => setToast('')} aria-label="닫기">✕</button>
+          <span>📢 {toast.tab === 'notice' ? '새 공지' : '새 자료'}: <b>{toast.title}</b></span>
+          <button className="btn btn-sm" onClick={() => { setTab(toast.tab); setToast(null) }}>보기</button>
+          <button className="btn-link small" onClick={() => setToast(null)} aria-label="닫기">✕</button>
         </div>
       )}
     </div>
   )
 }
 
-/** 목업 20 선생님 모드: 참가자 · 주제 설정(목업 21) · 챗봇 미리보기 · 세션 종료 */
+/** 목업 20 선생님 모드: 참가자 · 주제 설정(목업 21) · 출제와 답안 관리 · 세션 종료 */
 function TeacherView({ session, onChange, reload }) {
   const [tab, setTab] = useState('people')
   const [boardKeys, setBoardKeys] = useState({ notice: 0, board: 0, materials: 0 })
@@ -180,11 +188,12 @@ function TeacherView({ session, onChange, reload }) {
     if (e.type === 'quizStats' || e.type === 'quiz' || e.type === 'quizClosed') setQuizKey((k) => k + 1)
     if (e.type === 'notice' || e.type === 'notices') setBoardKeys((v) => ({ ...v, notice: v.notice + 1 }))
     if (e.type === 'posts') setBoardKeys((v) => ({ ...v, board: v.board + 1 }))
-    if (e.type === 'materials') setBoardKeys((v) => ({ ...v, materials: v.materials + 1 }))
+    if (e.type === 'materials' || e.type === 'materialAlert') setBoardKeys((v) => ({ ...v, materials: v.materials + 1 }))
     if (e.type === 'help') {
       setHelpKey((k) => k + 1)
       setNewHelp(true)
     }
+    if (e.type === 'helpChat') setHelpKey((k) => k + 1)
     if (e.type === 'reconnect') {
       setHelpKey((k) => k + 1)
       reload()
@@ -205,7 +214,6 @@ function TeacherView({ session, onChange, reload }) {
         </button>
         <button role="tab" aria-selected={tab === 'materials'} onClick={() => setTab('materials')}>자료 · 공지</button>
         <button role="tab" aria-selected={tab === 'board'} onClick={() => setTab('board')}>게시판</button>
-        <button role="tab" aria-selected={tab === 'chat'} onClick={() => setTab('chat')}>챗봇 미리보기</button>
         <EndButton session={session} onChange={onChange} />
       </nav>
       {tab === 'people' && <Participants sessionId={session.id} reloadKey={peopleKey} />}
@@ -220,7 +228,6 @@ function TeacherView({ session, onChange, reload }) {
       )}
       {tab === 'board' && <BoardPanel sessionId={session.id} teacher reloadKey={boardKeys.board} />}
       {tab === 'settings' && <Settings session={session} onChange={onChange} />}
-      {tab === 'chat' && <ChatPanel topic={session.topic} sessionId={session.id} />}
     </div>
   )
 }

@@ -4,10 +4,14 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Objects;
+import java.util.function.Supplier;
 
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * 복습 기록 저장소. 임베딩(pgvector) 비교가 필요해서 JPA 대신 JDBC.
@@ -26,17 +30,23 @@ public class ReviewStore {
             rs.getTimestamp(7) == null ? null : rs.getTimestamp(7).toInstant());
 
     private final JdbcTemplate jdbc;
+    private final TransactionTemplate mutations;
 
     public ReviewStore(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
+        this.mutations = new TransactionTemplate(new DataSourceTransactionManager(Objects.requireNonNull(jdbc.getDataSource())));
     }
 
-    public boolean consent(Long userId) {
-        return Boolean.TRUE.equals(jdbc.queryForObject("SELECT review_consent FROM users WHERE id = ?", Boolean.class, userId));
+    public long generation(Long userId) {
+        return jdbc.queryForObject("SELECT review_generation FROM users WHERE id = ?", Long.class, userId);
     }
 
-    public void setConsent(Long userId, boolean on) {
-        jdbc.update("UPDATE users SET review_consent = ? WHERE id = ?", on, userId);
+    /** Embed outside the lock; serialize only the short DB mutation with deletions. */
+    public <T> T recordIfCurrent(Long userId, long generation, Supplier<T> record, T stale) {
+        return mutations.execute(status -> {
+            long current = jdbc.queryForObject("SELECT review_generation FROM users WHERE id = ? FOR UPDATE", Long.class, userId);
+            return current == generation ? record.get() : stale;
+        });
     }
 
     /** since 이후에 본 묶음 중 가장 비슷한 것 (유사도 minSimilarity 이상) */
@@ -79,8 +89,12 @@ public class ReviewStore {
         return jdbc.queryForObject("SELECT " + COLS + " FROM review_items WHERE id = ?", MAPPER, id);
     }
 
-    public void markSuggested(Long id, Instant now) {
-        jdbc.update("UPDATE review_items SET suggested_at = ? WHERE id = ?", Timestamp.from(now), id);
+    /** 제안 자리를 먼저 얻은 요청만 성공. 삭제·집계 초기화·동시 요청 후의 오래된 조회 결과는 거절한다. */
+    public boolean markSuggestedIfDue(Long id, Instant now, Instant cutoff, int minCount, int minSeconds) {
+        return jdbc.update("UPDATE review_items SET suggested_at = ? WHERE id = ? "
+                        + "AND (suggested_at IS NULL OR suggested_at <= ?) "
+                        + "AND (seen_count >= ? OR seen_seconds >= ?)",
+                Timestamp.from(now), id, Timestamp.from(cutoff), minCount, minSeconds) == 1;
     }
 
     public List<Item> list(Long userId) {
@@ -88,15 +102,30 @@ public class ReviewStore {
                 MAPPER, userId);
     }
 
+    public long count(Long userId) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM review_items WHERE user_id = ?", Long.class, userId);
+    }
+
+    public List<Item> history(Long userId, int size, long offset) {
+        return jdbc.query("SELECT " + COLS + " FROM review_items WHERE user_id = ? "
+                        + "ORDER BY last_seen DESC, id DESC LIMIT ? OFFSET ?", MAPPER, userId, size, offset);
+    }
+
     public Optional<Item> find(Long userId, Long id) {
         return jdbc.query("SELECT " + COLS + " FROM review_items WHERE user_id = ? AND id = ?", MAPPER, userId, id).stream().findFirst();
     }
 
     public int deleteAll(Long userId) {
-        return jdbc.update("DELETE FROM review_items WHERE user_id = ?", userId);
+        return mutations.execute(status -> {
+            jdbc.update("UPDATE users SET review_generation = review_generation + 1 WHERE id = ?", userId);
+            return jdbc.update("DELETE FROM review_items WHERE user_id = ?", userId);
+        });
     }
 
     public int delete(Long userId, Long id) {
-        return jdbc.update("DELETE FROM review_items WHERE user_id = ? AND id = ?", userId, id);
+        return mutations.execute(status -> {
+            jdbc.update("UPDATE users SET review_generation = review_generation + 1 WHERE id = ?", userId);
+            return jdbc.update("DELETE FROM review_items WHERE user_id = ? AND id = ?", userId, id);
+        });
     }
 }

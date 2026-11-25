@@ -14,8 +14,28 @@ contextBridge.exposeInMainWorld('desktop', {
   getScreenSettings: () => ipcRenderer.invoke('screen-settings-get'),
   setScreenSettings: (s) => ipcRenderer.invoke('screen-settings-set', s),
   captureScreen: () => ipcRenderer.invoke('screen-capture'),
+  getReviewDeletionState: () => ipcRenderer.invoke('review-deletion-state'),
+  beginReviewDeletion: () => ipcRenderer.invoke('review-deletion-start'),
+  endReviewDeletion: () => ipcRenderer.invoke('review-deletion-end'),
+  onReviewDeletionChanged: cb => {
+    const listener = (_event, deleting, ticket) => {
+      if (typeof deleting !== 'boolean') return
+      cb(deleting)
+      if (Number.isSafeInteger(ticket)) ipcRenderer.send('review-deletion-ready', ticket)
+    }
+    ipcRenderer.on('review-deletion-changed', listener)
+    return () => ipcRenderer.removeListener('review-deletion-changed', listener)
+  },
   // 4단계 화면공유: 다음 getDisplayMedia 에서 공유할 창 (빈 값 = 주 모니터), 학생 PC 그림 오버레이(목업 19)
   setShareSource: (id) => ipcRenderer.send('share-source', id),
+  helpShareSources: () => ipcRenderer.invoke('help-share-sources'),
+  prepareHelpShare: id => ipcRenderer.invoke('help-share-prepare', id),
+  setHelpShareVideoSize: (id, width, height) => ipcRenderer.send('help-share-size', id, width, height),
+  onHelpShareEnded: cb => {
+    const listener = (_event, reason) => { if (typeof reason === 'string') cb(reason) }
+    ipcRenderer.on('help-share-ended', listener)
+    return () => ipcRenderer.removeListener('help-share-ended', listener)
+  },
   showOverlay: (on) => ipcRenderer.send('overlay-show', on === true),
   sendOverlayDraw: (message) => ipcRenderer.send('overlay-draw', message),
   onOverlayDraw: (cb) => {

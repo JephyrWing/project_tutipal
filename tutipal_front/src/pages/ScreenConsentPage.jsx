@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
 
-/** 목업 04 화면 분석 동의: 고른 창만 · 이미지는 저장 안 함 · 언제든 끄기 (앱에서만) */
+/** 목업 04 화면 분석의 창 선택과 시작 (데스크톱 앱 전용) */
 export default function ScreenConsentPage() {
   const navigate = useNavigate()
   const desktop = window.desktop
@@ -52,12 +51,8 @@ export default function ScreenConsentPage() {
     <div className="center-page">
       <div className="card modal consent">
         <Mascot mood="happy" size={72} float />
-        <h1>화면 분석을 켤까요?</h1>
-        <ul className="consent-points">
-          <li><Icon name="window" /> 고른 창만 봐요</li>
-          <li><Icon name="shield" /> 이미지는 저장하지 않아요 (요약만 잠깐 보여 줘요)</li>
-          <li><Icon name="pause" /> 언제든 끌 수 있어요 (캐릭터의 일시정지 · 여기서 끄기)</li>
-        </ul>
+        <h1>분석할 창 선택</h1>
+        <p className="muted">고른 창만 분석하며 화면 이미지는 저장하지 않아요.</p>
         {settings?.enabled && <p className="badge badge-live consent-now"><span className="dot" /> 지금 보는 창: {settings.sourceName}</p>}
         <div className="row-between">
           <strong>볼 창 고르기</strong>
@@ -79,7 +74,7 @@ export default function ScreenConsentPage() {
             ? <button className="btn" onClick={() => void turnOff()}>화면 분석 끄기</button>
             : <button className="btn" onClick={() => navigate(-1)}>나중에</button>}
           <button className="btn btn-primary" disabled={!sources?.some((s) => s.id === picked)} onClick={() => void turnOn()}>
-            {settings?.enabled ? '이 창으로 바꾸기' : '켜기'}
+            {settings?.enabled ? '이 창으로 바꾸기' : '분석 시작'}
           </button>
         </div>
       </div>

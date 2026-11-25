@@ -6,6 +6,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Profile;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -16,11 +17,13 @@ import com.my.tutipal_back.users.entity.User;
 import com.my.tutipal_back.users.service.UserService;
 
 /**
- * 소셜 로그인 키 없이 로컬에서 테스트하기 위한 로그인. app.dev-login=true 일 때만 존재한다.
+ * 소셜 로그인 키 없이 로컬에서 테스트하기 위한 로그인. local 프로필(prod 제외) + app.dev-login=true 일 때만 존재한다
+ * (DevLogin.enabled 와 같은 조건, 그 밖에서 app.dev-login=true 면 DevLoginGuard 가 시작을 막는다).
  * 운영(공개 서버)에서는 절대 켜지 말 것 — 누구나 테스트 계정으로 들어올 수 있다.
  */
 @RestController
 @ConditionalOnProperty(name = "app.dev-login", havingValue = "true")
+@Profile("local & !prod")
 public class DevLoginController {
 
     private final UserService userService;
@@ -37,8 +40,8 @@ public class DevLoginController {
                                      HttpServletRequest request, HttpServletResponse response) {
         int k = Math.clamp(n, 1, 9);
         User user = userService.upsert(k == 1
-                ? new SocialProfile("dev", "dev-1", "dev@example.com", "개발 사용자")
-                : new SocialProfile("dev", "dev-" + k, "dev" + k + "@example.com", "개발 사용자 " + k));
+                ? new SocialProfile("dev", "dev-1", "개발 사용자")
+                : new SocialProfile("dev", "dev-" + k, "개발 사용자 " + k));
         sessionLogin.login(user, request, response);
         return Map.of("name", user.getName());
     }

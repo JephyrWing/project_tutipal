@@ -53,6 +53,12 @@ export default function HomePage() {
         ))}
       </section>
 
+      <Link to="/stats" className="card review-strip">
+        <span className="review-icon"><Icon name="chart" size={30} /></span>
+        <strong>내 제출 기록</strong>
+        <span className="muted">진행 중인 참여 수업의 내 답안과 판정을 모아 봐요</span>
+      </Link>
+
       <section className="room-lists">
         <RoomList
           title="내가 방장인 방"

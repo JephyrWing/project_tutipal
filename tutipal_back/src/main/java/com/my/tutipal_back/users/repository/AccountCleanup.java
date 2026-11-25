@@ -27,7 +27,7 @@ public class AccountCleanup {
             "DELETE FROM notices WHERE author_id = :u OR session_id IN " + OWNED,
             "DELETE FROM quiz_answers WHERE user_id = :u OR quiz_id IN (SELECT id FROM quizzes WHERE session_id IN " + OWNED + ")",
             "DELETE FROM quizzes WHERE session_id IN " + OWNED,
-            "DELETE FROM help_requests WHERE user_id = :u OR session_id IN " + OWNED,
+            "DELETE FROM help_requests WHERE user_id = :u OR accepted_by_user_id = :u OR session_id IN " + OWNED,
             "DELETE FROM materials WHERE uploader_id = :u OR session_id IN " + OWNED,   // 청크는 ON DELETE CASCADE
             "DELETE FROM session_participants WHERE user_id = :u OR session_id IN " + OWNED,
             "DELETE FROM study_sessions WHERE owner_id = :u",
@@ -55,5 +55,12 @@ public class AccountCleanup {
         for (String sql : DELETES) {
             jdbc.sql(sql).param("u", userId).update();
         }
+    }
+
+    /** Same session-first order as chat and help state changes; transcript deletion is atomic. */
+    public void lockHelpSessions(Long userId) {
+        jdbc.sql("SELECT id FROM study_sessions WHERE owner_id = :u OR id IN "
+                + "(SELECT session_id FROM session_participants WHERE user_id = :u) ORDER BY id FOR UPDATE")
+                .param("u", userId).query(Long.class).list();
     }
 }

@@ -41,6 +41,7 @@ public class WithdrawalService {
     @Transactional
     public void withdraw(Long userId) {
         if (!users.existsById(userId)) throw new ApiException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다");
+        cleanup.lockHelpSessions(userId);
         // 내가 연 세션의 참가자 화면이 세션 종료로 처리되게 (커밋 뒤 전송)
         for (Long sessionId : cleanup.openOwnedSessionIds(userId)) {
             events.toSession(sessionId, "ended", sessionId);

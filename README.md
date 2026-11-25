@@ -1,12 +1,12 @@
 # TUTIPAL
 
-팀 작업은 [AGENTS.md](AGENTS.md)와 [Jira 협업 시작 안내](https://gad03302.atlassian.net/wiki/spaces/PT/pages/589825)를 먼저 읽고 진행한다. 업무·명세·결정·검증 이력은 Jira, 코드와 PR은 GitHub, 파일 산출물은 [Drive](https://drive.google.com/drive/folders/1r7AnAbWxKyroED1DeWxHz5c5dG0fDdn2)에서 관리한다. 이해 확인 정책도 Jira 하네스의 최신 본문을 따른다. 현재 운영 기준은 jira_drive-v3이며 작성자는 체크/PM 확인 대기로 제출하고 최종 확인·완료 전이는 PM이 직접 수행한다. 계정은 Jira의 실제 accountId와 확인된 한국어·영문 별칭을 대조한다.
+팀 작업은 [AGENTS.md](AGENTS.md)를 확인한 뒤 [Jira 협업 시작 안내](https://gad03302.atlassian.net/wiki/spaces/PT/pages/589825)와 [운영 규칙](https://gad03302.atlassian.net/wiki/spaces/PT/pages/425986)의 현재 본문을 먼저 읽고 진행한다. [HARNESS-READ-20261124-v1](https://gad03302.atlassian.net/browse/PT-1?focusedCommentId=10318)에 따라 새 작업·새 세션·중단/인계/PM 보완 후 재개 시 관련 원문과 작업의 최근 댓글·연결 이슈·활성 예약을 직접 조회하고 같은 작업의 Jira 댓글에 근거를 남긴 뒤 편집한다. 업무·명세·결정·검증 이력은 Jira, 코드와 PR은 GitHub, 파일 산출물은 [Drive](https://drive.google.com/drive/folders/1r7AnAbWxKyroED1DeWxHz5c5dG0fDdn2)에서 관리한다. 이해 확인 정책도 Jira 하네스의 최신 본문을 따른다. 현재 운영 기준은 jira_drive-v3이며 작성자는 체크/PM 확인 대기로 제출하고 최종 확인·완료 전이는 PM이 직접 수행한다. 계정은 Jira의 실제 accountId와 확인된 한국어·영문 별칭을 대조한다.
 
 WBS-SYNC-20261118-v1에 따라 WBS의 담당·계획일·범위·선행 변경은 같은 작업에서 Jira 보드의 실제 담당자·지원 날짜 필드·연결 업무에 반영하고 재조회한다. 공동 담당은 역할별 하위 작업으로 나누며 실제 진행·검사·PM 완료는 Jira 증거로 구분한다.
 
-기본·팀 통합 브랜치는 `develop`이다. 작업 브랜치는 최신 `develop`에서 만들고, 모든 팀원 PR과 병합 대상은 `develop`으로 지정한다. 병합 후 역할이 끝난 작업 브랜치는 정리한다. 삭제 전 PR·현재 head·추가 커밋·진행 중 사용과 복구 SHA를 확인하고, 삭제 후 원격 목록을 재조회한다. `main`·`develop`과 진행·미병합 작업은 보존하며 세부 기준은 Jira의 GIT-CLEANUP-20261118-v1을 따른다.
+기본·팀 통합 브랜치는 `develop`이다. 작성자는 작업을 구현·검사한 뒤 `develop` 대상 PR을 열고 저장소 보호와 필수 검사 조건을 충족한 자기 PR을 직접 병합한다. 실제 merge SHA를 Jira에 남기고 역할이 끝난 작업 브랜치를 정리한 뒤 체크와 PM 확인 대기로 제출한다. 삭제 전 PR·현재 head·추가 커밋·진행 중 사용과 복구 SHA를 확인하고 삭제 후 원격 목록을 재조회한다. `main`·`develop`과 진행·미병합 작업은 보존한다. 세부 기준은 [GIT-CLEANUP-20261124-v2 / PT-79](https://gad03302.atlassian.net/browse/PT-79)를 따른다.
 
-DOC-CENTRAL-20261118-v1 / PT-80에 따라 팀원은 코드·필수 원본문서·검사를 Git에 반영하고 직접 만든 산출물을 지정 Drive에 같은 파일 ID로 게시한 뒤 Jira에 증거를 남겨 체크/PM 확인 대기로 제출한다. 중앙 반영이 필요한 경우에만 `docs-sync-pending`으로 인계하며 무변경·파생 영향이 없는 작업에는 대기 라벨을 의무로 남기지 않는다. 전체 Drive 검색·영향 검토·기존 산출물 파생 갱신은 Aileron(최진우 PM의 보조 AI)이 사용자 요청 시 중앙 처리한다. 중앙 반영 대기로 팀원의 활성 편집을 유지하지 않으며 원작업 완료와 문서 반영 상태는 PM이 각각 판단한다. 산출물 게시 자체가 해당 업무의 인수 기준이면 그 조건을 유지한다. 세부 인계 항목·파일 링크는 Jira 하네스를 따른다.
+[PM-HANDOVER-20261125-v1 / PT-111](https://gad03302.atlassian.net/browse/PT-111)와 [PT-80](https://gad03302.atlassian.net/browse/PT-80)에 따라 팀원은 코드·필수 원본문서·검사를 Git에 반영해 해당 PR의 통합을 확인하고 직접 만든 산출물을 지정 Drive에 같은 파일 ID로 게시한다. 실제 Git 통합 및 게시 증거를 Jira에 남겨 체크와 PM 확인 대기로 제출한다. 중앙 반영이 필요한 경우에만 `docs-sync-pending`으로 인계하며 무변경·파생 영향이 없는 작업에는 대기 라벨을 의무로 남기지 않는다. 기존 Drive 산출물의 영향 검토와 파생 갱신은 전설민 PM이 맡는다. PM은 직접 반영하거나 본인 권한으로 자신의 LLM에 반영을 지시할 수 있다. Jira 최종 확인·승인과 완료 전이는 전설민 PM이 본인 계정으로 직접 수행한다. 중앙 반영 대기로 팀원의 활성 편집을 유지하지 않으며 원작업 완료와 문서 반영 상태는 PM이 각각 판단한다. 산출물 게시 자체가 해당 업무의 인수 기준이면 그 조건을 유지한다. 세부 인계 항목·파일 링크는 Jira 하네스를 따른다.
 
 프로젝트는 워터폴과 애자일을 함께 적용한다. 단계별 산출물·검토 상태를 관리하면서 Jira의 작은 작업을 반복 구현·검증한다. 구체적인 방법론과 산출물 적용 기준은 [Jira 운영 규칙](https://gad03302.atlassian.net/wiki/spaces/PT/pages/425986)을 따른다.
 
@@ -53,6 +53,7 @@ AI는 `MODEL_PROVIDER=auto`에서 설치된 Ollama 모델을 우선하고, 해�
 ## 안내
 
 - [설계 원본](docs/TUTIPAL_DESIGN.md)
+- [수업 학생·개인 학습 Agent와 AI 워크플로 계약](docs/AI_WORKFLOW_CONTRACT.md)
 - [설치·개발·검증 결과](docs/DEVELOPMENT.md)
 - [PL 기능 이식 범위](docs/PORTING.md)
 - [외부 배포 준비](docs/DEPLOYMENT.md)

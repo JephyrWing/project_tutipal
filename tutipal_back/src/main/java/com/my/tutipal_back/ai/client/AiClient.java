@@ -16,6 +16,10 @@ import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.client.ResourceAccessException;
+
+import com.my.tutipal_back.common.support.TransientConnectionFailure;
 
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
@@ -66,21 +70,13 @@ public class AiClient {
      * onDelta 가 던진 예외(예: 화면이 연결을 끊음)는 그대로 올라간다.
      */
     public void chatStream(String system, List<Message> messages, Consumer<String> onDelta) {
-        try {
-            exchangeChat(system, messages, false, onDelta);
-        } catch (RestClientException | JacksonException e) {
-            throw new AiUnavailableException();
-        }
+        exchangeChat(system, messages, false, onDelta);
     }
 
     /** 답변 전체를 한 번에 (채점 · 문제 만들기). jsonMode 면 모델이 JSON 하나만 낸다. */
     public String complete(String system, List<Message> messages, boolean jsonMode) {
         StringBuilder sb = new StringBuilder();
-        try {
-            exchangeChat(system, messages, jsonMode, sb::append);
-        } catch (RestClientException | JacksonException e) {
-            throw new AiUnavailableException();
-        }
+        exchangeChat(system, messages, jsonMode, sb::append);
         return sb.toString();
     }
 
@@ -121,36 +117,57 @@ public class AiClient {
                 for(float v:vector)if(!Float.isFinite(v))throw new AiUnavailableException();
             }
             return res;
+        } catch (ResourceAccessException e) {
+            throw new AiUnavailableException(TransientConnectionFailure.confirmed(e));
+        } catch (RestClientResponseException e) {
+            var headers = e.getResponseHeaders();
+            // FastAPI가 확인된 장애에 붙인 내부 표지만 신뢰한다.
+            throw new AiUnavailableException(e.getStatusCode().value() == 503 && headers != null
+                    && "transient".equals(headers.getFirst("X-Embedding-Failure")));
         } catch (RestClientException e) {
             throw new AiUnavailableException();
         }
     }
 
+    /**
+     * AI 서버 쪽 실패는 전부 AiUnavailableException 으로 바꾼다. 첫 답변 조각을 받은 뒤의 실패면
+     * {@link AiUnavailableException#afterOutput()} (모델이 이미 일함 → PT-97 한도에서 환불하지 않음).
+     */
     private void exchangeChat(String system, List<Message> messages, boolean jsonMode, Consumer<String> onDelta) {
-        rest.post().uri("/v1/chat")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of("system", system, "messages", messages, "json_mode", jsonMode))
-                .exchange((request, response) -> {
-                    if (!response.getStatusCode().is2xxSuccessful()) {
-                        throw new AiUnavailableException();
-                    }
-                    try (BufferedReader reader = new BufferedReader(
-                            new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))) {
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            if (line.isBlank()) {
-                                continue;
-                            }
-                            Chunk chunk = json.readValue(line, Chunk.class);
-                            if (chunk.error() != null) {
-                                throw new AiUnavailableException();
-                            }
-                            if (chunk.delta() != null) {
-                                onDelta.accept(chunk.delta());
+        boolean[] emitted = {false};
+        try {
+            rest.post().uri("/v1/chat")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("system", system, "messages", messages, "json_mode", jsonMode))
+                    .exchange((request, response) -> {
+                        if (!response.getStatusCode().is2xxSuccessful()) {
+                            throw new AiUnavailableException();
+                        }
+                        try (BufferedReader reader = new BufferedReader(
+                                new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                if (line.isBlank()) {
+                                    continue;
+                                }
+                                Chunk chunk = json.readValue(line, Chunk.class);
+                                if (chunk.error() != null) {
+                                    throw unavailable(emitted[0]);
+                                }
+                                if (chunk.delta() != null) {
+                                    emitted[0] = true;
+                                    onDelta.accept(chunk.delta());
+                                }
                             }
                         }
-                    }
-                    return null;
-                });
+                        return null;
+                    });
+        } catch (RestClientException | JacksonException e) {
+            throw unavailable(emitted[0]);
+        }
+    }
+
+    private static AiUnavailableException unavailable(boolean afterOutput) {
+        return afterOutput ? AiUnavailableException.afterOutput() : new AiUnavailableException();
     }
 }

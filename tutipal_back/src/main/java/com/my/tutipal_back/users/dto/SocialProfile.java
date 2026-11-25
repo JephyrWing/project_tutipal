@@ -2,8 +2,11 @@ package com.my.tutipal_back.users.dto;
 
 import java.util.Map;
 
-/** 소셜 로그인 응답(제공자마다 모양이 다름) → 공통 형태. */
-public record SocialProfile(String provider, String providerId, String email, String name) {
+/**
+ * 소셜 로그인 응답(제공자마다 모양이 다름) → 공통 형태.
+ * 이메일은 받지 않는다(PT-14): 응답에 있어도 읽지 않는다.
+ */
+public record SocialProfile(String provider, String providerId, String name) {
 
     /** users.name 컬럼 길이 */
     static final int NAME_MAX = 50;
@@ -17,17 +20,15 @@ public record SocialProfile(String provider, String providerId, String email, St
     @SuppressWarnings("unchecked")
     public static SocialProfile of(String provider, Map<String, Object> attrs) {
         return switch (provider) {
-            case "google" -> new SocialProfile(provider,
-                    str(attrs.get("sub")), str(attrs.get("email")), str(attrs.get("name")));
+            case "google" -> new SocialProfile(provider, str(attrs.get("sub")), str(attrs.get("name")));
             case "naver" -> {
                 var r = (Map<String, Object>) attrs.getOrDefault("response", Map.of());
-                yield new SocialProfile(provider, str(r.get("id")), str(r.get("email")), str(r.get("name")));
+                yield new SocialProfile(provider, str(r.get("id")), str(r.get("name")));
             }
             case "kakao" -> {
                 var account = (Map<String, Object>) attrs.getOrDefault("kakao_account", Map.of());
                 var profile = (Map<String, Object>) account.getOrDefault("profile", Map.of());
-                yield new SocialProfile(provider,
-                        str(attrs.get("id")), str(account.get("email")), str(profile.get("nickname")));
+                yield new SocialProfile(provider, str(attrs.get("id")), str(profile.get("nickname")));
             }
             default -> throw new IllegalArgumentException("지원하지 않는 로그인: " + provider);
         };

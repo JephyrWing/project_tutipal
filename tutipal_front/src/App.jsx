@@ -1,4 +1,5 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import LearningResultsPage from './pages/LearningResultsPage'
 import { AuthProvider, RequireAuth } from './auth'
 import AppShell from './components/AppShell'
 import AppLoginDonePage from './pages/AppLoginDonePage'
@@ -33,6 +34,7 @@ export default function App() {
               <Route path="screen-consent" element={<ScreenConsentPage />} />
               <Route path="review" element={<ReviewPage />} />
               <Route path="settings" element={<SettingsPage />} />
+              <Route path="stats" element={<LearningResultsPage />} />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

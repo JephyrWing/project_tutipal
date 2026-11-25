@@ -21,6 +21,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import com.my.tutipal_back.materials.entity.Material;
 import com.my.tutipal_back.materials.repository.MaterialRepository.MaterialRow;
+import com.my.tutipal_back.materials.repository.MaterialRepository.ReusableMaterial;
 import com.my.tutipal_back.materials.service.MaterialService;
 
 @RestController
@@ -36,8 +37,21 @@ public class MaterialController {
     @PostMapping(value = "/sessions/{sessionId}/materials", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
     public MaterialRow upload(@AuthenticationPrincipal OAuth2User me, @PathVariable Long sessionId,
-                              @RequestParam("file") MultipartFile file) {
-        return service.upload(userId(me), sessionId, file);
+                              @RequestParam("file") MultipartFile file,
+                              @RequestParam(defaultValue = "false") boolean alert) {
+        return service.upload(userId(me), sessionId, file, alert);
+    }
+
+    @GetMapping("/sessions/{sessionId}/materials/reusable")
+    public List<ReusableMaterial> reusable(@AuthenticationPrincipal OAuth2User me, @PathVariable Long sessionId) {
+        return service.reusable(userId(me), sessionId);
+    }
+
+    @PostMapping("/sessions/{sessionId}/materials/reuse/{sourceId}")
+    @ResponseStatus(HttpStatus.CREATED)
+    public MaterialRow reuse(@AuthenticationPrincipal OAuth2User me, @PathVariable Long sessionId,
+                             @PathVariable Long sourceId, @RequestParam(defaultValue = "false") boolean alert) {
+        return service.reuse(userId(me), sessionId, sourceId, alert);
     }
 
     @GetMapping("/sessions/{sessionId}/materials")
@@ -62,6 +76,12 @@ public class MaterialController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@AuthenticationPrincipal OAuth2User me, @PathVariable Long id) {
         service.delete(userId(me), id);
+    }
+
+    @PostMapping("/materials/{id}/index")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public MaterialRow requestIndex(@AuthenticationPrincipal OAuth2User me, @PathVariable Long id) {
+        return service.requestIndex(userId(me), id);
     }
 
     private static Long userId(OAuth2User me) {

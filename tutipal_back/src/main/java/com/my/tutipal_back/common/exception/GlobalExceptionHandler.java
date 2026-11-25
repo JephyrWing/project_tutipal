@@ -3,9 +3,13 @@ package com.my.tutipal_back.common.exception;
 import java.util.Map;
 
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ProblemDetail;
 
 import com.my.tutipal_back.ai.client.AiUnavailableException;
+import com.my.tutipal_back.ai.quota.AiQuotaExceededException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -30,6 +34,25 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AiUnavailableException.class)
     ResponseEntity<Map<String, Object>> handleAi(AiUnavailableException e) {
         return body(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
+    }
+
+    /**
+     * PT-97 AI 호출 한도 초과 → 429 problem+json + Retry-After. 기존 {status, message} 를 읽는 화면도 그대로 쓰도록
+     * message(= detail) 를 함께 넣는다. retryAt 은 UTC ISO-8601, 화면이 사용자 시간대의 HH:mm 으로 바꿔 보여 준다.
+     * contentType 을 직접 정해 SSE 요청(Accept: text/event-stream)에서도 협상 실패 없이 같은 모양으로 나간다.
+     */
+    @ExceptionHandler(AiQuotaExceededException.class)
+    ResponseEntity<ProblemDetail> handleQuota(AiQuotaExceededException e) {
+        ProblemDetail problem = ProblemDetail.forStatusAndDetail(HttpStatus.TOO_MANY_REQUESTS, e.getMessage());
+        problem.setTitle("AI 사용 한도 초과");
+        problem.setProperty("message", e.getMessage());
+        problem.setProperty("feature", e.getFeature().name());
+        problem.setProperty("retryAt", e.getRetryAt().toString());
+        problem.setProperty("retryAfterSeconds", e.getRetryAfterSeconds());
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, String.valueOf(e.getRetryAfterSeconds()))
+                .contentType(MediaType.APPLICATION_PROBLEM_JSON)
+                .body(problem);
     }
 
     /** 같은 요청이 동시에 두 번 와서 유일 제약에 걸린 경우 (예: 세션 참여 버튼 두 번) → 500 대신 409. */

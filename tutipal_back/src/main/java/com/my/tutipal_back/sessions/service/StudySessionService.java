@@ -76,7 +76,8 @@ public class StudySessionService {
 
     /**
      * 초대 코드로 참여 → STUDENT. 이미 참가자면 원래 역할 그대로 (선생님이 코드를 넣어도 선생님).
-     * ponytail: 코드 맞히기 시도 제한 없음 (31^6 ≈ 8.9억 가지), 공개 운영 전에 사용자별 시도 제한 추가
+     * 외부 참여 요청의 계정별 실패 제한은 InviteCodeJoinService에서 적용한다.
+     * 종료와 같은 수업 행을 잠근 상태에서 활성 여부를 확인하고 참가를 저장한다.
      */
     @Transactional
     public SessionResponse join(Long userId, String code) {
@@ -142,6 +143,7 @@ public class StudySessionService {
     /** 세션 종료: 새 참여 · 세션 챗봇이 막힌다. 여러 번 불러도 같음. */
     @Transactional
     public SessionResponse end(Long userId, Long sessionId) {
+        lockForHelp(sessionId);
         requireTeacher(sessionId, userId);
         StudySession session = findSession(sessionId);
         if (!session.isEnded()) {
@@ -154,11 +156,10 @@ public class StudySessionService {
     /**
      * FR-SES-07 학생이 방에서 나가기. 참가 기록이 지워지므로 이후 질문 · 챗봇 · 화면공유 요청이 404 로 막히고,
      * 이미 연결된 LiveKit 은 LiveKitProxy 주기 검사가 끊는다. 선생님은 나갈 수 없다 (방 닫기를 쓴다).
-     * ponytail: 이미 구독 중인 STOMP 세션 토픽은 다시 구독 검사를 하지 않아 "무엇이 바뀌었나(type, id)" 알림은 계속 받을 수 있다.
-     *   내용은 REST 권한 검사에서 막히므로 데이터는 새지 않는다. 알림 자체도 막아야 하면 Presence 의 STOMP 세션을 끊는다.
      */
     @Transactional
     public void leave(Long userId, Long sessionId) {
+        lockForHelp(sessionId);
         SessionParticipant me = requireParticipant(sessionId, userId);
         if (me.isTeacher()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "선생님은 나갈 수 없어요. 방 닫기를 써 주세요");
@@ -169,6 +170,7 @@ public class StudySessionService {
     /** FR-SES-07 선생님이 학생 내보내기. 내보낸 학생 화면에는 removed 알림. 다시 코드로 참여하는 것은 막지 않는다. */
     @Transactional
     public void kick(Long teacherId, Long sessionId, Long studentId) {
+        lockForHelp(sessionId);
         requireTeacher(sessionId, teacherId);
         SessionParticipant target = participants.findBySessionIdAndUserId(sessionId, studentId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "참가자를 찾을 수 없어요"));
@@ -194,8 +196,13 @@ public class StudySessionService {
 
     /** STOMP 구독 검사용: 진행 중인 세션의 참가자면 역할, 아니면 empty. */
     public Optional<SessionRole> roleOf(Long userId, Long sessionId) {
+        return participantRole(userId, sessionId)
+                .filter(role -> sessions.findById(sessionId).filter(s -> !s.isEnded()).isPresent());
+    }
+
+    /** 알림 전달 시 참가자 권한을 확인한다. 남은 참가자는 방이 닫혔다는 알림을 받을 수 있다. */
+    public Optional<SessionRole> participantRole(Long userId, Long sessionId) {
         return participants.findBySessionIdAndUserId(sessionId, userId)
-                .filter(p -> sessions.findById(sessionId).filter(s -> !s.isEnded()).isPresent())
                 .map(SessionParticipant::getRole);
     }
 
@@ -204,6 +211,12 @@ public class StudySessionService {
         SessionRole role = requireParticipant(sessionId, userId).getRole();
         requireActive(sessionId);
         return role;
+    }
+
+    /** Serialize help/chat writes with close, leave and kick. Check access separately. */
+    @Transactional
+    public void lockForHelp(Long sessionId) {
+        sessions.lockById(sessionId);
     }
 
     /** 다른 도메인(quiz)용: 그 세션의 선생님인지 확인 (아니면 404 · 403). */

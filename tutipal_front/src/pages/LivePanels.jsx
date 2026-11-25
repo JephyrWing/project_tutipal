@@ -1,4 +1,4 @@
-import { Room, RoomEvent, Track } from 'livekit-client'
+import { Room, RoomEvent } from 'livekit-client'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { screenshare } from '../api/screenshare'
 import { request } from '../api/client'
@@ -6,6 +6,11 @@ import { useHelpDrawing } from '../api/realtime'
 import { applyDraw, COLORS, hitStrokes, renderDraw } from '../draw'
 import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
+import { createLiveRoomSession } from '../utils/liveRoomSession'
+import { createScreenShareSession } from '../utils/screenShareSession'
+import { createShareSourceCatalog } from '../utils/shareSourceCatalog'
+import HelpSharePicker from '../components/HelpSharePicker'
+import HelpChat from '../components/HelpChat'
 
 const errText = (e, fallback) => (e instanceof Error ? e.message : fallback)
 
@@ -13,39 +18,53 @@ const errText = (e, fallback) => (e instanceof Error ? e.message : fallback)
 function useRoom(getInfo, onVideo) {
   const [room, setRoom] = useState(null)
   const [error, setError] = useState('')
+  const [state, setState] = useState('connecting')
+  const [attemptId, setAttemptId] = useState(0)
+  const [mediaEpoch, setMediaEpoch] = useState(0)
   const videoCb = useRef(onVideo)
   videoCb.current = onVideo
 
   useEffect(() => {
     if (!getInfo) return
-    let cancelled = false
+    setError('')
+    setRoom(null)
     const r = new Room({ adaptiveStream: true, dynacast: true })
-    r.on(RoomEvent.TrackSubscribed, (track) => {
-      if (track.kind === Track.Kind.Video) videoCb.current?.(track)
-    })
-    r.on(RoomEvent.TrackUnsubscribed, (track) => {
-      if (track.kind === Track.Kind.Video) videoCb.current?.(null)
-    })
-    getInfo()
-      .then((info) => {
-        const proxy = new URL(info.url, location.origin)
+    const session = createLiveRoomSession({
+      room: r,
+      events: RoomEvent,
+      getInfo,
+      resolveUrl: (url) => {
+        const proxy = new URL(url, location.origin)
         proxy.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
         proxy.host = location.host
-        return r.connect(proxy.href, info.token)
-      })
-      .then(() => {
-        if (cancelled) void r.disconnect()
-        else setRoom(r)
-      })
-      .catch((e) => !cancelled && setError(errText(e, '화면공유 서버에 연결하지 못했어요')))
+        return proxy.href
+      },
+      onRoom: setRoom,
+      onVideo: track => videoCb.current?.(track),
+      onState: state => {
+        setState(state)
+        if (state === 'reconnecting') setMediaEpoch(epoch => epoch + 1)
+        if (state === 'connected') setError('')
+      },
+      onError: (e) => setError(errText(e, '화면공유 서버에 연결하지 못했어요')),
+    })
     return () => {
-      cancelled = true
-      void r.disconnect()
+      void session.dispose()
       setRoom(null)
+      videoCb.current?.(null)
     }
-  }, [getInfo])
+  }, [getInfo, attemptId])
 
-  return { room, error }
+  return { room, error, state, mediaEpoch, retry: () => setAttemptId(id => id + 1) }
+}
+
+function ConnectionNotice({ state, error, retry }) {
+  return <>
+    {(state === 'reconnecting' || state === 'signal-reconnecting') &&
+      <span className="muted small" role="status">연결을 복구하고 있어요…</span>}
+    {error && <span className="error-text small">{error}</span>}
+    {state === 'disconnected' && <button type="button" className="btn btn-sm" onClick={retry}>다시 연결</button>}
+  </>
 }
 
 /** 원격 화면 영상 + (선생님이면) 그 위에 그리는 캔버스. 비율을 영상과 같게 맞춰 좌표가 어긋나지 않게 */
@@ -79,45 +98,91 @@ function RemoteScreen({ track, children }) {
 export function TeacherShareTab({ sessionId }) {
   const desktop = window.desktop
   const getInfo = useCallback(() => screenshare.classToken(sessionId), [sessionId])
-  const { room, error } = useRoom(getInfo)
+  const connection = useRoom(getInfo)
+  const { room, mediaEpoch } = connection
   const [sources, setSources] = useState([])
   const [picked, setPicked] = useState('')
   const [sharing, setSharing] = useState(false)
   const [viewers, setViewers] = useState(0)
   const [status, setStatus] = useState('')
+  const [starting, setStarting] = useState(false)
   const previewRef = useRef(null)
+  const sourceCatalog = useRef(null)
+  const shareControl = useRef(null)
+  const pickedRef = useRef(picked)
+  pickedRef.current = picked
+  const refreshSources = useCallback(() => sourceCatalog.current?.refresh() ?? Promise.resolve(null), [])
 
   useEffect(() => {
-    desktop?.screenSources().then(setSources, () => setSources([]))
+    if (!desktop) return
+    const catalog = createShareSourceCatalog(
+      () => desktop.screenSources(),
+      (next) => {
+        setSources(next)
+        setPicked((selected) => next.some((source) => source.id === selected) ? selected : '')
+      },
+      () => setStatus('공유할 창 목록을 읽지 못했어요. 새로고침해 주세요'),
+    )
+    sourceCatalog.current = catalog
+    void catalog.refresh()
+    const refresh = () => void catalog.refresh()
+    window.addEventListener('focus', refresh)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      catalog.dispose()
+      sourceCatalog.current = null
+    }
   }, [desktop])
 
   useEffect(() => {
+    setSharing(false)
+    setStarting(false)
+    setViewers(0)
     if (!room) return
+    let previewTrack = null
+    let approvedSource = ''
+    const control = createScreenShareSession({
+      participant: room.localParticipant,
+      prepare: async () => {
+        const selected = pickedRef.current
+        if (desktop) {
+          const available = await refreshSources()
+          if (!available?.some(source => source.id === selected)) {
+            throw new Error('선택한 창이 닫혔거나 목록이 바뀌었어요. 공유할 창을 다시 골라 주세요')
+          }
+        }
+        if (room.state !== 'connected') throw new Error('연결을 복구한 뒤 공유를 다시 시작해 주세요')
+        approvedSource = selected
+      },
+      selectSource: () => desktop?.setShareSource(approvedSource),
+      clearSource: () => desktop?.setShareSource(null),
+      onSharing: setSharing,
+      onTrack: track => {
+        if (previewTrack && previewRef.current) previewTrack.detach(previewRef.current)
+        previewTrack = track
+        if (track && previewRef.current) track.attach(previewRef.current)
+      },
+      onError: e => setStatus(errText(e, '공유를 시작하지 못했어요')),
+    })
+    shareControl.current = control
     const count = () => setViewers(room.remoteParticipants.size)
     count()
     room.on(RoomEvent.ParticipantConnected, count).on(RoomEvent.ParticipantDisconnected, count)
     return () => {
+      shareControl.current = null
+      if (previewTrack && previewRef.current) previewTrack.detach(previewRef.current)
+      void control.dispose()
       room.off(RoomEvent.ParticipantConnected, count).off(RoomEvent.ParticipantDisconnected, count)
     }
-  }, [room])
+  }, [room, mediaEpoch, desktop, refreshSources])
 
   async function start() {
-    if (!room) return
+    const control = shareControl.current
+    if (!control || starting) return
+    setStarting(true)
     setStatus('')
-    try {
-      desktop?.setShareSource(picked)   // 앱: 고른 창을 메인 프로세스가 허용. 브라우저: 브라우저 선택 창
-      const pub = await room.localParticipant.setScreenShareEnabled(true, { audio: false })
-      const track = pub?.track
-      if (track && previewRef.current) track.attach(previewRef.current)
-      setSharing(true)
-    } catch (e) {
-      setStatus(errText(e, '공유를 시작하지 못했어요'))
-    }
-  }
-
-  async function stop() {
-    await room?.localParticipant.setScreenShareEnabled(false)
-    setSharing(false)
+    await control.start()
+    if (shareControl.current === control) setStarting(false)
   }
 
   return (
@@ -128,15 +193,19 @@ export function TeacherShareTab({ sessionId }) {
           <span className="badge badge-gray"><Icon name="users" size={16} /> 시청 {viewers}명</span>
         </div>
         {sharing
-          ? <button className="btn btn-danger" onClick={() => void stop()}><Icon name="stop" size={18} /> 공유 중지</button>
-          : <button className="btn btn-primary" disabled={!room || (!!desktop && !picked)} onClick={() => void start()}><Icon name="screen" size={18} /> 공유 시작</button>}
+          ? <button className="btn btn-danger" onClick={() => void shareControl.current?.stop()}><Icon name="stop" size={18} /> 공유 중지</button>
+          : <button className="btn btn-primary" disabled={!room || starting || (!!desktop && !picked)} onClick={() => void start()}><Icon name="screen" size={18} /> {starting ? '공유 준비 중…' : '공유 시작'}</button>}
       </div>
-      {error && <p className="error-text">{error}</p>}
+      <ConnectionNotice {...connection} />
       {status && <p className="error-text">{status}</p>}
       {desktop && !sharing && (
         <label className="field small-label">
-          <strong>공유할 창</strong>
-          <select className="input" value={picked} onChange={(e) => setPicked(e.target.value)}>
+          <span className="row-between">
+            <strong>공유할 창</strong>
+            <button type="button" className="btn btn-sm" disabled={starting} onClick={() => void refreshSources()}>목록 새로고침</button>
+          </span>
+          <select className="input" value={picked} disabled={starting} onPointerDown={() => void refreshSources()}
+            onFocus={() => void refreshSources()} onChange={(e) => setPicked(e.target.value)}>
             <option value="">고르세요</option>
             {sources.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
@@ -154,14 +223,15 @@ export function TeacherShareTab({ sessionId }) {
 export function StudentLiveTab({ sessionId }) {
   const [track, setTrack] = useState(null)
   const getInfo = useCallback(() => screenshare.classToken(sessionId), [sessionId])
-  const { room, error } = useRoom(getInfo, setTrack)
+  const connection = useRoom(getInfo, setTrack)
+  const { room, error } = connection
   return (
     <section className="card session-body live-body">
       <div className="row-between">
         <span className={`badge ${track ? 'badge-live live-red' : 'badge-gray'}`}>{track ? '● LIVE' : '대기 중'}</span>
         {!room && !error && <span className="muted small">연결 중…</span>}
       </div>
-      {error && <p className="error-text">{error}</p>}
+      <ConnectionNotice {...connection} />
       {track ? <RemoteScreen track={track} /> : (
         <div className="session-empty">
           <Mascot mood="sleep" size={110} />
@@ -174,7 +244,7 @@ export function StudentLiveTab({ sessionId }) {
 
 // ---------------- 도움 요청 (방 B) ----------------
 
-/** 목업 17 학생: 도움 요청 보내기 + 진행 상태. 수락되면 내 화면(주 모니터)을 선생님에게 공유하고 그림을 오버레이로 받는다 */
+/** 수락 뒤 학생이 대상 선택·미리보기·동의를 거쳐 공유한다. */
 export function StudentHelp({ sessionId, reloadKey }) {
   const [mine, setMine] = useState(null)
   const [open, setOpen] = useState(false)
@@ -215,7 +285,7 @@ export function StudentHelp({ sessionId, reloadKey }) {
   return (
     <>
       {mine?.status === 'ACCEPTED' ? (
-        <HelpSession help={mine} onEnd={() => void cancel()} />
+        <HelpSession help={mine} refreshKey={reloadKey} onEnd={() => void cancel()} />
       ) : mine?.status === 'PENDING' ? (
         <span className="help-chip">
           <span className="badge badge-warn">도움 요청 대기 중</span>
@@ -236,7 +306,7 @@ export function StudentHelp({ sessionId, reloadKey }) {
               placeholder="어디서 막혔는지 적어 주세요" autoFocus required />
             <label className="check-row">
               <input type="checkbox" checked={share} onChange={(e) => setShare(e.target.checked)} />
-              내 화면을 선생님에게 보여주기 <span className="muted small">(수락되면 주 모니터 전체가 공유돼요)</span>
+              화면 공유로 도움받기 <span className="muted small">(수락 후 공유할 창을 고르고 동의해요)</span>
             </label>
             {error && <p className="error-text">{error}</p>}
             <div className="consent-actions">
@@ -251,33 +321,133 @@ export function StudentHelp({ sessionId, reloadKey }) {
 }
 
 /** 학생 쪽 진행 중인 1:1: 화면 올리기 + 받은 그림을 오버레이로 */
-function HelpSession({ help, onEnd }) {
+function HelpSession({ help, refreshKey, onEnd }) {
   const desktop = window.desktop
   const getInfo = useCallback(() => screenshare.helpToken(help.id), [help.id])
-  const { room, error } = useRoom(getInfo)
+  const connection = useRoom(getInfo)
+  const { room, error, mediaEpoch } = connection
   const [shareError, setShareError] = useState('')
+  const [consented, setConsented] = useState(false)
+  const [sharing, setSharing] = useState(false)
+  const [starting, setStarting] = useState(false)
+  const [selected, setSelected] = useState(null)
+  const [previewTrack, setPreviewTrack] = useState(null)
+  const selectedRef = useRef(null)
+  selectedRef.current = selected
+  const approvedSource = useRef(null)
+  const previewVideo = useRef(null)
+  const shareControl = useRef(null)
   useHelpDrawing(help.id, (message) => desktop?.sendOverlayDraw(JSON.stringify(message)))
 
   useEffect(() => {
+    setConsented(false)
+    setSharing(false)
+    setStarting(false)
+    setShareError('')
+    setSelected(null)
+    setPreviewTrack(null)
     if (!room) return
-    if (help.shareScreen) {
-      desktop?.setShareSource('')   // 주 모니터 전체 (그림 위치가 오버레이와 맞도록)
-      room.localParticipant.setScreenShareEnabled(true, { audio: false })
-        .catch((e) => setShareError(errText(e, '화면을 공유하지 못했어요')))
-    }
-    desktop?.showOverlay(true)
+    const control = createScreenShareSession({
+      participant: room.localParticipant,
+      requiresConsent: true,
+      prepare: () => {
+        if (!help.shareScreen || room.state !== 'connected') return false
+        const source = selectedRef.current
+        if (desktop && !source) throw new Error('공유할 창을 먼저 골라 주세요')
+        approvedSource.current = source
+      },
+      selectSource: async () => {
+        if (!desktop) return
+        try { await desktop.prepareHelpShare(approvedSource.current.id) }
+        catch { throw new Error('선택한 창을 준비하지 못했어요. 창을 열고 다시 선택해 주세요') }
+      },
+      clearSource: () => desktop?.setShareSource(null),
+      onTrack: setPreviewTrack,
+      onSharing: setSharing,
+      onError: (e) => setShareError(errText(e, '화면을 공유하지 못했어요')),
+    })
+    shareControl.current = control
     return () => {
-      desktop?.showOverlay(false)
+      shareControl.current = null
+      void control.dispose()
     }
-  }, [room, help.shareScreen, desktop])
+  }, [room, mediaEpoch, help.shareScreen, desktop])
+
+  useEffect(() => {
+    desktop?.showOverlay(sharing)
+  }, [sharing, desktop])
+  useEffect(() => () => desktop?.showOverlay(false), [desktop])
+
+  useEffect(() => desktop?.onHelpShareEnded(reason => {
+    void shareControl.current?.stop()
+    setSelected(null)
+    setConsented(false)
+    setShareError(reason)
+  }), [desktop])
+
+  useEffect(() => {
+    const video = previewVideo.current
+    if (!previewTrack || !video) return
+    previewTrack.attach(video)
+    const measure = () => {
+      const settings = previewTrack.mediaStreamTrack?.getSettings()
+      const width = video.videoWidth || settings?.width
+      const height = video.videoHeight || settings?.height
+      if (width && height && approvedSource.current) desktop?.setHelpShareVideoSize(approvedSource.current.id, width, height)
+    }
+    measure()
+    video.addEventListener('loadedmetadata', measure)
+    video.addEventListener('resize', measure)
+    return () => {
+      video.removeEventListener('loadedmetadata', measure)
+      video.removeEventListener('resize', measure)
+      previewTrack.detach(video)
+    }
+  }, [previewTrack, desktop])
+
+  async function startSharing() {
+    const control = shareControl.current
+    if (!control || !consented) return
+    setStarting(true)
+    setShareError('')
+    await control.start(consented)
+    if (shareControl.current === control) {
+      setStarting(false)
+      setConsented(false)
+    }
+  }
 
   return (
-    <span className="help-chip">
-      <span className="badge badge-live"><span className="dot" /> 선생님이 보는 중</span>
+    <div className="help-chip" style={{ flexWrap: 'wrap' }}>
+      <span className={`badge ${error || shareError || !room ? 'badge-warn' : 'badge-live'}`}>
+        <span className="dot" /> {error || shareError ? '도움 연결 오류' : room ? '선생님과 연결됨' : '도움 연결 중'}
+      </span>
+      {help.shareScreen && !sharing && (
+        <>
+          {desktop && <HelpSharePicker desktop={desktop} disabled={starting || !room} selected={selected}
+            onSelect={source => { setSelected(source); setConsented(false); setShareError('') }} onError={setShareError} />}
+          <label className="check-row small">
+            <input type="checkbox" checked={consented} disabled={starting || !room || (!!desktop && !selected)}
+              onChange={(e) => setConsented(e.target.checked)} />
+            {desktop ? `선택한 ${selected?.id.startsWith('screen:') ? '전체 화면' : '창'}을 선생님에게 보여주는 데 동의해요` : '브라우저에서 고를 화면을 공유하는 데 동의해요'}
+          </label>
+          <button className="btn btn-sm btn-primary" disabled={!room || !consented || starting || (!!desktop && !selected)}
+            onClick={() => void startSharing()}>{starting ? '공유 준비 중…' : '화면 공유 시작'}</button>
+        </>
+      )}
+      {sharing && (
+        <>
+          <span className="muted small">공유 중 · {selected?.name ?? '선택한 화면'}</span>
+          <video className="help-local-preview" ref={previewVideo} autoPlay playsInline muted aria-label="현재 공유 중인 화면 미리보기" />
+          <button className="btn btn-sm" onClick={() => void shareControl.current?.stop()}>화면 공유 중지</button>
+        </>
+      )}
       <button className="btn btn-sm" onClick={onEnd}>끝내기</button>
-      {(error || shareError) && <span className="error-text small">{error || shareError}</span>}
+      <ConnectionNotice {...connection} />
+      {shareError && <span className="error-text small">{shareError}</span>}
       {!desktop && <span className="muted small">(그림 설명은 앱에서 보여요)</span>}
-    </span>
+      <HelpChat helpId={help.id} refreshKey={refreshKey} partnerName="선생님" />
+    </div>
   )
 }
 
@@ -311,7 +481,7 @@ export function TeacherHelpTab({ sessionId, reloadKey }) {
   }
 
   if (viewing) {
-    return <HelpViewer help={viewing} onClose={() => setViewing(null)} onEnd={() => void act(() => screenshare.end(viewing.id))} />
+    return <HelpViewer help={viewing} refreshKey={reloadKey} onClose={() => setViewing(null)} onEnd={() => void act(() => screenshare.end(viewing.id))} />
   }
 
   return (
@@ -347,10 +517,11 @@ export function TeacherHelpTab({ sessionId, reloadKey }) {
 }
 
 /** 목업 26: 학생 화면 + 펜 · 형광펜 · 지우개 · 색. 그림은 Spring 업무 API/STOMP로 전달한다. */
-function HelpViewer({ help, onClose, onEnd }) {
+function HelpViewer({ help, refreshKey, onClose, onEnd }) {
   const [track, setTrack] = useState(null)
   const getInfo = useCallback(() => screenshare.helpToken(help.id), [help.id])
-  const { room, error } = useRoom(getInfo, setTrack)
+  const connection = useRoom(getInfo, setTrack)
+  const { room } = connection
   const [tool, setTool] = useState('pen')
   const [color, setColor] = useState(COLORS[0])
   const canvasRef = useRef(null)
@@ -384,6 +555,15 @@ function HelpViewer({ help, onClose, onEnd }) {
     const ctx = c.getContext('2d')
     if (ctx) renderDraw(ctx, strokes.current, c.width, c.height)
   }, [])
+  // A new video track has a fresh student overlay; never redraw the previous screen's ink.
+  useEffect(() => {
+    strokes.current.clear()
+    current.current = null
+    drawQueue.current = []
+    setDrawingError('')
+    redraw()
+  }, [track, help.id, redraw])
+
   useEffect(() => {
     const c = canvasRef.current
     if (!c) return
@@ -393,6 +573,7 @@ function HelpViewer({ help, onClose, onEnd }) {
   }, [redraw, track])
 
   const send = (m) => {
+    if (!track) return
     applyDraw(strokes.current, m)
     redraw()
     const tail = drawQueue.current.at(-1)
@@ -438,7 +619,8 @@ function HelpViewer({ help, onClose, onEnd }) {
         </span>
       </div>
       <p className="muted small">{help.message}</p>
-      {error && <p className="error-text">{error}</p>}
+      <HelpChat helpId={help.id} refreshKey={refreshKey} partnerName={help.name} />
+      <ConnectionNotice {...connection} />
       {drawingError && <p className="error-text">{drawingError}</p>}
       <div className="viewer-body">
         <div className="tool-col" role="toolbar" aria-label="그림 도구">
@@ -451,7 +633,7 @@ function HelpViewer({ help, onClose, onEnd }) {
                 onClick={() => setColor(c)} aria-label={`색 ${c}`} aria-pressed={color === c} />
             ))}
           </div>
-          <button className="btn btn-sm" onClick={() => send({ k: 'clear' })}>모두 지우기</button>
+          <button className="btn btn-sm" disabled={!track} onClick={() => send({ k: 'clear' })}>모두 지우기</button>
         </div>
         {track ? (
           <RemoteScreen track={track}>

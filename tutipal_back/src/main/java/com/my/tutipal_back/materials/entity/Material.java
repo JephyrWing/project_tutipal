@@ -1,5 +1,7 @@
 package com.my.tutipal_back.materials.entity;
 
+import java.time.Instant;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -47,6 +49,14 @@ public class Material extends BaseTimeEntity {
     @Column(length = 200)
     private String error;
 
+    private Instant indexedAt;
+
+    @Column(nullable = false)
+    private boolean indexRetryable;
+
+    @Column(nullable = false)
+    private int indexRetryCount;
+
     protected Material() {
     }
 
@@ -63,4 +73,5 @@ public class Material extends BaseTimeEntity {
     public String getFilename() { return filename; }
     public String getStorageKey() { return storageKey; }
     public Status getStatus() { return status; }
+    public int getIndexRetryCount() { return indexRetryCount; }
 }
