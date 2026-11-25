@@ -40,7 +40,7 @@ GAP-12 / FR-TUT-05 / NFR-SEC-11의 구현 원본. `docs/AI_WORKFLOW_CONTRACT.md`
 
 ## 보관 기간 (미정)
 
-PT-13에 보관 기간 결정이 없다. `app.ai.conversations.retention-days`(환경변수 `AI_CONVERSATION_RETENTION_DAYS`) 기본 0 = 자동 삭제 끔: 사용자가 지우거나 탈퇴할 때까지 보관한다. N을 주면 마지막 메시지가 N일 지난 대화를 1시간마다 `retention-batch-size`(500)개씩 지운다. **PT-13 결정 전까지 운영에서 켜지 않는다.**
+PT-13에 보관 기간 결정이 없다. `app.ai.conversations.retention-days`(환경변수 `AI_CONVERSATION_RETENTION_DAYS`) 기본 0 = 자동 삭제 끔: 사용자가 지우거나 탈퇴할 때까지 보관한다. N을 주면 마지막 메시지가 N일 지난 대화를 1시간마다 `retention-batch-size`(500)개씩 지운다. 지금 저장 중인(잠긴) 대화는 건너뛰고, 고르는 사이에 새 메시지가 저장돼 기준을 넘긴 대화는 지우지 않는다. **PT-13 결정 전까지 운영에서 켜지 않는다.**
 
 ## 대화 묶기(ThreadLocal)와 후속
 

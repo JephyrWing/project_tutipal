@@ -205,9 +205,15 @@ public class JdbcConversationStore implements ConversationStore {
     }
 
     @Override
+    /**
+     * Rows locked by a turn being saved are skipped (SKIP LOCKED), and the outer DELETE re-checks the cutoff so a
+     * conversation whose last_message_at moved past it meanwhile is kept.
+     */
     public int deleteInactiveBefore(Instant cutoff, int limit) {
-        return jdbc.update("DELETE FROM ai_conversations WHERE id IN (SELECT id FROM ai_conversations"
-                + " WHERE last_message_at < ? ORDER BY last_message_at, id LIMIT ?)", time(cutoff), limit);
+        return jdbc.update("DELETE FROM ai_conversations WHERE last_message_at < ? AND id IN (SELECT id"
+                        + " FROM ai_conversations WHERE last_message_at < ? ORDER BY last_message_at, id LIMIT ?"
+                        + " FOR UPDATE SKIP LOCKED)",
+                time(cutoff), time(cutoff), limit);
     }
 
     private static <T> Optional<T> first(List<T> rows) {
