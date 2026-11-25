@@ -1,0 +1,101 @@
+{
+  "measured_on": "2026-11-25 KST, AMD Ryzen 9 5900HX laptop (shared with other sessions, CPU load 30-65%), Windows 11, ONNX Runtime 1.32.0 CPU, 2 threads",
+  "embedding_model": "ollama:bge-m3:1024",
+  "rerank_models": {
+    "a": {
+      "repo": "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1",
+      "revision": "1427fd652930e4ba29e8149678df786c240d8825",
+      "file": "onnx/model_quint8_avx2.onnx",
+      "sha256": "6c2513767fb63d008a4377bef7a7a3555433d9436342bb53e35a3a72ffc52d4b",
+      "license": "apache-2.0"
+    },
+    "b": {
+      "repo": "onnx-community/bge-reranker-v2-m3-ONNX",
+      "revision": "6f5ff65298512715a1e669753bc754d2bc8f367b",
+      "file": "onnx/model_int8.onnx",
+      "sha256": "912fc1215c2dbff6499700534bd8d31253af01573861abbfc43afd1fab6cce5d",
+      "note": "dev N=10 only; N=20 not measured (p50 17.8 s at N=10)"
+    },
+    "c": {
+      "repo": "BAAI/bge-reranker-base",
+      "revision": "2cfc18c9415c912f9d8155881c133215df768a70",
+      "note": "not measured: RAM (offline int8 quantization of the 1.1 GB fp32 graph needs ~2.5 GB free; 0.5-1.4 GB available)"
+    }
+  },
+  "fastapi_working_set_mb": {
+    "rerank_disabled": 52.8,
+    "a_loaded_idle": 464.4,
+    "a_len256_peak": 587.1,
+    "a_len512_peak": 1051.8,
+    "b_len512_peak": 1217.3
+  },
+  "image_size_delta_estimate_mb": {
+    "packages_installed": 163.0,
+    "model_a": 135.7,
+    "total": 298.7,
+    "wheels_download": 54.1,
+    "label": "estimate from manylinux wheels; no local Docker"
+  },
+  "t3_large_projection": {
+    "label": "projection, not measured",
+    "assumption": "t3.large 2 vCPU = 2 hyperthreads of one Xeon core (2.5-3.1 GHz) vs laptop 2 threads on separate cores (up to 4.6 GHz): 1.5-2.5x slower; more when CPU credits run out (baseline 30%)",
+    "a_len256_n10_rerank_p50_s": [
+      1.2,
+      3.4
+    ],
+    "a_len256_n10_rerank_p95_s": [
+      2.0,
+      5.4
+    ],
+    "section_v1_rerank_p50_s": [
+      2.0,
+      3.4
+    ],
+    "section_v1_rerank_p95_s": [
+      3.3,
+      5.4
+    ],
+    "cpu_credit": "baseline 30% x 2 vCPU = ~2160 vCPU-s/h; 2.0-5.3 vCPU-s per rerank -> ~400-1000 reranks/h exhaust baseline"
+  },
+  "frozen_decisions_before_sealed": {
+    "recorded": "docs/PT-86_RAG_EVAL.md section 3, before 2026-11-25 12:33:42 KST",
+    "chunker": "section-v1",
+    "rerank_model": "a",
+    "candidates": 10,
+    "rerank_max_length": 256,
+    "threads": 2,
+    "measurement_timeout_s": 10
+  },
+  "sealed_sha256": {
+    "recorded": "a5a65b9fea3ef8965553e722a9ebc003ff0c61d554f3076aee9a014d98fc984b",
+    "match": true,
+    "status": "provisional until the 11/28 user review"
+  },
+  "adoption": {
+    "chunker": {
+      "rule_met": true,
+      "evidence": "sealed cosine MRR@3 0.708 -> 0.771 (+0.063), Hit@3 20 -> 20, no-answer 0/6 -> 0/6, source consistency 0.806 -> 0.806",
+      "default_changed": false,
+      "why_not_changed": "leader ruling (강지): switch rejected, char800-v1 kept as recorded spec 2/9 deviation; follow-up after 11/28 freeze + PT-29 sample + PT-85 check, switch via RAG_REINDEX. Review round 1: review round 1 (유니, 시부키, 리제 keep; 타비, 린 neutral) - content-loss bugs in section-v1 were reproduced in review (fixed and tested in this branch, corpus has no affected lines), sealed provisional until 11/28, heading prefix vs PT-29/PT-85 unmeasured, mixed chunkers per session unmeasured; also RagRerankPropertiesTest pins char800-v1"
+    },
+    "reranker": {
+      "rule_met": false,
+      "evidence": "sealed section-v1 MRR@3 +0.035 (<0.05), Hit@3 +2 (noise), rerank p95 2.18 s (>1.5 s), t3 projection over 2 s; RSS +534 MB ok",
+      "default_changed": false,
+      "flag": "tutipal.rag.rerank.enabled=false"
+    }
+  },
+  "follow_up": "Spring BM25/pg_trgm hybrid + RRF(k=60): dev probe char-bigram BM25 Hit@3 15/16 (cosine 12/16 char800, 14/16 section)",
+  "round1_validity": {
+    "chunk_fingerprint_unchanged": true,
+    "char800-v1": "95 664db06015497c391ed1210bb8153db731ce38cede8c0be06f9b09bd94cde0cb",
+    "section-v1": "131 75363995216e02d7046985e80ffffbc1dc428efa390f3914548326b4eab3db10",
+    "note": "chunker fixes after review leave corpus output byte-identical; dev/sealed rows not re-run"
+  },
+  "deploy_config": {
+    "candidates": 10,
+    "rerank_max_length": 256,
+    "rerank_queue_timeout_ms": 1000,
+    "where": "code defaults (application.yaml candidates 10, settings.py 256/1000) = compose = env examples = Dockerfile ENV; leader ruling: code defaults = measured values"
+  }
+}
