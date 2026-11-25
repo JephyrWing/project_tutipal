@@ -34,8 +34,8 @@ createRoot(document.getElementById('root')).render(React.createElement(React.Str
 `
 const server = await createServer({ root, configFile: false,
   plugins: [react(), { name: 'share-test-fixture', enforce: 'pre',
-    resolveId(id) { if (id === 'livekit-client') return '\0share-livekit'; if (id === '/share-entry.js') return '\0share-entry' },
-    load(id) { if (id === '\0share-livekit') return mock; if (id === '\0share-entry') return entry },
+    resolveId(id) { if (id.endsWith('/HelpChat')) return '\0share-chat'; if (id === 'livekit-client') return '\0share-livekit'; if (id === '/share-entry.js') return '\0share-entry' },
+    load(id) { if (id === '\0share-chat') return 'export default function HelpChat(){return null}'; if (id === '\0share-livekit') return mock; if (id === '\0share-entry') return entry },
     configureServer(s) { s.middlewares.use(async (req, res, next) => {
       if (!req.url.startsWith('/share-test.html')) return next()
       try { res.setHeader('Content-Type', 'text/html'); res.end(await s.transformIndexHtml('/share-test.html', '<div id="root"></div><script type="module" src="/share-entry.js"></script>')) }

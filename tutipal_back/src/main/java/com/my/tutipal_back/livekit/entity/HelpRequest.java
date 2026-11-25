@@ -34,6 +34,9 @@ public class HelpRequest extends BaseTimeEntity {
     @Column(nullable = false)
     private boolean shareScreen;
 
+    @Column
+    private Long acceptedByUserId;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private Status status = Status.PENDING;
@@ -54,6 +57,11 @@ public class HelpRequest extends BaseTimeEntity {
 
     public void moveTo(Status next) {
         this.status = next;
+    }
+
+    public void acceptBy(Long teacherId) {
+        this.acceptedByUserId = teacherId;
+        this.status = Status.ACCEPTED;
     }
 
     public Long getId() { return id; }
