@@ -105,6 +105,14 @@ class ConversationTurnIdempotencyWebTest {
         return result.getResponse().getContentAsString(StandardCharsets.UTF_8);
     }
 
+    /**
+     * The turn guard is freed after the emitter completes (then the summary runs on the same thread), so a second
+     * turn sent right after the stream may still get 429. The n-th summary call means the n-th saved turn freed it.
+     */
+    private void awaitTurnReleased(long conversationId, int savedTurns) {
+        verify(summarizer, timeout(5_000).times(savedTurns)).summarizeIfNeeded(conversationId);
+    }
+
     private long insertPairs() {
         return store.calls.stream().filter(call -> call.startsWith("insertPair:")).count();
     }
@@ -114,7 +122,7 @@ class ConversationTurnIdempotencyWebTest {
         ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
         String first = stream(c.id(), "미분이 뭐예요?", KEY);
         var firstIds = event(first, "saved").json();
-        verify(summarizer, timeout(2_000)).summarizeIfNeeded(c.id());
+        awaitTurnReleased(c.id(), 1);
         clearInvocations(tutor, opened, summarizer);
 
         String again = stream(c.id(), "미분이 뭐예요?", KEY);
@@ -149,6 +157,7 @@ class ConversationTurnIdempotencyWebTest {
     void resendIsComparedAfterTrimmingLikeTheSavedQuestion() throws Exception {
         ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
         stream(c.id(), "  질문  ", KEY);
+        awaitTurnReleased(c.id(), 1);
         clearInvocations(tutor);
 
         String again = stream(c.id(), "질문", KEY);
@@ -162,6 +171,7 @@ class ConversationTurnIdempotencyWebTest {
     void sameKeyWithDifferentTextIs409JsonAndCallsNothing() throws Exception {
         ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
         stream(c.id(), "첫 질문", KEY);
+        awaitTurnReleased(c.id(), 1);
         clearInvocations(tutor);
 
         send(c.id(), "고친 질문", KEY)
@@ -195,6 +205,7 @@ class ConversationTurnIdempotencyWebTest {
         ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
 
         stream(c.id(), "질문", KEY);
+        awaitTurnReleased(c.id(), 1);
         stream(c.id(), "질문", UUID.randomUUID());
 
         assertThat(store.messagesOf(c.id())).hasSize(4);
@@ -206,6 +217,7 @@ class ConversationTurnIdempotencyWebTest {
         ConversationStore.Conversation c = store.seedConversation(ME, null, "수학", NOW);
 
         stream(c.id(), "질문", null);
+        awaitTurnReleased(c.id(), 1);
         stream(c.id(), "질문", null);
 
         assertThat(store.messagesOf(c.id())).hasSize(4);
