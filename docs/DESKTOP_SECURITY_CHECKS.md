@@ -23,3 +23,25 @@ NFR-SEC-06 / AC-APP-001-2 / CHK-INSTALLER-SECURITY의 실행 중 경계를
 검사는 설치된 NSIS 패키지 전체 보안 검증이 아니다. 실제 설치본의 ASAR 변조 거절,
 외부 PC·실 OAuth/WSS, 서명·업데이트·다른 OS는 별도 인수 항목이다.
 산출물 fuse/ASAR/helper 확인은 기존 `npm run verify:win`의 별도 검사다.
+
+## Windows 패키지 ASAR 변조 거절
+
+Windows에서 `npm run dist:win` 다음 `npm run test:win-integrity`를 실행한다.
+검사는 `release/win-unpacked`를 읽어 전용 임시 폴더의 복사본만 변경한다.
+헤더를 교체한 ASAR와 기존 헤더를 유지한 메인 파일 내용 변경을 각각 확인한다.
+원본 업무 코드를 실행하지 않도록, 실행 전 ASAR를 독립적으로 다시 읽어
+메인 진입점 전체가 표시 파일 기록 후 종료하는 안전한 코드인지 확인한다.
+네트워크·창·프로토콜 등록·사용자 세션 동작은 없다.
+
+검사 전용 대조 복사본에서만 ASAR 검사 fuse를 끄고 안전한 진입점이 실행됨을
+확인한다. 원본과 보호 복사본의 fuse는 유지한다. 보호 복사본은 같은 변조를
+무결성 오류로 거절하고 표시 파일을 만들지 않아야 한다. 비정상 종료만으로
+통과시키지 않는다. 대조 복사본의 보호 완화는 제품이나 배포 설정에 적용하지 않는다.
+
+대조 실행2·변조 거절2·원본 exe/ASAR SHA256 전후 일치1의 검사5개를 기록한다.
+실행 기한과 숨김 프로세스, 독립 프로필을 사용하고 생성한 임시 폴더만 정리한다.
+결과는 `test-results/win-integrity.json`에 저장하며 Windows CI에서 보존한다.
+이는 빌드된 패키지 복사본의 무결성 검증이며 설치 마법사·업데이트·실운영 접속이나
+모든 파일의 변조를 전수 검사한 결과는 아니다. 실제 결과와 원본 SHA는 Jira에 연결한다.
+
+설계 근거: [Electron ASAR integrity](https://www.electronjs.org/docs/latest/tutorial/asar-integrity).
