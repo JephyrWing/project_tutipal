@@ -120,6 +120,34 @@ class ConversationTurnWebTest {
         return finish(start(conversationId, content));
     }
 
+    /**
+     * The per-user turn guard is freed after the emitter completes, so a turn sent right after a stream may still
+     * see 429 on a slow runner. The summary runs after the guard is freed: the n-th call means the n-th saved turn
+     * of that conversation freed it.
+     */
+    private void awaitTurnReleased(long conversationId, int savedTurns) {
+        verify(summarizer, timeout(5_000).times(savedTurns)).summarizeIfNeeded(conversationId);
+    }
+
+    /**
+     * After a failed turn there is no summary call to wait for: resend while the guard still answers 429 (nothing
+     * else runs before the guard check), up to 5 seconds, then stream.
+     */
+    private String streamOnceTheGuardIsFree(long conversationId, String content) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (true) {
+            MvcResult result = send(conversationId, content).andReturn();
+            if (result.getRequest().isAsyncStarted()) {
+                return finish(result);
+            }
+            if (result.getResponse().getStatus() != HttpStatus.TOO_MANY_REQUESTS.value()
+                    || System.nanoTime() > deadline) {
+                throw new AssertionError("turn did not start: HTTP " + result.getResponse().getStatus());
+            }
+            Thread.sleep(10);
+        }
+    }
+
     private ConversationStore.Conversation personal() {
         return store.seedConversation(ME, null, "수학", NOW);
     }
@@ -224,6 +252,7 @@ class ConversationTurnWebTest {
         ConversationStore.Conversation c = personal();
 
         stream(c.id(), "가".repeat(50));
+        awaitTurnReleased(c.id(), 1);
         stream(c.id(), "두 번째 질문");
 
         assertThat(store.conversation(c.id()).orElseThrow().title()).isEqualTo("가".repeat(40));
@@ -388,6 +417,7 @@ class ConversationTurnWebTest {
 
         release.countDown();
         assertThat(eventNames(finish(running))).endsWith("saved", "done");
+        awaitTurnReleased(first.id(), 1);
         scriptTutor(tutor, (request, onDelta) -> onDelta.accept("다음 답"));
         assertThat(eventNames(stream(second.id(), "이제 질문"))).endsWith("saved", "done");
     }
@@ -401,7 +431,7 @@ class ConversationTurnWebTest {
         assertThat(eventNames(stream(c.id(), "질문"))).containsExactly("error");
 
         scriptTutor(tutor, (request, onDelta) -> onDelta.accept("답"));
-        assertThat(eventNames(stream(c.id(), "다시 질문"))).endsWith("saved", "done");
+        assertThat(eventNames(streamOnceTheGuardIsFree(c.id(), "다시 질문"))).endsWith("saved", "done");
     }
 
     @Test
