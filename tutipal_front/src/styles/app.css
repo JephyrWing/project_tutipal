@@ -205,10 +205,12 @@
 .small-label { font-size: 16px; }
 .quiz-row { border-top: 1px solid var(--line); }
 .quiz-row-head {
-  width: 100%; display: grid; grid-template-columns: 52px minmax(120px, 1fr) minmax(120px, 2fr) 52px auto auto;
-  align-items: center; gap: 14px; padding: 14px 4px; border: 0; background: none; cursor: pointer; text-align: left;
+  display: grid; grid-template-columns: 46px minmax(0, 2fr) minmax(48px, 1fr) auto auto auto auto;
+  align-items: center; gap: 12px; padding: 14px 8px;
 }
-.quiz-row-head:hover { background: var(--surface-2); }
+.quiz-row-sent { background: var(--surface-2); box-shadow: inset 3px 0 var(--primary); }
+.quiz-title { min-width: 0; }
+.quiz-review-button { white-space: nowrap; }
 .quiz-no { font-size: 20px; }
 .quiz-q { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bar { height: 14px; border-radius: 999px; background: #e3e8ef; overflow: hidden; }
@@ -237,8 +239,12 @@
 .result-icon.ok { background: var(--green); }
 .result-icon.warn { background: #facc15; color: #1f2633; }
 @media (max-width: 860px) {
-  .quiz-row-head { grid-template-columns: 44px 1fr 48px; }
+  .quiz-row-head { grid-template-columns: 36px minmax(0, 1fr) auto auto auto; gap: 8px; }
   .quiz-row-head .bar, .quiz-row-head .quiz-count { display: none; }
+}
+@media (max-width: 520px) {
+  .quiz-row-head { grid-template-columns: 36px minmax(0, 1fr) auto; }
+  .quiz-row-head > .badge { grid-column: 2; justify-self: start; }
 }
 
 /* 3단계: 화면 분석 동의(04) · 위젯 요약/질문(07 · 08) · 앱 로그인 대기(02) */
