@@ -33,7 +33,6 @@ import com.my.tutipal_back.ai.quota.AiFeature;
 import com.my.tutipal_back.ai.quota.AiQuota;
 import com.my.tutipal_back.ai.quota.AiQuotaExceededException;
 import com.my.tutipal_back.ai.quota.AiQuotaFixtures;
-import com.my.tutipal_back.ai.quota.AiQuotaTicket;
 import com.my.tutipal_back.ai.quota.MutableClock;
 import com.my.tutipal_back.common.exception.ApiException;
 import com.my.tutipal_back.learning.tutor.dto.ChatRequest;
@@ -58,7 +57,7 @@ class TutorServiceQuotaTest {
     private final AiSlots slots = mock(AiSlots.class);
     private final MutableClock clock = new MutableClock(Instant.parse("2026-11-25T00:00:00Z"));
     private AiQuota quota = AiQuotaFixtures.quota(1, Duration.ofHours(1), clock);
-    private TutorService service = new TutorService(ai, sessions, rag, slots, quota);
+    private TutorService service = new TutorService(ai, sessions, rag, slots, quota, null, null, false);
 
     private final List<String> deltas = new ArrayList<>();
 
@@ -85,7 +84,7 @@ class TutorServiceQuotaTest {
     // S4
     @Test
     void personalChatReservesChatWhenOpened() {
-        AiQuotaTicket ticket = service.openChat(USER, PERSONAL);
+        OpenedChat ticket = service.openChat(USER, PERSONAL);
 
         assertThat(ticket).isNotNull();
         assertThat(hasRoom(quota, USER, AiFeature.CHAT)).isFalse();
@@ -94,7 +93,7 @@ class TutorServiceQuotaTest {
 
     @Test
     void sessionChatChecksAccessThenReservesChat() {
-        AiQuotaTicket ticket = service.openChat(USER, IN_SESSION);
+        OpenedChat ticket = service.openChat(USER, IN_SESSION);
 
         assertThat(ticket).isNotNull();
         verify(sessions).requireActiveRole(USER, SESSION);
@@ -124,7 +123,7 @@ class TutorServiceQuotaTest {
     @Test
     void oneQuestionCountsExactlyOneChat() {
         quota = AiQuotaFixtures.quota(2, Duration.ofHours(1), clock);
-        service = new TutorService(ai, sessions, rag, slots, quota);
+        service = new TutorService(ai, sessions, rag, slots, quota, null, null, false);
         modelStreams("미분은 ", "변화율이에요");
 
         service.chat(USER, IN_SESSION, service.openChat(USER, IN_SESSION), s -> { }, deltas::add);
@@ -148,7 +147,7 @@ class TutorServiceQuotaTest {
     void clientCancelAfterStreamStartIsCounted() {
         modelStreams("첫 조각", "둘째 조각");
         var gone = new RuntimeException("client gone");
-        AiQuotaTicket ticket = service.openChat(USER, PERSONAL);
+        OpenedChat ticket = service.openChat(USER, PERSONAL);
 
         assertThatThrownBy(() -> service.chat(USER, PERSONAL, ticket, s -> { }, d -> { throw gone; }))
                 .isSameAs(gone);
@@ -165,7 +164,7 @@ class TutorServiceQuotaTest {
             onDelta.accept("반쯤");
             throw AiUnavailableException.afterOutput();
         }).when(ai).chatStream(anyString(), anyList(), any());
-        AiQuotaTicket ticket = service.openChat(USER, PERSONAL);
+        OpenedChat ticket = service.openChat(USER, PERSONAL);
 
         assertThatThrownBy(() -> service.chat(USER, PERSONAL, ticket, s -> { }, deltas::add))
                 .isInstanceOf(AiUnavailableException.class);
@@ -179,7 +178,7 @@ class TutorServiceQuotaTest {
         doAnswer(inv -> {
             throw new AiUnavailableException();
         }).when(ai).chatStream(anyString(), anyList(), any());
-        AiQuotaTicket ticket = service.openChat(USER, PERSONAL);
+        OpenedChat ticket = service.openChat(USER, PERSONAL);
 
         assertThatThrownBy(() -> service.chat(USER, PERSONAL, ticket, s -> { }, deltas::add))
                 .isInstanceOf(AiUnavailableException.class);
@@ -192,7 +191,7 @@ class TutorServiceQuotaTest {
         when(rag.search(eq(SESSION), anyString(), anyInt()))
                 .thenReturn(List.of(new RagHit("a.pdf", 1, "미분 자료", 0.9)));
         var gone = new IllegalStateException("client gone");
-        AiQuotaTicket ticket = service.openChat(USER, IN_SESSION);
+        OpenedChat ticket = service.openChat(USER, IN_SESSION);
 
         assertThatThrownBy(() -> service.chat(USER, IN_SESSION, ticket, s -> { throw gone; }, deltas::add))
                 .isSameAs(gone);
@@ -207,7 +206,7 @@ class TutorServiceQuotaTest {
         var busy = new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "지금 질문이 많아요");
         when(slots.run(any(Supplier.class))).thenThrow(busy);
         when(slots.run(any(Duration.class), any(Supplier.class))).thenThrow(busy);
-        AiQuotaTicket ticket = service.openChat(USER, PERSONAL);
+        OpenedChat ticket = service.openChat(USER, PERSONAL);
 
         assertThatThrownBy(() -> service.chat(USER, PERSONAL, ticket, s -> { }, deltas::add)).isSameAs(busy);
 
@@ -217,7 +216,7 @@ class TutorServiceQuotaTest {
     @Test
     void ragFailureBeforeModelIsRefunded() {
         when(rag.search(eq(SESSION), anyString(), anyInt())).thenThrow(new IllegalStateException("vector db down"));
-        AiQuotaTicket ticket = service.openChat(USER, IN_SESSION);
+        OpenedChat ticket = service.openChat(USER, IN_SESSION);
 
         assertThatThrownBy(() -> service.chat(USER, IN_SESSION, ticket, s -> { }, deltas::add))
                 .isInstanceOf(IllegalStateException.class);

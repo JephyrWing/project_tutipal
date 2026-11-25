@@ -9,6 +9,8 @@ services:
       FAST_API_BASE_URL: http://fastapi:8000
       AI_INTERNAL_KEY: ${AI_INTERNAL_KEY:?Set AI_INTERNAL_KEY}
       AI_MAX_CONCURRENT: ${AI_MAX_CONCURRENT:-2}
+      # PT-85: FastAPI(/v1/agent/chat)를 먼저 배포한 뒤 켠다. false면 모든 역할이 기존 /v1/chat 경로
+      AI_AGENT_ENABLED: ${AI_AGENT_ENABLED:-false}
       DEV_LOGIN: "false"
       APP_ALLOWED_ORIGINS: ${APP_ALLOWED_ORIGINS:?Set the Spring public HTTPS origin}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}

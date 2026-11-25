@@ -5,6 +5,17 @@ import pytest
 from app.clients import ollama_client
 
 
+LONG_ID_CHARS = 100
+
+
+def pytest_make_parametrize_id(config, val, argname):
+    # Windows caps one environment variable at 32767 characters and pytest stores the test id in
+    # PYTEST_CURRENT_TEST, so a parameter like "가" * 8000 (escaped as 가...) cannot run. Only the id changes.
+    if isinstance(val, str) and len(val) > LONG_ID_CHARS:
+        return f"{val[:8]}...len{len(val)}"
+    return None
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
@@ -16,7 +27,9 @@ def isolate_models(monkeypatch):
                  "LLM_PROVIDER", "MODEL_NAME", "OLLAMA_MODEL", "MODEL_BASE_URL",
                  "OLLAMA_BASE_URL", "EMBEDDING_MODEL", "EMBEDDING_DIMENSIONS",
                  "OPENAI_MODEL", "OPENAI_EMBEDDING_MODEL", "OPENAI_BASE_URL",
-                 "OPENAI_MAX_COMPLETION_TOKENS"):
+                 "OPENAI_MAX_COMPLETION_TOKENS", "AGENT_DEADLINE_SECONDS", "LANGSMITH_TRACING",
+                 "LANGCHAIN_TRACING_V2", "LANGSMITH_TRACING_V2", "LANGCHAIN_TRACING",
+                 "LANGSMITH_API_KEY", "LANGCHAIN_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("AI_INTERNAL_KEY", "pt26-test-key")
     monkeypatch.setenv("MODEL_PROVIDER", "ollama")
