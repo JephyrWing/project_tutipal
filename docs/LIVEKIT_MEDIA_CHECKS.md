@@ -1,15 +1,28 @@
 # PT-65 실제 LiveKit 미디어 검사
 
-## PT-114 종료 회귀 진단
+## PT-114 종료 회귀 보완
 
 PT-30 병합 07c483a의 CI45551908245에서 기존 Disconnected 조건이20초 안에 충족되지 않았다.
-기존 조건과 timeout을 유지하며, 테스트 정리의 room.disconnect() 호출 **전**에 SDK 상태/이벤트,
+진단 source `9b9e01b669f59fd2102c316e57727ef9672e64a3`의
+[실패 시점 JSON](https://github.com/JephyrWing/project_tutipal/actions/runs/45570917461/artifacts/15002386202)에서
+SDK는 reconnecting이었지만 실제 참가자0·옛매핑409·원격참가자0·로컬트랙 없음이 확인되었다.
+서버 권한 회수와 독립 SDK의 자동 재시도 종료 시점을 혼동한 검사 구성이 간헐 실패의 원인이다.
+Spring 내부 소켓/참가자 제거의 정확한 실행 순서는 직접 계측하지 않았다.
+
+주입 SDK에만 `reconnectPolicy.nextRetryDelayInMs=()=>null`을 지정한다. 신호 연결을 잃으면 재시도하지 않고
+기존20초 내 Disconnected 이벤트와 상태를 요구한다. 서버 참가자 수를 별도로 조회해 도움종료 후0명,
+학생 로그아웃 직후에는 교사만1명임을 필수 검증하고, 이전 매핑의409/401 거절도 요구한다.
+제품 SDK 재접속 정책은 변경하지 않으며 이 검사는 기본 SDK 재시도 경로의 검증 증거가 아니다.
+제품 UI 재접속·권한 재승인 검사는 `HELP_ACCESS_CHECKS.md` 등의 별도 범위로 유지한다.
+
+테스트 정리의 room.disconnect() 호출 **전**에 SDK 상태/이벤트,
 실제 LiveKit 참가자 수, 기존 매핑의 Spring HTTP 상태를 JSON으로 첨부한다.
 서버 참가자 조회의 관리자 JWT는 Node에서만 매 실행의 일회용 키로 서명하고 renderer/보고서에 노출하지 않는다.
 조회 실패는 null/unavailable이며 참가자0으로 간주하지 않는다.
 간헐성을 확인하기 위해 고유2사례를 각각3회 실행한다(수집/실행 예정6, 고유기능2).
 자동 retry는0이고, 실패를 삭제하거나 반복 성공만 선택하지 않는다.
-이 단계는 진단 추가이며 실제 참가자 제거 실패 또는 SDK 대기의 원인을 아직 확정하지 않는다.
+진단 JSON은 실제 파일로 저장한 뒤 첨부한다. 이전 JUnit 전용 보고서에서 메모리 첨부가 누락된 실행과
+과거 실패는 Jira PT-114에 보존하며 새 성공으로 소급 변경하지 않는다.
 
 FR-SHR-04·06 / NFR-SEC-04 / AC-SHARE-001-3 중 단일 CI runner의 실제 SDK·미디어 경로를 확인한다.
 U4 합성 제어 서버 검사는 `HELP_ACCESS_CHECKS.md`에 별도로 보존한다.

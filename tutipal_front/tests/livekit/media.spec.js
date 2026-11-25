@@ -82,7 +82,10 @@ async function connect(app, help) {
   const connected = await app.page.evaluate(async grant => {
     const L = window.LivekitClient
     L.setLogLevel('silent')
-    const room = new L.Room({ adaptiveStream: false, dynacast: false })
+    // This fixture measures server revocation, not the SDK's retry backoff.
+    // A lost signal must finish this connection; product reconnect tests are separate.
+    const room = new L.Room({ adaptiveStream: false, dynacast: false,
+      reconnectPolicy: { nextRetryDelayInMs: () => null } })
     const m = window.pt65Media = { room, videos: [], tracks: [], unsubscribed: 0, disconnected: false }
     room.on(L.RoomEvent.Disconnected, () => { m.disconnected = true })
     room.on(L.RoomEvent.TrackUnsubscribed, track => {
@@ -188,6 +191,7 @@ test('PT65 real LiveKit decodes generated video and help end removes both connec
   expect((await api(c.teacher, `/api/help/${c.help.id}/end`, 'POST')).status).toBe(204)
   await disconnected(c.student, old, testInfo, 'student-end')
   await disconnected(c.teacher, teacherGrant, testInfo, 'teacher-end')
+  await expect.poll(() => participantCount(old.room)).toBe(0)
   expect((await api(c.student, old.url + '/rtc/validate')).status).toBe(409)
   expect((await api(c.student, `/api/help/${c.help.id}/token`, 'POST')).status).toBe(409)
   expect((await api(c.teacher, `/api/sessions/${c.room.id}/end`, 'POST')).status).toBe(200)
@@ -201,6 +205,8 @@ test('PT65 logout removes the real publisher and re-login cannot reuse its old m
   await decoded(c.teacher, testInfo)
   expect((await api(c.student, '/logout', 'POST')).status).toBe(204)
   await disconnected(c.student, old, testInfo, 'student-logout')
+  // The teacher is still authorized here; only the logged-out student is removed.
+  await expect.poll(() => participantCount(old.room)).toBe(1)
   await expect.poll(() => c.teacher.page.evaluate(() => window.pt65Media.room.remoteParticipants.size)).toBe(0)
   // SDK 2.24.1 disables remote tracks instead of ending reusable transceivers.
   // Require both the unsubscribe event and all actual received tracks disabled.
@@ -212,5 +218,7 @@ test('PT65 logout removes the real publisher and re-login cannot reuse its old m
   expect((await api(c.student, old.url + '/rtc/validate')).status).toBe(401)
   expect((await api(c.teacher, `/api/help/${c.help.id}/end`, 'POST')).status).toBe(204)
   await disconnected(c.teacher, teacherGrant, testInfo, 'teacher-logout-help-end')
+  await expect.poll(() => participantCount(old.room)).toBe(0)
+  expect((await api(c.teacher, teacherGrant.url + '/rtc/validate')).status).toBe(409)
   expect((await api(c.teacher, `/api/sessions/${c.room.id}/end`, 'POST')).status).toBe(200)
 })
