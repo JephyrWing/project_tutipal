@@ -142,6 +142,7 @@ public class StudySessionService {
     /** 세션 종료: 새 참여 · 세션 챗봇이 막힌다. 여러 번 불러도 같음. */
     @Transactional
     public SessionResponse end(Long userId, Long sessionId) {
+        lockForHelp(sessionId);
         requireTeacher(sessionId, userId);
         StudySession session = findSession(sessionId);
         if (!session.isEnded()) {
@@ -157,6 +158,7 @@ public class StudySessionService {
      */
     @Transactional
     public void leave(Long userId, Long sessionId) {
+        lockForHelp(sessionId);
         SessionParticipant me = requireParticipant(sessionId, userId);
         if (me.isTeacher()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "선생님은 나갈 수 없어요. 방 닫기를 써 주세요");
@@ -167,6 +169,7 @@ public class StudySessionService {
     /** FR-SES-07 선생님이 학생 내보내기. 내보낸 학생 화면에는 removed 알림. 다시 코드로 참여하는 것은 막지 않는다. */
     @Transactional
     public void kick(Long teacherId, Long sessionId, Long studentId) {
+        lockForHelp(sessionId);
         requireTeacher(sessionId, teacherId);
         SessionParticipant target = participants.findBySessionIdAndUserId(sessionId, studentId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "참가자를 찾을 수 없어요"));
@@ -207,6 +210,12 @@ public class StudySessionService {
         SessionRole role = requireParticipant(sessionId, userId).getRole();
         requireActive(sessionId);
         return role;
+    }
+
+    /** Serialize help/chat writes with close, leave and kick. Check access separately. */
+    @Transactional
+    public void lockForHelp(Long sessionId) {
+        sessions.lockById(sessionId);
     }
 
     /** 다른 도메인(quiz)용: 그 세션의 선생님인지 확인 (아니면 404 · 403). */
