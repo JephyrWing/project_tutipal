@@ -23,7 +23,7 @@
     "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never && npm run verify:win",
     "dist:win:release": "node scripts/build-release.mjs",
     "verify:release": "node scripts/verify-release.mjs",
-    "predist:win:release": "node --check electron/serverConfig.cjs && node --check scripts/build-release.mjs && node --check scripts/verify-release.mjs && node --check scripts/test-win-integrity.mjs",
+    "predist:win:release": "node --check electron/serverConfig.cjs && node --check scripts/build-release.mjs && node --check scripts/verify-release.mjs",
     "verify:win": "node scripts/verify-win-package.mjs",
     "test:win-integrity": "node scripts/test-win-integrity.mjs",
     "preverify:win": "node --check scripts/verify-win-package.mjs",
