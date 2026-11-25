@@ -2,6 +2,7 @@
 
 - Jira: PT-83 [AI-001] LangGraph 도입 경계(A안) · 요구사항 NFR-SEC-11
 - 결정: 2026-11-22, PL 전설민 (A안 확정)
+- 2026-11-25 PT-85 §6·§7 추가 (Agent 컨텍스트 계약, `/v1/agent/chat` 요청·응답)
 - 이 결정을 따르는 카드: PT-84 기존 문항 변형·자동 검증(맹동영), PT-53 오답 복습 진입(김동현), PT-85 수업 학생·개인 학습 Agent와 학생 변형 도구 연동(전설민), PT-86 기능별 RAG·자료 청킹(전설민), PT-16 대화 저장(전설민), PT-45 화면 텍스트 추출(김동현), PT-29 임베딩 입력(김동현)
 - 계약을 바꿀 때는 이 문서를 먼저 고치고, 관련 카드에 댓글로 알린 뒤 구현한다.
 
@@ -54,11 +55,11 @@ Spring의 pgvector 코사인 검색을 비교 기준으로 삼는다. [PT-86](ht
 
 - `state`는 FastAPI가 만든 JSON이다. Spring은 내용을 해석하지 않고 그대로 돌려준다. 다만 크기 상한(64KB)과 반복 횟수는 Spring이 센다.
 - 튜터 답변은 마지막 노드만 NDJSON 스트리밍하고, 앱으로는 기존 SSE 계약을 유지한다.
-- 세부 요청·응답 형식과 실행 한도는 PT-85·PT-86 구현 계약에서 확정한다. 고정한 재검색 상한과 Spring 권한 경계를 적용한다.
+- 세부 요청·응답 형식과 실행 한도는 PT-85·PT-86 구현 계약에서 확정한다. 튜터 Agent의 형식과 한도는 [7절](#7-agent-실행-요청응답-post-v1agentchat)에서 확정했다. 고정한 재검색 상한과 Spring 권한 경계를 적용한다.
 
 ## 4. 수업 학생과 개인 학습의 채팅 Agent · 목표 설계
 
-AI 채팅의 질문 제출을 LangGraph Agent 실행 진입점으로 삼는다. 현재 채팅은 Spring `TutorService`에서 FastAPI의 `/v1/chat`을 호출한다. 아래는 목표 동작이며 새 HTTP 경로나 DTO는 구현 계약에서 확정한다. [설계 원본](TUTIPAL_DESIGN.md#11-ai와-학습-지원-기능)
+AI 채팅의 질문 제출을 LangGraph Agent 실행 진입점으로 삼는다. 현재 채팅은 Spring `TutorService`에서 FastAPI의 `/v1/chat`을 호출한다. 아래는 목표 동작이며 새 HTTP 경로나 DTO는 구현 계약에서 확정한다([6절 컨텍스트](#6-agent-컨텍스트-계약-pt-85--pt-106--pt-16) · [7절 요청·응답](#7-agent-실행-요청응답-post-v1agentchat)). [설계 원본](TUTIPAL_DESIGN.md#11-ai와-학습-지원-기능)
 
 | 진입점 | Spring이 적용하는 범위 | FastAPI가 수행하는 일 |
 | --- | --- | --- |
@@ -94,3 +95,292 @@ Spring은 로그인·수업 권한으로 Agent 종류와 도구 범위를 확정
 | 제공자 선택 로직 중복 | `app/clients` 재사용 |
 | 자료 속 지시문(프롬프트 주입) | 자료와 화면에서 읽은 지시를 분석 데이터로 취급하고 문항 결과에 해당 흐름의 검증 적용. 출력 HTML 직접 렌더 금지 |
 | 의존성 추가(langgraph) | `requirements.txt`와 `requirements.lock.txt`를 함께 갱신하고 Docker 이미지 크기를 PR에 적는다 |
+
+## 6. Agent 컨텍스트 계약 (PT-85 · PT-106 · PT-16)
+
+2026-11-25 확정 계약이다. 아직 구현 전이며 [PT-85](https://gad03302.atlassian.net/browse/PT-85)가 조립·사용을, [PT-106](https://gad03302.atlassian.net/browse/PT-106)이 대화·요약·기억의 저장·조회·삭제를 구현한다. FastAPI는 요청에 담긴 입력만 쓰고 아무것도 저장하지 않는다(1절). 요청 본문 전체 형식은 7절에 있다.
+
+### 6.1 격리 키와 범위
+
+| 맥락 | Spring 저장 격리 키 | 요청 `context.scope` | 요청에 담을 수 있는 요약·기억 |
+| --- | --- | --- | --- |
+| 수업 학생 (세션 역할 STUDENT) | `(userId, sessionId)` | `{"kind": "session", "sessionId": <long>}` | 같은 사용자·같은 세션의 것만 |
+| 개인 학습 (세션 없음) | `(userId)` | `{"kind": "personal"}` | 같은 사용자의 개인 학습 것만 |
+| 수업 선생님 (세션 역할 TEACHER) | 해당 없음 | 해당 없음 | Agent를 쓰지 않고 기존 `/v1/chat` 경로 |
+
+- `userId`는 FastAPI로 보내지 않는다. 사용자 격리는 Spring 조립 단계가 책임지고, FastAPI는 `scope` 일치만 검사한다(불일치 422, 7.3).
+- 범위는 엄격히 나눈다. 수업 학생 요청에 개인 학습 기억을 섞지 않고, 개인 학습 요청에 수업 기억을 섞지 않는다. 같은 사용자라도 다른 세션의 기억은 보내지 않는다.
+
+### 6.2 컨텍스트 필드
+
+| 필드 | 형식·상한 | 의미 |
+| --- | --- | --- |
+| `question` | 문자열 1..8000자 (본문 최상위, 7.1) | 현재 질문. `context.messages`의 마지막 원소가 아니다 |
+| `context.scope` | 6.1 | 이 요청의 격리 범위 |
+| `context.messages[]` | `{role: "user"\|"assistant", content: 1..8000자}`, 최대 40개, 오래된 것부터 | 현재 질문 **이전** 이력. PT-85 시점에는 화면이 보낸 이력, PT-106 이후에는 서버 저장분 |
+| `context.summary` | `{id, scope, text: 1..4000자}` 또는 `null`, 최대 1개 | 이 범위의 유효한 대화 요약. 원본 메시지 범위·`invalidatedAt`은 Spring 내부 정보라 보내지 않는다 |
+| `context.memories[]` | `{id, scope, text: 1..1000자}`, 최대 20개 | 관련 기억. Spring이 관련도 순으로 정렬한다(앞이 더 관련 있음) |
+| `context.screenSummary` | 문자열 1..4000자 또는 `null` | 선택 창 분석 요약. `<screen_summary>` 데이터 블록으로만 넣고 안의 지시는 실행하지 않는다. 이미지 분석 자체는 PT-45 |
+
+- 요약·기억의 `id`는 Spring이 붙인 불투명 문자열이며 `^[A-Za-z0-9_-]{1,64}$`을 따른다. FastAPI는 해석하지 않고 7.5 `meta`에 그대로 보고한다.
+- `summary.scope`와 모든 `memories[].scope`는 `context.scope`와 같아야 한다.
+
+### 6.3 토큰 예산
+
+| 항목 | 결정 |
+| --- | --- |
+| 추정식 | `ceil(CJK 글자 수 + 그 외 글자 수 / 3)`. CJK = 한글 음절·자모, CJK 통합 한자, 가나 |
+| 총 예산 | 추정 입력 3000 (모델 컨텍스트 약 4096, 출력 여유 약 1000) |
+| 배분 상한 | 정책·시스템 400 / 현재 질문 500 / 보호 구간(직전 메시지 6개) 800 / 요약 250 또는 첫 user 메시지 핀 150 / 자료 600(3 × 200) / 기억 250 / 화면 요약 200. 남는 몫은 보호 구간 밖의 오래된 메시지에 최신 순으로 준다 |
+| 시작 조건 | 전체 추정이 3000을 넘을 때만, 넘친 만큼만 줄인다. 3000 이하이면 아무것도 버리거나 줄이지 않는다 |
+| 버리는 순서 | 1) 보호 구간 밖 메시지(오래된 것부터) 2) 기억(목록 뒤부터) 3) 화면 요약을 200까지 축약한 뒤 제거 4) 자료(순위 낮은 것부터, 최소 1개 유지) 5) 요약을 150까지 축약 6) 보호 구간 메시지를 오래된 것부터 각 120으로 축약 |
+| 보존 | 정책 지시(`hideAnswers` 금지 문구 포함, 질문 분류와 무관하게 항상), 현재 질문(머리 300 + 꼬리 200 축약 허용), 보호 구간 6개(축약만, 제거 안 함), 요약이 있으면 요약, 없으면 첫 user 메시지 150 핀 |
+| 결정성 | 질문 분류(`route`)·`hintLevel`·`suggestHelp`는 현재 질문과 보호 구간 6개의 **축약 전 원문**으로만 계산한다. 보호 구간이 같으면 대화 길이·요약·기억과 무관하게 같은 결과 |
+| 턴 안 요약 | 턴 안에서 요약·기억을 만들지 않는다(추가 LLM 호출 금지). 넘치면 위 순서대로 버리고 줄이기만 한다 |
+
+### 6.4 응답 보고
+
+정상 종료의 마지막 줄 `{"meta": {...}}`(7.5)에 아래를 담는다.
+
+| 필드 | 의미 |
+| --- | --- |
+| `meta.context.estimatedInputTokens` | 최종 지시문 전체의 추정 토큰 수 |
+| `meta.context.budget` | 적용한 총 예산 (3000) |
+| `meta.context.dropped` | `{messages, memories, materials, screenSummary}` 버린 개수. `screenSummary`는 0 또는 1 |
+| `meta.context.truncated[]` | 축약한 항목 이름. `question`, `protected`, `summary`, `pin`, `screenSummary`, `materials` 중에서 |
+| `meta.usedMemoryIds[]` | 지시문에 실제로 넣은 기억 id. 요청 `memories[].id`의 부분집합 |
+| `meta.usedSummaryId` | 넣은 요약의 id (요청 `summary.id`) 또는 `null` |
+
+### 6.5 요약·기억의 생성과 저장 주체
+
+| 일 | 주체 |
+| --- | --- |
+| 대화 메시지·요약·기억 저장·조회·삭제 | Spring (PT-106). 격리 키는 6.1 |
+| 요약 계산 | Spring이 턴 밖에서(예: 메시지가 쌓였을 때) 예약 경로 `POST /v1/agent/summarize`를 호출하고 결과를 저장. FastAPI는 무상태 |
+| 기억 생성 기준 | PT-106이 정한다. 같은 scope 규칙(6.1)을 따르고, 요청에는 `{id, scope, text}`만 실린다 |
+| 요약 원본 범위 | Spring이 요약마다 원본 메시지 범위(예: 처음·마지막 메시지 id)를 내부에 저장해 6.6 무효화에 쓴다 |
+
+`/v1/agent/summarize`는 경로와 입출력만 예약하고 구현은 PT-106에서 한다. 공통 규칙(`internal_only`, 4.5MB, `extra="forbid"`, 본문 비로그)을 그대로 따른다.
+
+| 방향 | 형식 |
+| --- | --- |
+| 요청 | `{"scope": <6.1 scope>, "messages": [{role, content}] (1..40개, 각 ≤8000자), "previousSummary": 문자열 ≤4000자 (선택)}` |
+| 응답 | `{"summary": "<text ≤4000자>"}` (스트리밍 아님) |
+
+### 6.6 삭제 반영
+
+| 사건 | 반영 |
+| --- | --- |
+| 기억 삭제 | 즉시 조립 대상에서 빠진다. 소프트 삭제라면 조회에서 `deletedAt IS NULL` 조건으로 거른다 |
+| 메시지 삭제 | 같은 트랜잭션에서, 그 메시지를 원본 범위에 포함한 요약에 `invalidatedAt`을 기록한다. 무효 요약은 다시 보내지 않는다 |
+| 대화 삭제 | 그 대화의 메시지와 요약을 삭제한다 |
+| 조립 | `AgentContextAssembler`는 무효 요약·삭제 기억·범위가 다른 기억을 보내지 않는다. 턴 사이 캐시를 두지 않고 요청마다 조회한다 |
+| FastAPI | 무상태. 요청에 없는 기억·요약을 쓸 방법이 없고, `usedMemoryIds` ⊆ 요청 id를 테스트로 확인한다 |
+
+### 6.7 PT-85 시점 구현과 PT-106 교체점
+
+| 구성 | PT-85 | PT-106 |
+| --- | --- | --- |
+| `ConversationMemory` 포트 (Spring) | 입력: 사용자, scope, 현재 질문. 출력: 유효한 요약 0..1개, 관련도 순 기억 0..20개 | 포트 구현을 저장소 기반으로 교체 |
+| 기본 구현 `NoStoredConversationMemory` | 요약·기억 없음을 돌려준다 (`@Component` 기본) | 새 구현으로 대체 |
+| `context.messages` 출처 | 화면이 보낸 `ChatRequest.messages`에서 마지막 user 원소를 뺀 나머지 | 서버 저장 메시지로 바꿀 수 있음 (같은 형식·상한) |
+| `AgentContextAssembler` | 포트 결과와 이력을 6.2 형식으로 조립 | 변경 없이 재사용 |
+
+Java 메서드 이름·시그니처는 PT-85 구현 PR에서 정하고, 위 입출력 의미는 바꾸지 않는다.
+
+### 6.8 `state` 제한
+
+`need_search`의 `state`(3절)에는 기억·요약·자료 원문을 넣지 않는다. FastAPI는 버전이 붙은 내부 모델로 `state`를 다시 검증하며(실패 시 422), 크기는 UTF-8 JSON 기준 65,536바이트 이하다.
+
+## 7. Agent 실행 요청·응답 (POST /v1/agent/chat)
+
+2026-11-25 확정 계약이며 아직 구현 전이다. 기존 `/v1/chat`은 바꾸지 않는다. 이 경로는 `internal_only`(내부 키 없으면 401), `InferenceBodyLimit`(4.5MB 초과 413), 모든 수준에서 Pydantic `extra="forbid"`(422)를 적용한다. 422 본문에는 입력 원문을 넣지 않는다. 필드 이름은 모두 camelCase이며, 예외는 PT-84 결과를 그대로 싣는 `variant.failure_reasons` 하나다(7.5).
+
+### 7.1 요청 본문
+
+| 필드 | 형식·상한 | student | personal |
+| --- | --- | --- | --- |
+| `agent` | `"student"` \| `"personal"` | 필수 | 필수 |
+| `question` | 문자열 1..8000자 | 필수 | 필수 |
+| `policy.topic` | 문자열 1..30자 | 세션 설정 | 화면 주제 |
+| `policy.difficulty` | 정수 1..5 | 세션 설정 | 요청값 |
+| `policy.hideAnswers` | 불리언 | 세션 설정 | `false` 고정 |
+| `policy.preferMaterials` | 불리언 | 세션 설정 | `false` 고정 |
+| `allowedTools[]` | 7.2 이름, 중복 없음 | `answer_question` 필수 + 선택 | `["answer_question"]`만 |
+| `context` | 6.2 (`scope`, `messages`, `summary`, `memories`, `screenSummary`) | 필수, `scope.kind="session"` | 필수, `scope.kind="personal"` |
+| `materials[]` | 최대 3개, 각 `{id, source, page?, content}` | 선택 | 빈 목록만 |
+| `materials[].id` | `^[A-Za-z0-9_-]{1,64}$`, Spring이 붙인 불투명 id | | |
+| `materials[].source` | 문자열 1..120자 (출처 표시명) | | |
+| `materials[].page` | 정수 ≥1 또는 생략 | | |
+| `materials[].content` | 문자열 1..1500자 | | |
+| `variantSource` | PT-84 `OriginalQuestion` 그대로 (`type` CHOICE/TEXT, `question`, `choices`, `answerIndex`, `modelAnswer`) 또는 `null`. 학생 답안 필드 없음 | `question_variant`와 짝 | `null`만 |
+| `search.round` | 정수 0..2 | 필수 | `0`만 |
+| `search.state` | 객체 ≤65,536바이트 또는 `null` | `round>0`이면 필수, `round=0`이면 `null` | `null`만 |
+
+Spring 매핑: `ChatRequest.messages`의 마지막 원소(role `user`)가 `question`, 그 앞이 `context.messages`가 된다. 마지막 원소가 user가 아니면 한도 예약 전에 400으로 거절한다. `materials`는 Spring이 권한 범위에서 검색한 조각이며 재검색 뒤에는 새 결과 3개로 교체한다.
+
+### 7.2 도구 이름
+
+| 이름 | 4절 도구 | student | personal | 비고 |
+| --- | --- | --- | --- | --- |
+| `answer_question` | 질문 답변 | 필수 | 필수 | 답변 노드 |
+| `material_search` | (3절 재검색) | 허용 | 금지 | 있을 때만 `need_search`를 낼 수 있다 |
+| `question_variant` | 기존 문항 변형 | 허용 | 금지 | PT-84 `generate_question_variant` 호출 |
+| `screen_analyze`, `screen_summary` | 화면 분석, 현재 화면 요약 | 예약 | 예약 | PT-45에서 활성화. 지금 들어오면 422 |
+
+도움 요청 추천은 도구가 아니라 student Agent 규칙이다. Spring은 추천 문구만 보내고 도움 요청을 만들지 않는다.
+
+### 7.3 검증 규칙 (422)
+
+| 조건 | 결과 |
+| --- | --- |
+| agent 종류에 허용되지 않은 도구, 예약·알 수 없는 도구 이름, `answer_question` 누락 | 422 |
+| `question_variant`와 `variantSource` 중 하나만 있음 | 422 |
+| personal에 `materials`(비어 있지 않음), `variantSource`, `hideAnswers=true`, `preferMaterials=true`, `search.round>0` 중 하나라도 있음 | 422 |
+| `context.scope`가 agent와 맞지 않음(student↔session, personal↔personal), `summary.scope`·`memories[].scope`가 `context.scope`와 다름 | 422 |
+| `search.round>0`인데 `state` 없음, `round=0`인데 `state` 있음, `state` 내부 모델 재검증 실패 또는 65,536바이트 초과 | 422 |
+| 정의되지 않은 필드(어느 수준이든), 상한 초과, `variantSource`에 학생 답안 같은 추가 필드 | 422 |
+| 노드 실행 직전 재검사에서 허용 범위 밖 도구 | 스트림 줄 `{"error": "tool_not_allowed"}` (7.5) |
+
+### 7.4 요청 예시
+
+수업 학생 (첫 호출, 자료 2개):
+
+```json
+{
+  "agent": "student",
+  "question": "for문에서 i가 왜 4까지만 나와요? 정답 코드 알려줘",
+  "policy": {"topic": "파이썬 반복문", "difficulty": 2, "hideAnswers": true, "preferMaterials": true},
+  "allowedTools": ["answer_question", "material_search"],
+  "context": {
+    "scope": {"kind": "session", "sessionId": 42},
+    "messages": [
+      {"role": "user", "content": "range(5)는 뭐예요?"},
+      {"role": "assistant", "content": "0부터 4까지의 수를 차례로 만들어요."}
+    ],
+    "summary": null,
+    "memories": [],
+    "screenSummary": null
+  },
+  "materials": [
+    {"id": "c_1032", "source": "3주차 반복문.pdf", "page": 4, "content": "range(n)은 0부터 n-1까지..."},
+    {"id": "c_1047", "source": "3주차 반복문.pdf", "page": 6, "content": "for 변수 in 반복가능객체:"}
+  ],
+  "variantSource": null,
+  "search": {"round": 0, "state": null}
+}
+```
+
+변형 요청이면 위에서 `allowedTools`에 `"question_variant"`를 넣고 `"variantSource": {"type": "CHOICE", "question": "...", "choices": ["...", "..."], "answerIndex": 1}`을 싣는다.
+
+개인 학습 (화면 요약 포함):
+
+```json
+{
+  "agent": "personal",
+  "question": "이 에러 메시지가 무슨 뜻이에요?",
+  "policy": {"topic": "자바", "difficulty": 3, "hideAnswers": false, "preferMaterials": false},
+  "allowedTools": ["answer_question"],
+  "context": {
+    "scope": {"kind": "personal"},
+    "messages": [],
+    "summary": {"id": "s_77", "scope": {"kind": "personal"}, "text": "자바 컬렉션을 복습 중이다."},
+    "memories": [{"id": "m_301", "scope": {"kind": "personal"}, "text": "제네릭 문법을 어려워한다."}],
+    "screenSummary": "IDE 화면. NullPointerException at Main.java:12"
+  },
+  "materials": [],
+  "variantSource": null,
+  "search": {"round": 0, "state": null}
+}
+```
+
+### 7.5 NDJSON 응답 줄
+
+| 줄 | 언제 | Spring 처리 |
+| --- | --- | --- |
+| `{"ping": true}` | 출력이 없는 구간(판단·변형)에서 10초마다 | 연결 확인만. SSE로 보내지 않는다 |
+| `{"start": {"materialIds": ["c_1032"]}}` | 첫 `delta` 직전 1회. 실제 지시문에 넣은 자료 id (없으면 `[]`) | 그 id의 출처만 `sources`로 한 번 보낸다. `[]`이면 `sources` 없음 |
+| `{"delta": "..."}` | 답변 조각 | SSE `delta {"t"}` |
+| `{"status": "need_search", "query": "...", "state": {...}}` | `delta` 전에만, 그 응답의 마지막 줄. `search.round<2`이고 `material_search` 허용일 때만 | 3절 재검색 후 `round+1`, `state`, 새 `materials`로 다시 호출 |
+| `{"variant": {"status": "ok", "attempts": n, "variant": {...}}}` 또는 `{"variant": {"status": "failed", "attempts": n, "failure_reasons": [...]}}` | 변형 도구를 실행한 턴, `delta` 전 1회. PT-84 `VariantResult` 그대로(정답·해설 포함) | 내부 전용. 원본을 SSE로 보내지 않고 정책을 적용해 렌더(7.7) |
+| `{"meta": {...}}` | 정상 종료의 마지막 줄 | 로그 한 줄과 SSE `agent` 이벤트 재료 |
+| `{"error": "llm_unavailable" \| "agent_timeout" \| "tool_not_allowed"}` | 실패 종료의 마지막 줄 | SSE `error {"message"}` (사용자 문구는 Spring) |
+
+`meta` 필드:
+
+| 필드 | 형식 | 의미 |
+| --- | --- | --- |
+| `agent` | `"student"` \| `"personal"` | 실행한 Agent |
+| `route` | `"concept"` \| `"answer_request"` \| `"answer_check"` \| `"code_debug"` \| `"variant"` | 규칙 분류 결과. 변형 도구를 실행한 턴은 `"variant"` |
+| `nodes[]` | 노드 이름 문자열 | 거친 경로. 노드 이름만 담고 질문·자료 원문은 넣지 않는다 |
+| `llmCalls` | 정수 | 이 요청에서 답변용 LLM 호출 수(일반 턴 1). 변형 내부 호출은 `variant.attempts`로 센다 |
+| `hintLevel` | 1..3 또는 `null` | student 단계 힌트 수준. personal과 변형 성공 턴은 `null` |
+| `suggestHelp` | 불리언 | 도움 요청 추천 여부. personal은 항상 `false` |
+| `searchRound` | 0..2 | 요청의 `search.round` |
+| `variant` | `null` \| `"ok"` \| `"failed"` | 변형 결과 요약 |
+| `retryable` | 불리언 | 변형 실패 후 재시도 안내를 붙일지. 변형이 없거나 `invalid_original`이면 `false` |
+| `context` | 6.4 | `estimatedInputTokens`, `budget`, `dropped`, `truncated` |
+| `usedMemoryIds[]`, `usedSummaryId` | 6.4 | 실제로 쓴 기억·요약 id |
+
+`need_search`로 끝나는 응답에는 `meta`가 없고 LLM을 호출하지 않는다.
+
+예시:
+
+```json
+{"meta": {"agent": "student", "route": "answer_request", "nodes": ["classify", "hint", "compose", "respond"], "llmCalls": 1, "hintLevel": 2, "suggestHelp": false, "searchRound": 0, "variant": null, "retryable": false, "context": {"estimatedInputTokens": 812, "budget": 3000, "dropped": {"messages": 0, "memories": 0, "materials": 0, "screenSummary": 0}, "truncated": []}, "usedMemoryIds": [], "usedSummaryId": null}}
+```
+
+줄 순서:
+
+| 경우 | 순서 (`ping`은 어디든 끼어들 수 있음) |
+| --- | --- |
+| 일반 답변 | `start` → `delta`… → `meta` |
+| 재검색 요청 | `need_search` (끝) |
+| 변형 성공 | `variant(ok)` → `meta` (변형 외 LLM 호출 없음) |
+| 변형 실패, 일반 답변 조건 충족 | `variant(failed)` → `start` → `delta`… → `meta` |
+| 변형 실패, 그 밖 | `variant(failed)` → `meta` |
+| 실패 | (`variant`) → (`start` → `delta`…) → `error` |
+
+### 7.6 변형 실패 처리와 한도 정산
+
+| 항목 | 규칙 |
+| --- | --- |
+| 실패 문항 | 실패 문항·정답·해설은 SSE 어디에도 없다 (PT-84 실패 결과에는 문항이 없다) |
+| 일반 답변 (LLM 1회) | 실패 사유가 검증 실패(`model_unavailable`·`invalid_original`이 아님)이고 첫 `delta` 마감까지 30초 이상 남았을 때. `hideAnswers`를 지키는 일반 답변을 스트리밍한다 |
+| 고정 안내 | 그 밖(`model_unavailable`, 남은 시간 30초 미만). FastAPI는 `delta` 없이 `meta`로 끝내고 Spring이 고정 안내 문구를 `delta`로 보낸다 |
+| 재시도 안내 | `meta.retryable=true`이면 Spring이 재시도 안내 문구를 `delta`로 덧붙인다. `invalid_original`이면 `retryable=false`, 안내 없음. 같은 `variantQuizId` 재요청은 새로 실행한다 |
+| 변형 시간 | 변형 도구는 남은 마감 시간 안에서 실행하고, 시간이 다하면 `agent_timeout`이 아니라 `variant(failed, model_unavailable)` 줄을 낸다 |
+| 한도 정산 (PT-97) | `variant` 줄(성공·실패) 또는 `delta`를 받은 턴은 CHAT 1회 차감 확정이다. 변형 실패 뒤 일반 답변까지 포함해 1회다. FastAPI 연결 실패처럼 `variant`·`delta` 전에 끝난 경우만 기존 규칙대로 반납한다. `ping`·`start`·`need_search`는 출력으로 세지 않는다 |
+
+### 7.7 Spring SSE 매핑
+
+기존 SSE 계약(`sources {"items"}` / `delta {"t"}` / `done` / `error {"message"}`)은 바꾸지 않고 `agent` 이벤트 하나를 추가한다. 화면은 모르는 이벤트를 무시하므로 프런트를 바꾸지 않아도 된다.
+
+| 순서 | SSE 이벤트 | 내용 |
+| --- | --- | --- |
+| 1 | `sources` (있으면) | `start.materialIds`에 해당하는 출처, 최대 3개 |
+| 2 | `delta` … | FastAPI 답변 조각, 그리고 Spring이 만든 사용자 문구: 변형 문항 텍스트(정책 적용), 도움 요청 추천 문구, 고정 안내·재시도 안내 |
+| 3 | `agent` | `{route, suggestHelp, variant, answerHidden, retryable}`. `done` 직전 1회. TEACHER 경로(기존 `/v1/chat`)에서는 보내지 않는다 |
+| 4 | `done` / 실패 시 `error` | 기존과 같음 |
+
+| `agent` 필드 | 의미 |
+| --- | --- |
+| `route`, `suggestHelp`, `retryable` | `meta` 값 |
+| `variant` | 정책 적용본 `{type, question, choices?, answerIndex?, modelAnswer?, explanation?}` 또는 `null`. `hideAnswers=true`이면 `type`, `question`, `choices`만 |
+| `answerHidden` | 정답·해설을 정책으로 숨겼는지. student는 `policy.hideAnswers`, personal은 `false` |
+
+- `hideAnswers=true`이면 변형 문항의 `answerIndex`·`modelAnswer`·`explanation`은 `delta`·`agent`를 포함해 SSE 어디에도 나가지 않는다. `false`이면 문제 뒤에 정답·해설 단락을 붙인다.
+- Spring `ChatRequest` 추가 필드: `variantQuizId`(Long, 선택. `sessionId` 없이 오면 400, TEACHER면 403, 접근 확인 조건은 PT-85 AC-12), `screenSummary`(문자열 ≤4000자, 선택). 거절은 모두 한도 예약 전에 HTTP로 나간다.
+
+### 7.8 실행 한도와 운영
+
+| 항목 | 한도·규칙 |
+| --- | --- |
+| 첫 `delta` 전 단계 (판단·변형) | FastAPI 호출마다 120초, `AGENT_DEADLINE_SECONDS`(기본 120). 넘으면 `{"error": "agent_timeout"}` |
+| 답변 스트리밍 | 기존 300초 상한 그대로 |
+| 재검색 | 최대 2회(FastAPI 호출 최대 3회). 3번째 `need_search`, `delta` 뒤 `need_search`, `state` 65,536바이트 초과, `query` 빈 값·500자 초과는 검색 없이 `error`. 재검색 전마다 Spring이 수업 권한을 다시 확인 |
+| `AiSlots` | 재검색 루프 전체에서 한 자리. `ticket.run` 하나 안에 `slots.run` 하나 |
+| AI 사용 한도 (PT-97) | 질문 하나 = CHAT 1회 (재검색·변형 포함), 정산은 7.6 |
+| 기능 플래그 | `app.ai.agent.enabled`(`AI_AGENT_ENABLED`)가 `false`면 모든 역할이 기존 `/v1/chat` 경로 |
+| 추적 | `LANGSMITH_TRACING` 또는 `LANGCHAIN_TRACING_V2`가 참이면 FastAPI가 시작을 거부한다(fail closed). Dockerfile은 `false`로 둔다 |
+| 로그 | Spring은 턴마다 한 줄(Agent 종류, 경로, 분류, 힌트, 추천, 도구, 재검색 횟수, 변형 결과, 소요 시간). FastAPI는 노드 이름·성공 여부·횟수만. 질문·검색어·자료·답안 원문은 남기지 않는다 |
