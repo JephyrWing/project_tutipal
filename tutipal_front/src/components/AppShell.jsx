@@ -6,6 +6,7 @@ import Mascot from './Mascot'
 const MENU = [
   { to: '/', icon: 'home', label: '홈', ready: true },
   { to: '/chat', icon: 'chat', label: '도우미 챗봇', ready: true },
+  { to: '/conversations', icon: 'talk', label: 'AI 대화 기록', ready: true, end: false },
   { to: '/review', icon: 'book', label: '복습 기록', ready: true },
   { to: '/stats', icon: 'chart', label: '학습 기록 (준비 중)', ready: false },
   { to: '/settings', icon: 'settings', label: '설정', ready: true },
@@ -22,7 +23,7 @@ export default function AppShell() {
         </div>
         {MENU.map((m) =>
           m.ready ? (
-            <NavLink key={m.to} to={m.to} end className="side-item" title={m.label} aria-label={m.label}>
+            <NavLink key={m.to} to={m.to} end={m.end ?? true} className="side-item" title={m.label} aria-label={m.label}>
               <Icon name={m.icon} />
             </NavLink>
           ) : (
