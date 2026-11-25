@@ -28,6 +28,30 @@ Jira PT-89(AI-007 효과 평가)와 PT-88(AI-006 주관식 채점 QLoRA)의 평�
 - 라벨은 작성자가 붙였다. **팀원이나 선생님 역할이 한 번 검토**한 뒤 기준 세트로 고정한다.
 - 이 20문제와 같은 문제는 **학습 데이터에 넣지 않는다**. 학습용 합성 데이터는 다른 문제로 만든다.
 
+### 학습 데이터 누수 검사
+
+학습 데이터(저장소 밖)를 dev 세트(`eval/grading_set.jsonl`)와, 있으면 저장소 밖 sealed 세트와 비교한다. 학습에 쓰기 전에 반드시 통과시킨다.
+
+```powershell
+.\.venv\Scripts\python.exe -m eval.leakcheck --train <train.jsonl> [--sealed <sealed.jsonl>]
+# 또는 환경 변수 TUTIPAL_GRADING_TRAIN / TUTIPAL_GRADING_SEALED
+```
+
+- 문항(Q1)·모범 답안(M1)·학생 답안(S1)의 정규화 후 유사도와, 꼼수 답안끼리 겹치는 문구 길이(T1)를 본다. 기준과 `rule_version`은 `eval/leakcheck.py` 맨 위에 있다. 정규화는 보이지 않는 문자(ZWSP 등)와 결합 부호도 지운다.
+- 트레이너는 `messages`로 학습하므로, 학습 행에 `messages`가 있으면 system을 뺀 메시지에 평가 세트의 문항·모범 답안·학생 답안이 통째로 들어 있는지도 본다(X1, 필드와 messages가 어긋난 행 대비). `messages`는 `role`·`content`가 문자열인 객체 목록이어야 한다. 꼼수 문구의 부분 겹침은 프롬프트 틀과 겹쳐 오탐이 나서 messages에는 적용하지 않는다.
+- 종료 코드 0 통과(검토 항목은 있어도 됨), 1 누수, 2 입력·출력 오류. 결과는 `results/leakcheck/leakcheck.json`. `--report`는 git이 무시하는 `results/` 아래를 권장하며, 다른 곳이면 경고만 한다(저장소 안에 쓰면 커밋하지 않게 주의).
+- 보고서에는 train-dev 쌍은 id와 점수, sealed가 낀 쌍(train-sealed, dev-sealed)은 실패한 id 쌍만(점수·이유·검토 항목 없음) 남기고, 학습·sealed 원문은 쓰지 않는다. id는 내용이 없는 식별자여야 한다(영문·숫자·`._-`, 128자 이하, 파일 안에서 중복 금지).
+- 검토 항목은 (규칙, 쌍)마다 상위 10개만 남기고, 전체 개수는 `review_total`에 있다.
+- sealed 검사는 **sealed 세트 관리자 또는 학습 직전 게이트에서만** 돌린다. sealed가 낀 쌍은 실패한 id 쌍만 남기고 점수·검토 항목은 쓰지 않는다(반복 실행으로 sealed 내용을 더듬지 못하게).
+- sealed 없이 돌린 결과(`sealed: not_checked`)는 dev만 본 참고용이다. `TUTIPAL_GRADING_SEALED`가 비어 있으면 경고만 하고 넘어간다.
+- 한계: 어순만 바꾼 문항은 유사도가 낮아 검토 항목으로만 잡힐 수 있다. 검토 목록은 사람이 본다.
+- `TUTIPAL_GRADING_TRAIN`을 설정하고 `pytest`를 돌리면 실제 학습 데이터 검사도 함께 한다(없으면 건너뜀).
+- 학습 직전 게이트(sealed 세트 관리자만, sealed 파일은 저장소 밖):
+
+  ```powershell
+  .\.venv\Scripts\python.exe -m eval.leakcheck --train <train_aug.jsonl> --sealed <sealed.jsonl> --report results/leakcheck
+  ```
+
 ## 준비
 
 ```powershell
