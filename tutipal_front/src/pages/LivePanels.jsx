@@ -8,6 +8,7 @@ import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
 import { createLiveRoomSession } from '../utils/liveRoomSession'
 import { createScreenShareSession } from '../utils/screenShareSession'
+import { watchHelpPeers } from '../utils/helpPeerPresence'
 import { createShareSourceCatalog } from '../utils/shareSourceCatalog'
 import HelpSharePicker from '../components/HelpSharePicker'
 import HelpChat from '../components/HelpChat'
@@ -332,6 +333,8 @@ function HelpSession({ help, refreshKey, onEnd }) {
   const [starting, setStarting] = useState(false)
   const [selected, setSelected] = useState(null)
   const [previewTrack, setPreviewTrack] = useState(null)
+  const [teacherConnected, setTeacherConnected] = useState(false)
+  const [peerNotice, setPeerNotice] = useState('')
   const selectedRef = useRef(null)
   selectedRef.current = selected
   const approvedSource = useRef(null)
@@ -346,12 +349,15 @@ function HelpSession({ help, refreshKey, onEnd }) {
     setShareError('')
     setSelected(null)
     setPreviewTrack(null)
+    setTeacherConnected(false)
+    setPeerNotice('')
     if (!room) return
+    let peers
     const control = createScreenShareSession({
       participant: room.localParticipant,
       requiresConsent: true,
       prepare: () => {
-        if (!help.shareScreen || room.state !== 'connected') return false
+        if (!help.shareScreen || room.state !== 'connected' || !peers?.hasPeer()) return false
         const source = selectedRef.current
         if (desktop && !source) throw new Error('공유할 창을 먼저 골라 주세요')
         approvedSource.current = source
@@ -366,8 +372,21 @@ function HelpSession({ help, refreshKey, onEnd }) {
       onSharing: setSharing,
       onError: (e) => setShareError(errText(e, '화면을 공유하지 못했어요')),
     })
+    peers = watchHelpPeers({
+      room, events: RoomEvent,
+      onChange: setTeacherConnected,
+      onLastPeerLeft: () => {
+        void control.stop()
+        approvedSource.current = null
+        setSelected(null)
+        setConsented(false)
+        setShareError('')
+        setPeerNotice('선생님 연결이 끊겨 화면 공유를 중지했어요. 다시 연결되면 창을 고르고 공유에 동의해 주세요')
+      },
+    })
     shareControl.current = control
     return () => {
+      peers.dispose()
       shareControl.current = null
       void control.dispose()
     }
@@ -410,6 +429,7 @@ function HelpSession({ help, refreshKey, onEnd }) {
     if (!control || !consented) return
     setStarting(true)
     setShareError('')
+    setPeerNotice('')
     await control.start(consented)
     if (shareControl.current === control) {
       setStarting(false)
@@ -419,19 +439,19 @@ function HelpSession({ help, refreshKey, onEnd }) {
 
   return (
     <div className="help-chip" style={{ flexWrap: 'wrap' }}>
-      <span className={`badge ${error || shareError || !room ? 'badge-warn' : 'badge-live'}`}>
-        <span className="dot" /> {error || shareError ? '도움 연결 오류' : room ? '선생님과 연결됨' : '도움 연결 중'}
+      <span className={`badge ${error || shareError || !room || !teacherConnected ? 'badge-warn' : 'badge-live'}`}>
+        <span className="dot" /> {error || shareError ? '도움 연결 오류' : !room ? '도움 연결 중' : teacherConnected ? '선생님과 연결됨' : '선생님 화면 연결을 기다리는 중'}
       </span>
       {help.shareScreen && !sharing && (
         <>
           {desktop && <HelpSharePicker desktop={desktop} disabled={starting || !room} selected={selected}
             onSelect={source => { setSelected(source); setConsented(false); setShareError('') }} onError={setShareError} />}
           <label className="check-row small">
-            <input type="checkbox" checked={consented} disabled={starting || !room || (!!desktop && !selected)}
+            <input type="checkbox" checked={consented} disabled={starting || !room || !teacherConnected || (!!desktop && !selected)}
               onChange={(e) => setConsented(e.target.checked)} />
             {desktop ? `선택한 ${selected?.id.startsWith('screen:') ? '전체 화면' : '창'}을 선생님에게 보여주는 데 동의해요` : '브라우저에서 고를 화면을 공유하는 데 동의해요'}
           </label>
-          <button className="btn btn-sm btn-primary" disabled={!room || !consented || starting || (!!desktop && !selected)}
+          <button className="btn btn-sm btn-primary" disabled={!room || !teacherConnected || !consented || starting || (!!desktop && !selected)}
             onClick={() => void startSharing()}>{starting ? '공유 준비 중…' : '화면 공유 시작'}</button>
         </>
       )}
@@ -444,6 +464,7 @@ function HelpSession({ help, refreshKey, onEnd }) {
       )}
       <button className="btn btn-sm" onClick={onEnd}>끝내기</button>
       <ConnectionNotice {...connection} />
+      {peerNotice && <span className="muted small">{peerNotice}</span>}
       {shareError && <span className="error-text small">{shareError}</span>}
       {!desktop && <span className="muted small">(그림 설명은 앱에서 보여요)</span>}
       <HelpChat helpId={help.id} refreshKey={refreshKey} partnerName="선생님" />
