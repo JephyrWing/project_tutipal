@@ -45,27 +45,55 @@ jobs:
             sleep 1
           done
           test "$ready" = true
+      - name: Start disposable PostgreSQL for RAG checks
+        # PT-86: separate database so the test can migrate to V19, insert a legacy chunk, then apply V20.
+        # Reuses the tutipal-review-postgres image built by the previous step (keep the step order).
+        shell: bash
+        run: |
+          set -euo pipefail
+          password=$(openssl rand -hex 24)
+          echo "::add-mask::$password"
+          echo "RAG_TEST_DB_PASSWORD=$password" >> "$GITHUB_ENV"
+          echo 'RAG_TEST_DB_URL=jdbc:postgresql://127.0.0.1:25437/tutipal_rag_e2e' >> "$GITHUB_ENV"
+          echo 'RAG_TEST_DB_ALLOW_RESET=disposable' >> "$GITHUB_ENV"
+          docker run --detach --rm --name "tutipal-rag-${GITHUB_RUN_ID}" \
+            -p 127.0.0.1:25437:5432 \
+            -e POSTGRES_DB=tutipal_rag_e2e -e POSTGRES_USER=tutipal_rag_e2e \
+            -e POSTGRES_PASSWORD="$password" tutipal-review-postgres
+          ready=false
+          for attempt in $(seq 1 30); do
+            if docker exec "tutipal-rag-${GITHUB_RUN_ID}" pg_isready -h 127.0.0.1 -U tutipal_rag_e2e -d tutipal_rag_e2e; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = true
       - name: Run real database checks
         working-directory: tutipal_back
         run: |
           chmod +x gradlew
-          ./gradlew reviewDbTest --no-daemon
+          ./gradlew reviewDbTest ragDbTest --no-daemon --continue
       - name: Publish actual database test counts
         if: always()
         run: |
           python3 - <<'PY'
           import glob, os, sys, xml.etree.ElementTree as ET
-          total = failed = skipped = 0
-          for path in glob.glob('tutipal_back/build/test-results/reviewDbTest/TEST-*.xml'):
-              root = ET.parse(path).getroot()
-              total += int(root.get('tests', 0))
-              failed += int(root.get('failures', 0)) + int(root.get('errors', 0))
-              skipped += int(root.get('skipped', 0))
-          summary = f'Review DB: collected={total} ran={total-skipped} failed={failed} skipped={skipped}'
-          print(summary)
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as out:
-              out.write(summary + '\n')
-          if total - skipped == 0 or failed or skipped:
+          bad = False
+          for label, task in (('Review DB', 'reviewDbTest'), ('RAG DB', 'ragDbTest')):
+              total = failed = skipped = 0
+              for path in glob.glob(f'tutipal_back/build/test-results/{task}/TEST-*.xml'):
+                  root = ET.parse(path).getroot()
+                  total += int(root.get('tests', 0))
+                  failed += int(root.get('failures', 0)) + int(root.get('errors', 0))
+                  skipped += int(root.get('skipped', 0))
+              summary = f'{label}: collected={total} ran={total-skipped} failed={failed} skipped={skipped}'
+              print(summary)
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as out:
+                  out.write(summary + '\n')
+              if total - skipped == 0 or failed or skipped:
+                  bad = True
+          if bad:
               sys.exit(1)
           PY
       - uses: actions/upload-artifact@v4
@@ -75,7 +103,11 @@ jobs:
           path: |
             tutipal_back/build/test-results/reviewDbTest
             tutipal_back/build/reports/tests/reviewDbTest
+            tutipal_back/build/test-results/ragDbTest
+            tutipal_back/build/reports/tests/ragDbTest
           retention-days: 14
-      - name: Stop this run's disposable database
+      - name: Stop this run's disposable databases
         if: always()
-        run: docker stop "tutipal-review-${GITHUB_RUN_ID}" || true
+        run: |
+          docker stop "tutipal-review-${GITHUB_RUN_ID}" || true
+          docker stop "tutipal-rag-${GITHUB_RUN_ID}" || true

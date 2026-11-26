@@ -6,6 +6,7 @@ import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -36,10 +37,18 @@ class MaterialIndexWorker {
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transaction;
     private final SessionEvents events;
+    /** PT-86: tutipal.materials.chunker. 새로 인덱싱하는 자료에만 적용되고 material_chunks.chunker 에 기록된다. */
+    private final String chunker;
 
     MaterialIndexWorker(MaterialRepository materials, MaterialObjectStore objects, MaterialTextExtractor extractor,
                         AiClient ai, AiSlots slots, JdbcTemplate jdbc, PlatformTransactionManager transactionManager,
-                        SessionEvents events) {
+                        SessionEvents events,
+                        @Value("${tutipal.materials.chunker:" + Chunker.CHAR_V1 + "}") String chunker) {
+        if (!Chunker.CHAR_V1.equals(chunker) && !Chunker.SECTION_V1.equals(chunker)) {
+            throw new IllegalArgumentException("tutipal.materials.chunker 는 " + Chunker.CHAR_V1 + " 또는 "
+                    + Chunker.SECTION_V1 + " 이어야 해요");
+        }
+        this.chunker = chunker;
         this.materials = materials;
         this.objects = objects;
         this.extractor = extractor;
@@ -96,12 +105,9 @@ class MaterialIndexWorker {
             };
         }
 
-        List<Chunk> chunks;
+        List<Chunker.Chunk> chunks;
         try {
-            chunks = extractor.extract(material.getFilename(), data).stream()
-                    .flatMap(page -> Chunker.split(page.text(), CHUNK, OVERLAP).stream()
-                            .map(content -> new Chunk(page.page(), content)))
-                    .toList();
+            chunks = chunk(extractor.extract(material.getFilename(), data));
         } catch (MaterialTextExtractor.InvalidPdf e) {
             return fail(material, e.getMessage(), false);
         }
@@ -134,24 +140,35 @@ class MaterialIndexWorker {
         for (int from = 0; from < chunks.size(); from += BATCH) {
             List<Object[]> rows = new ArrayList<>(BATCH);
             for (int i = from; i < Math.min(chunks.size(), from + BATCH); i++) {
-                Chunk chunk = chunks.get(i);
+                Chunker.Chunk chunk = chunks.get(i);
                 rows.add(new Object[] {id, material.getSessionId(), chunk.page(), chunk.content(),
-                        AiClient.pgVector(embedding.vectors().get(i)), embedding.model()});
+                        AiClient.pgVector(embedding.vectors().get(i)), embedding.model(), chunker});
             }
             jdbc.batchUpdate("""
-                    INSERT INTO material_chunks (material_id, session_id, page, content, embedding, embedding_model)
-                    VALUES (?, ?, ?, ?, ?::vector, ?)
+                    INSERT INTO material_chunks (material_id, session_id, page, content, embedding, embedding_model,
+                                                 chunker)
+                    VALUES (?, ?, ?, ?, ?::vector, ?, ?)
                     """, rows);
         }
         return material.getSessionId();
     }
 
-    private AiClient.EmbedResponse embed(List<Chunk> chunks) {
+    private List<Chunker.Chunk> chunk(List<AiClient.Page> pages) {
+        if (Chunker.SECTION_V1.equals(chunker)) {
+            return Chunker.split(pages);
+        }
+        return pages.stream()
+                .flatMap(page -> Chunker.split(page.text(), CHUNK, OVERLAP).stream()
+                        .map(content -> new Chunker.Chunk(page.page(), List.of(), content)))
+                .toList();
+    }
+
+    private AiClient.EmbedResponse embed(List<Chunker.Chunk> chunks) {
         String model = null;
         List<float[]> vectors = new ArrayList<>(chunks.size());
         for (int from = 0; from < chunks.size(); from += BATCH) {
             List<String> batch = chunks.subList(from, Math.min(chunks.size(), from + BATCH)).stream()
-                    .map(Chunk::content)
+                    .map(Chunker.Chunk::content)
                     .toList();
             AiClient.EmbedResponse response = slots.run(Duration.ofMinutes(5), () -> ai.embedWithModel(batch));
             if (model != null && !model.equals(response.model())) {
@@ -193,6 +210,4 @@ class MaterialIndexWorker {
                 """, error, retryable, material.getId());
         return updated == 1 ? material.getSessionId() : null;
     }
-
-    private record Chunk(Integer page, String content) { }
 }

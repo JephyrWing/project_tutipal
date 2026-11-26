@@ -8,15 +8,22 @@ from fastapi.responses import JSONResponse
 from app.controllers.agent_controller import router as agent_router
 from app.controllers.health_controller import router as health_router
 from app.controllers.inference_controller import router as inference_router
+from app.controllers.rerank_controller import router as rerank_router
 from app.core.body_limit import InferenceBodyLimit
 from app.core.settings import require_tracing_disabled
+from app.services import rerank_service
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    # LangSmith 추적이 켜져 있으면 요청 본문이 외부로 나갈 수 있으므로 시작하지 않는다.
+    # LangSmith 추적이 켜져 있으면 요청 본문이 외부로 나갈 수 있으므로 시작하지 않는다 (PT-85).
     require_tracing_disabled()
-    yield
+    # PT-86: 재순위화 모델을 시작할 때 한 번 읽는다. 없거나 꺼져 있어도 앱은 뜬다 (/v1/rerank만 503).
+    await rerank_service.startup()
+    try:
+        yield
+    finally:
+        rerank_service.shutdown()
 
 
 app = FastAPI(
@@ -31,6 +38,7 @@ app.add_middleware(InferenceBodyLimit)
 app.include_router(health_router, prefix="/internal/ai")
 app.include_router(health_router)
 app.include_router(inference_router)
+app.include_router(rerank_router)
 app.include_router(agent_router)
 
 

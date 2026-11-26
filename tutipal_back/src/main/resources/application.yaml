@@ -65,6 +65,19 @@ tutipal:
     s3:
       region: ${AWS_REGION:ap-northeast-2}
       bucket: ${S3_BUCKET:}
+  # PT-86: 검색 후보 재순위화 (FastAPI /v1/rerank, 주소·내부 키는 app.ai.*). 계약: docs/AI_WORKFLOW_CONTRACT.md 3.1
+  # 환경 변수로 바꿀 때: TUTIPAL_RAG_RERANK_ENABLED=true 등 (relaxed binding)
+  rag:
+    rerank:
+      enabled: false
+      # 켰을 때 가져올 후보 수 (1..32 로 보정). 측정·동결값 10 (docs/PT-86_RAG_EVAL.md 3)
+      candidates: 10
+      timeout: 2s
+      # 0.5 필터 뒤 후보가 이보다 적으면 재순위화하지 않음
+      min-candidates: 2
+  materials:
+    # char800-v1 (기존 문단·800자) | section-v1 (제목 경로·문장 단위). 바꾸면 docs/RAG_REINDEX.md
+    chunker: char800-v1
 
 app:
   # local 프로필(prod 제외)에서만 true 허용. 그 밖에서 true 면 DevLoginGuard 가 시작을 막는다.
