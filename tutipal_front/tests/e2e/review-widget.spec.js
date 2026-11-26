@@ -26,7 +26,9 @@ async function start(app) {
   await startSyntheticAnalysis(app)
 }
 async function deleteAll(app) {
-  await app.page.goto(new URL('/settings', app.page.url()).href)
+  if (new URL(app.page.url()).pathname !== '/settings') {
+    await app.page.goto(new URL('/settings', app.page.url()).href)
+  }
   await app.page.getByRole('tab', { name: '복습 기록', exact: true }).click()
   await app.page.getByRole('button', { name: '기록 전체 삭제', exact: true }).click()
   await app.page.getByRole('button', { name: '삭제', exact: true }).click()
@@ -76,6 +78,9 @@ test('위젯 제안을 일시정지·분석 끄기·실제 전체삭제 후 정�
 test('수집 응답이 삭제보다 늦어도 이전 제안·후속 요약 수집을 되살리지 않음', async ({ apps }) => {
   const app = await apps.launch(); await login(app, 9)
   const page = await widget(app)
+  // Main navigation legitimately starts analysis for the new context. Complete
+  // that navigation before holding the one observation involved in this race.
+  await app.page.goto(new URL('/settings', app.page.url()).href)
   await page.route('**/api/screen', r => fulfill(r, { text: '합성 요약' }))
   let release
   const gate = new Promise(resolve => { release = resolve })
