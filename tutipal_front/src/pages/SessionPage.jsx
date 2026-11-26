@@ -7,7 +7,7 @@ import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
 import { ChatPanel } from './ChatPage'
 import SubjectPicker from '../components/SubjectPicker'
-import AiRetentionSelect from '../components/AiRetentionSelect'
+import AiRetentionInput from '../components/AiRetentionInput'
 import { parseAiRetentionDays } from '../utils/aiRetention'
 import { BoardPanel, MaterialsPanel, NoticesPanel } from './BoardPanels'
 import { StudentHelp, StudentLiveTab, TeacherHelpTab, TeacherShareTab } from './LivePanels'
@@ -438,7 +438,7 @@ function AiRetentionSetting({ session, onChange }) {
     <form className="card session-body settings" onSubmit={onSubmit}>
       <div className="field">
         <strong>AI 대화 보관 기간 (수업 종료 후, 최대 90일)</strong>
-        <AiRetentionSelect value={value} onChange={(v) => { setValue(v); setStatus('') }} required />
+        <AiRetentionInput value={value} onChange={(v) => { setValue(v); setStatus('') }} required />
         <span className="muted small">
           학생이 이 수업에서 AI 조교와 나눈 대화는 수업이 끝나고 이 기간이 지나면 지워져요(학생이 "저장"한 대화는 남음).
           줄이면 이미 기간이 지난 대화는 1시간 안에 지워져요.

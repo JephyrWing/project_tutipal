@@ -9,16 +9,27 @@
 export const AI_RETENTION_MAX_DAYS = 90
 /** app.ai.conversations.personal-retention-days 기본값과 같게 (서버 설정을 바꾸면 같이 바꾼다) */
 export const PERSONAL_RETENTION_DAYS = 30
-/** 방 만들기 · 설정에서 고르는 값. 기본 선택 없음 (선생님이 반드시 고른다) */
-export const AI_RETENTION_OPTIONS = [0, 7, 30, 60, 90]
+/**
+ * 방 만들기 · 설정의 빠른 선택 값. 선생님은 0..90 사이 아무 정수나 직접 넣을 수 있고, 기본값은 없다
+ * (반드시 정한다).
+ */
+export const AI_RETENTION_QUICK_PICKS = [0, 7, 30, 60, 90]
 
-/** select 값(문자열) → 0..90 정수, 고르지 않았거나 범위를 벗어나면 null */
+/** 입력 값(문자열 · 숫자) → 0..90 정수, 비었거나 정수가 아니거나 범위를 벗어나면 null */
 export function parseAiRetentionDays(value) {
   if (value === null || value === undefined || value === '') return null
   const text = String(value).trim()
   if (!/^\d+$/.test(text)) return null
   const days = Number(text)
   return days <= AI_RETENTION_MAX_DAYS ? days : null
+}
+
+/** 입력 칸 아래 안내: 비었으면 '' (아직 안 정함, 버튼만 막음), 잘못된 값이면 이유 */
+export function aiRetentionError(value) {
+  if (value === null || value === undefined || String(value).trim() === '') return ''
+  return parseAiRetentionDays(value) === null
+    ? `0부터 ${AI_RETENTION_MAX_DAYS}까지의 정수(일)로 써 주세요`
+    : ''
 }
 
 export function aiRetentionLabel(days) {

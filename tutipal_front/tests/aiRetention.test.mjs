@@ -5,8 +5,9 @@ import assert from 'node:assert/strict'
 import { setConversationSaved } from '../src/api/conversations.js'
 import {
   AI_RETENTION_MAX_DAYS,
-  AI_RETENTION_OPTIONS,
+  AI_RETENTION_QUICK_PICKS,
   PERSONAL_RETENTION_DAYS,
+  aiRetentionError,
   aiRetentionLabel,
   applySavedState,
   parseAiRetentionDays,
@@ -22,20 +23,37 @@ let realFetch
 beforeEach(() => { calls = []; realFetch = globalThis.fetch })
 afterEach(() => { globalThis.fetch = realFetch })
 
-test('retention limits match the server (0..90, personal 30) and every option is selectable', () => {
+test('retention limits match the server (0..90, personal 30) and every quick pick is valid', () => {
   assert.equal(AI_RETENTION_MAX_DAYS, 90)
   assert.equal(PERSONAL_RETENTION_DAYS, 30)
-  assert.ok(AI_RETENTION_OPTIONS.includes(0))
-  assert.ok(AI_RETENTION_OPTIONS.includes(90))
-  for (const days of AI_RETENTION_OPTIONS) assert.equal(parseAiRetentionDays(String(days)), days)
+  assert.ok(AI_RETENTION_QUICK_PICKS.includes(0))
+  assert.ok(AI_RETENTION_QUICK_PICKS.includes(90))
+  for (const days of AI_RETENTION_QUICK_PICKS) assert.equal(parseAiRetentionDays(String(days)), days)
+})
+
+// Codex P2: the teacher can set any whole number of days, not only the quick picks.
+test('every whole number of days from 0 to 90 is accepted, typed or as a number', () => {
+  for (let days = 0; days <= 90; days++) {
+    assert.equal(parseAiRetentionDays(String(days)), days)
+    assert.equal(parseAiRetentionDays(days), days)
+    assert.equal(aiRetentionError(String(days)), '')
+  }
+  assert.equal(parseAiRetentionDays(' 13 '), 13)
+  assert.ok(!AI_RETENTION_QUICK_PICKS.includes(13))
 })
 
 test('parseAiRetentionDays has no implicit default and rejects out-of-range input', () => {
-  for (const bad of ['', null, undefined, '-1', '91', '1.5', 'abc', ' ']) {
+  for (const bad of ['', null, undefined, '-1', '91', '100', '1.5', '1e1', 'abc', ' ']) {
     assert.equal(parseAiRetentionDays(bad), null, `"${bad}"`)
   }
-  assert.equal(parseAiRetentionDays('0'), 0)
-  assert.equal(parseAiRetentionDays(45), 45)
+})
+
+test('aiRetentionError stays quiet while empty and explains invalid input', () => {
+  assert.equal(aiRetentionError(''), '')
+  assert.equal(aiRetentionError(null), '')
+  for (const bad of ['-1', '91', '2.5', 'abc']) {
+    assert.match(aiRetentionError(bad), /0부터 90까지의 정수/, bad)
+  }
 })
 
 test('aiRetentionLabel reads 0 as "right after the session ends"', () => {

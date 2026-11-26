@@ -60,7 +60,7 @@ export async function createRoom(app, title) {
   await app.page.getByRole('link', { name: /방 만들기/ }).click()
   await app.page.getByPlaceholder('예: 자바 기초 3주차').fill(title)
   await app.page.getByRole('combobox', { name: '공부할 과목' }).selectOption('수학')
-  await app.page.getByRole('combobox', { name: 'AI 대화 보관 기간' }).selectOption('30')
+  await app.page.getByRole('spinbutton', { name: 'AI 대화 보관 기간 (일)' }).fill('14')
   await app.page.getByRole('button', { name: '만들기', exact: true }).click()
   const code = await app.page.locator('.invite-code').innerText()
   await app.page.getByRole('link', { name: '선생님 모드로 들어가기' }).click()

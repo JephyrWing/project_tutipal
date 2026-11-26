@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { sessions } from '../api/sessions'
 import Mascot from '../components/Mascot'
 import SubjectPicker from '../components/SubjectPicker'
-import AiRetentionSelect from '../components/AiRetentionSelect'
+import AiRetentionInput from '../components/AiRetentionInput'
 import { aiRetentionLabel, parseAiRetentionDays } from '../utils/aiRetention'
 
 /**
@@ -62,7 +62,7 @@ export default function CreateSessionPage() {
         </div>
         <div className="field">
           <strong>AI 대화 보관 기간 (수업 종료 후, 최대 90일)</strong>
-          <AiRetentionSelect value={retention} onChange={setRetention} disabled={!!created} required />
+          <AiRetentionInput value={retention} onChange={setRetention} disabled={!!created} required />
           <span className="muted small">
             학생이 이 수업에서 AI 조교와 나눈 대화를 수업이 끝난 뒤 얼마나 남길지 정해요. 학생이 "저장"한 대화는 남아요.
           </span>
