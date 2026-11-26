@@ -1,10 +1,12 @@
 import {test,expect,login,createRoom,joinRoom} from './fixtures.js'
+import {installSyntheticAnalysis,startSyntheticAnalysis} from './synthetic-analysis.js'
 
 async function prepare(app) {
   await expect.poll(()=>app.application.windows().some(p=>p.url().endsWith('/widget'))).toBe(true)
   const widget=app.application.windows().find(p=>p.url().endsWith('/widget'))
   await expect(widget.getByText('꺼짐',{exact:true})).toBeVisible()
   const screens=[]
+  await installSyntheticAnalysis(app)
   await app.application.evaluate(({ipcMain})=>{
     ipcMain.removeHandler('screen-capture')
     ipcMain.handle('screen-capture',()=>({status:'ok',changed:false,image:'SYNTHETIC_IMAGE',sourceId:'window:synthetic'}))
@@ -16,7 +18,7 @@ async function prepare(app) {
     return route.fulfill({contentType:'application/json',body:JSON.stringify({summary:'가'.repeat(4001),detail:'PRIVATE_DETAIL'})})
   })
   await widget.route('**/api/review/observe',route=>route.fulfill({contentType:'application/json',body:'{}'}))
-  await app.page.evaluate(()=>window.desktop.setScreenSettings({enabled:true,sourceId:'window:synthetic',sourceName:'합성 창'}))
+  await startSyntheticAnalysis(app)
   await expect(widget.getByText('가'.repeat(4001),{exact:true})).toBeVisible()
   return {widget,screens}
 }

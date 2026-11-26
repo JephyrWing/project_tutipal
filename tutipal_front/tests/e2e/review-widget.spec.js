@@ -1,10 +1,12 @@
 import { test, expect, login } from './fixtures.js'
+import { installSyntheticAnalysis, startSyntheticAnalysis } from './synthetic-analysis.js'
 
 async function widget(app) {
   await expect.poll(() => app.application.windows().some(p => p.url().endsWith('/widget'))).toBe(true)
   const page = app.application.windows().find(p => p.url().endsWith('/widget'))
   await expect(page.getByText('꺼짐', { exact: true })).toBeVisible()
   await page.clock.install()
+  await installSyntheticAnalysis(app)
   // Synthetic capture only: this suite must never read the user's desktop.
   await app.application.evaluate(({ ipcMain }) => {
     globalThis.reviewCapture = { count: 0, gone: false }
@@ -21,7 +23,7 @@ async function widget(app) {
   return page
 }
 async function start(app) {
-  await app.page.evaluate(() => window.desktop.setScreenSettings({ enabled: true, sourceId: 'window:synthetic', sourceName: '합성 학습 창' }))
+  await startSyntheticAnalysis(app)
 }
 async function deleteAll(app) {
   await app.page.goto(new URL('/settings', app.page.url()).href)
