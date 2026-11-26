@@ -9,6 +9,7 @@ export function createScreenAnalysis({ capture, describe, observe, onAnswer, onS
   let running = false
   let deleting = false
   let flight = null
+  let summary = null
   let retry = true
   let lastSeen = now()
   // Automatic summaries pause until the server quota frees up (429, timed on this clock). Questions are never paused.
@@ -16,6 +17,7 @@ export function createScreenAnalysis({ capture, describe, observe, onAnswer, onS
 
   function invalidate() {
     revision++
+    summary = null
     flight?.abort()
     flight = null
     retry = true
@@ -44,6 +46,14 @@ export function createScreenAnalysis({ capture, describe, observe, onAnswer, onS
     /** Epoch ms until which automatic summaries are paused by the server quota (0 = not paused). */
     autoPausedUntil() { return now() < autoPausedUntil ? autoPausedUntil : 0 },
     deletion(value) { deleting = value; invalidate() },
+    async summaryForChat() {
+      const ownRevision = revision
+      const current = () => running && !deleting && revision === ownRevision
+      if (!current()) return undefined
+      const snapshot = summary
+      if (!await targetIsCurrent(current, snapshot?.sourceId)) return undefined
+      return current() && summary === snapshot ? snapshot?.text : undefined
+    },
     async look(question) {
       if (!running || deleting) return
       const ownRevision = revision
@@ -82,6 +92,7 @@ export function createScreenAnalysis({ capture, describe, observe, onAnswer, onS
           return
         }
         // Capture above still runs while paused so a closed window is noticed; only describe is skipped.
+        if (cap.changed) summary = null
         if (!question && now() < autoPausedUntil) { onPaused(); return }
         if (!question && !cap.changed && !retry) {
           await record(null)
@@ -91,7 +102,7 @@ export function createScreenAnalysis({ capture, describe, observe, onAnswer, onS
         if (!current() || !await targetIsCurrent(current, cap.sourceId)) return
         // Only a successful automatic summary acknowledges the captured screen.
         // A question must not consume the next automatic summary either.
-        if (!question) retry = false
+        if (!question) { retry = false; summary = { text: answer, sourceId: cap.sourceId } }
         onAnswer(answer, !!question)
         if (!question) await record(answer)
       } catch (error) {
