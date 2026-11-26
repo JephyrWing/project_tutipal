@@ -79,12 +79,13 @@ jobs:
           IMAGE_REGISTRY: docker.io/${{ secrets.DOCKERHUB_USERNAME }}
           IMAGE_TAG: ${{ github.sha }}
           ENABLE_CLOUDFLARE: ${{ vars.ENABLE_CLOUDFLARE }}
+          ENABLE_EC2_AI: ${{ vars.ENABLE_EC2_AI }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           command_timeout: 20m
-          envs: IMAGE_REGISTRY,IMAGE_TAG,ENABLE_CLOUDFLARE
+          envs: IMAGE_REGISTRY,IMAGE_TAG,ENABLE_CLOUDFLARE,ENABLE_EC2_AI
           script: |
             set -eu
             cd ~/app

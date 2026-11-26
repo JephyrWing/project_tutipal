@@ -40,6 +40,7 @@ Cloudflare Tunnel이 이미 호스트에서 실행 중이면 `--profile cloudfla
 | `EC2_SSH_KEY` | Secret | 대상 서버 접속 개인키(.pem 내용 전체) |
 | `ENABLE_CD` | Repository variable | 준비 완료 후 `true`로 설정 |
 | `ENABLE_CLOUDFLARE` | Repository variable | 컨테이너 Tunnel 사용 시 `true` |
+| `ENABLE_EC2_AI` | Repository variable | EC2에서 FastAPI를 실행할 때 `true` |
 
 Secrets·variables는 저장소 소유자(admin)만 설정할 수 있다. 이미지는 `ghcr.io/<소문자 소유자>/tutipal-back|tutipal-fastapi|tutipal-db`로 올라가고, 업로드와 서버 pull 모두 실행 중인 작업의 `GITHUB_TOKEN`을 쓴다. 서버의 `deploy.sh`는 끝날 때(성공·실패·중단 신호 모두) `docker logout ghcr.io`로 토큰을 남기지 않는다. 이 토큰은 작업이 끝나면 만료된다. 다만 ssh-action은 `envs`를 원격 명령 문자열의 `export`로 넘기므로 배포가 도는 동안 서버의 `ps`에 보일 수 있다. 그래서 서버에는 배포 사용자 외 로그인 계정을 두지 않는다. appleboy 액션은 태그 대신 커밋 SHA로 고정했다.
 
@@ -210,7 +211,7 @@ docker compose --env-file infra/.env.prod -f infra/docker-compose.prod.yml --pro
 docker compose --env-file infra/.env.prod -f infra/docker-compose.prod.yml ps   # fastapi가 목록에 없어야 한다
 ```
 
-이전에 같은 EC2에서 돌던 `fastapi` 컨테이너가 남아 있으면 `docker compose ... --profile ec2-ai stop fastapi && docker compose ... --profile ec2-ai rm -f fastapi`로 정리한다. 이전 방식으로 되돌릴 때는 `FAST_API_BASE_URL=http://fastapi:8000`, Access 값 비움, `--profile ec2-ai`(deploy.sh는 `ENABLE_EC2_AI=true`)로 다시 띄운다. CD 워크플로는 `ENABLE_EC2_AI`를 넘기지 않으므로 CD 배포는 항상 PC 노드 구성이다.
+이전에 같은 EC2에서 돌던 `fastapi` 컨테이너가 남아 있으면 `docker compose ... --profile ec2-ai stop fastapi && docker compose ... --profile ec2-ai rm -f fastapi`로 정리한다. 이전 방식으로 되돌릴 때는 `FAST_API_BASE_URL=http://fastapi:8000`, Access 값 비움, `--profile ec2-ai`(deploy.sh는 `ENABLE_EC2_AI=true`)로 다시 띄운다. CD에서 EC2의 FastAPI를 쓰려면 저장소 변수 `ENABLE_EC2_AI=true`를 설정한다. 이때 `deploy.sh`는 해당 배포에 `http://fastapi:8000`과 빈 Access 값을 사용하며 `.env.prod`에 저장한 PC 설정을 보존한다. 기본 배포는 PC 노드를 사용한다.
 
 ### 7.5 연결 확인 (EC2에서)
 
