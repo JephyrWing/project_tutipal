@@ -69,18 +69,39 @@ jobs:
             sleep 1
           done
           test "$ready" = true
+      - name: Start disposable PostgreSQL for concept insights checks
+        # PT-87: separate database so the test can migrate to V19, seed existing rows, then apply the rest (V22).
+        # Reuses the tutipal-review-postgres image built by the first step (keep the step order).
+        shell: bash
+        run: |
+          set -euo pipefail
+          password=$(openssl rand -hex 24)
+          echo "::add-mask::$password"
+          echo "INSIGHTS_TEST_DB_PASSWORD=$password" >> "$GITHUB_ENV"
+          echo 'INSIGHTS_TEST_DB_URL=jdbc:postgresql://127.0.0.1:25439/tutipal_insights_e2e' >> "$GITHUB_ENV"
+          echo 'INSIGHTS_TEST_DB_ALLOW_RESET=disposable' >> "$GITHUB_ENV"
+          docker run --detach --rm --name "tutipal-insights-${GITHUB_RUN_ID}"             -p 127.0.0.1:25439:5432             -e POSTGRES_DB=tutipal_insights_e2e -e POSTGRES_USER=tutipal_insights_e2e             -e POSTGRES_PASSWORD="$password" tutipal-review-postgres
+          ready=false
+          for attempt in $(seq 1 30); do
+            if docker exec "tutipal-insights-${GITHUB_RUN_ID}" pg_isready -h 127.0.0.1 -U tutipal_insights_e2e -d tutipal_insights_e2e; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = true
       - name: Run real database checks
         working-directory: tutipal_back
         run: |
           chmod +x gradlew
-          ./gradlew reviewDbTest ragDbTest --no-daemon --continue
+          ./gradlew reviewDbTest ragDbTest insightsDbTest --no-daemon --continue
       - name: Publish actual database test counts
         if: always()
         run: |
           python3 - <<'PY'
           import glob, os, sys, xml.etree.ElementTree as ET
           bad = False
-          for label, task in (('Review DB', 'reviewDbTest'), ('RAG DB', 'ragDbTest')):
+          for label, task in (('Review DB', 'reviewDbTest'), ('RAG DB', 'ragDbTest'), ('Insights DB', 'insightsDbTest')):
               total = failed = skipped = 0
               for path in glob.glob(f'tutipal_back/build/test-results/{task}/TEST-*.xml'):
                   root = ET.parse(path).getroot()
@@ -105,9 +126,12 @@ jobs:
             tutipal_back/build/reports/tests/reviewDbTest
             tutipal_back/build/test-results/ragDbTest
             tutipal_back/build/reports/tests/ragDbTest
+            tutipal_back/build/test-results/insightsDbTest
+            tutipal_back/build/reports/tests/insightsDbTest
           retention-days: 14
       - name: Stop this run's disposable databases
         if: always()
         run: |
           docker stop "tutipal-review-${GITHUB_RUN_ID}" || true
           docker stop "tutipal-rag-${GITHUB_RUN_ID}" || true
+          docker stop "tutipal-insights-${GITHUB_RUN_ID}" || true
