@@ -46,6 +46,8 @@ CAPS = {MOH: 12, SAF: 10, SCI: 10}
 MAX_SCIENCE = 12
 # 오답 행(close_ended, 문제당 4행이라 상한에 걸리지 않음). reason 에 금지 용어를 넣어 둔다.
 TERM_ROW = "C00.A01"
+# PT-88 v4: reason 이 모범 답안 내용을 하나도 말하지 않는 오답 행(생성 단계에서 expl:vague_missing 으로 빠진다).
+VAGUE_ROW = "C00.A02"
 
 
 def _blocked(*args, **kwargs):
@@ -73,7 +75,9 @@ def pipeline(tmp_path_factory):
         mp.setattr(A, "EXCLUDE_ROWS", frozenset({f"{MOH}-M06.A00"}))
 
         v1 = tmp / "derived" / "grading_c"
-        write_caches(v1, items, reasons={TERM_ROW: "핵심 개념인 핑거링 동작이 누락되어 있다."})
+        # v4: TERM_ROW 의 reason 에 모범 답안 내용(순서 유지)을 넣어 생성 단계 vague_missing 을 통과시키고 정리 단계까지 보낸다
+        write_caches(v1, items, reasons={TERM_ROW: "핵심 개념인 핑거링 동작과 앞선 항목의 순서 유지가 누락되어 있다.",
+                                         VAGUE_ROW: "핵심 개념이 누락되어 있다."})
         (v1 / "train_aug.jsonl").write_text('{"id": "v1-row"}\n', encoding="utf-8")
         v1_before = folder_hashes(v1)
         dev_before = file_sha(DEV_FILE)
@@ -157,6 +161,13 @@ def test_final_has_no_forbidden_terms(pipeline):
 def test_clean_stats_record_term_drop(pipeline):
     stats = json.loads((pipeline["v2"] / "clean_stats.json").read_text(encoding="utf-8"))
     assert stats["term_dropped"] == {"핑거링": 1}
+
+
+def test_v4_vague_reason_row_is_dropped_at_build(pipeline):
+    """PT-88 v4: 모범 답안 내용 없이 '핵심이 누락됐다'만 쓴 오답 reason 은 생성(조립) 단계에서 빠진다."""
+    rejected = {(r["source"], r["source_id"]): r["error"] for r in load_jsonl(pipeline["v2"] / "rejected.jsonl")}
+    assert rejected[(MOH, VAGUE_ROW)] == "expl:vague_missing"
+    assert f"{MOH}-{VAGUE_ROW}" not in {r["id"] for r in pipeline["final"]}
 
 
 # ---------- 수용 기준 7: 검수 제외(영어 문제 기준) ----------

@@ -65,10 +65,12 @@ def first_sentence(text):
     return re.split(r'(?<=[.!?])\s', text.strip(), maxsplit=1)[0]
 
 
-def check(o, label, expl: bool = False):
+def check(o, label, expl: bool = False, kind: str | None = None, en: str = ''):
     """작성 결과 검사. expl=True(v2 작성·조립)일 때만 PT-88 설명 검사를 더한다.
 
     v1 경로와 v2 과학 행 선별(_ok_cached, 예전 키 캐시가 있는지만 본다)은 예전 규칙 그대로다.
+    kind 는 답안 유형(vague_missing·wrong_affirmed), en 은 그 행 영어 원문(문제·모범 답안·학생 답안을 줄바꿈으로
+    이은 것, expl:foreign·expl:glossary)이다.
     """
     err = B.validate(o, label)
     if err:
@@ -77,7 +79,17 @@ def check(o, label, expl: bool = False):
         head = first_sentence(o['feedback'])
         if head.startswith(('네,', '네!', '네 ')) or any(p in head for p in PRAISE):
             return 'feedback praises wrong answer'
-    return Q.expl_check(o, label) if expl else None
+    if not expl:
+        return None
+    texts = (o['reason'], o['feedback'])
+    # 잔해·외국어 낱말은 다른 설명 규칙보다 먼저 본다(내용 판단 전에 깨진 출력부터 거른다)
+    if Q.expl_foreign(texts, en, '\n'.join(o[k] for k, _ in FIELDS)):
+        return 'expl:foreign'
+    rule = Q.expl_check(o, label, kind)
+    if rule:
+        return rule
+    term = Q.expl_glossary(texts, en)
+    return f'expl:glossary:{term}' if term else None
 
 
 # 캐시 키 구성. 번역(H.translate)은 --seed 를 쓰지 않고 고정 seed(DEFAULT_SEED)로 요청하므로 번역 캐시 키에는
@@ -126,10 +138,16 @@ def _row_en(x) -> str:
 
 
 def tkey(x, a):
-    """v2 는 프롬프트 해시(#p=)를 붙인다. 프롬프트·용어집·검사 규칙이 바뀌면 다시 번역한다(예전 줄은 그대로 둠)."""
+    """v2 는 프롬프트 해시(#p=)를 붙인다. 프롬프트·용어집·검사 규칙이 바뀌면 다시 번역한다(예전 줄은 그대로 둠).
+
+    고정 번역(--pin)이 있는 문항은 고정값 해시(#pin=)를 더 붙인다. 고정값이 생기거나 바뀐 문항만 키가 바뀌고,
+    작성 캐시는 same_translation 이 번역 차이를 보고 그 문항의 행만 다시 쓴다.
+    """
     if not getattr(a, 'v2', False):
         return old_tkey(x, a)
-    return f"{old_tkey(x, a)}#p={trans_prompt_hash(_row_en(x))}"
+    key = f"{old_tkey(x, a)}#p={trans_prompt_hash(_row_en(x))}"
+    pin = pinned_fields(a, x)
+    return f"{key}#pin={_sha8(pin)}" if pin else key
 
 
 def wkey(x, a):
@@ -156,12 +174,16 @@ def transient(err: str | None) -> bool:
 
 
 def trans_error(x: dict, tr: dict) -> str | None:
-    """번역 세 칸을 trans_check 로 검사한다. 'trans_check:<규칙>:<칸>' 또는 None."""
+    """번역 세 칸을 trans_check 로 검사하고, 칸 사이 용어 일관성을 본다.
+
+    'trans_check:<규칙>:<칸>' 또는 'trans_check:consistency:<영어 용어>' 또는 None. 칸 검사가 먼저다.
+    """
     for k, src in FIELDS:
         rule = Q.trans_check(x[src], tr.get(k) or '')
         if rule:
             return f"trans_check:{rule}:{k}"
-    return None
+    term = Q.consistency_error([(x[src], tr.get(k) or '') for k, src in FIELDS])
+    return f"trans_check:consistency:{term}" if term else None
 
 
 def no_answer(x: dict, a) -> bool:
@@ -365,11 +387,15 @@ def cache_source(out: Path, cache_from: Path | None, name: str) -> Path:
 
 
 def seed_caches(out: Path, cache_from: Path | None) -> list[str]:
-    """--out 에 없는 캐시만 --cache-from 에서 복사한다(임시 파일 + 바꿔 넣기, v1 파일은 읽기만). 복사한 이름 목록."""
+    """--out 에 없는 캐시만 --cache-from 에서 복사한다(임시 파일 + 바꿔 넣기, v1 파일은 읽기만). 복사한 이름 목록.
+
+    텍스트 메모(text_cache.jsonl)도 있으면 복사한다(v4): 용어집에 새 용어를 넣으면 그 용어가 든 행은 행 캐시 키가
+    바뀌는데, 행 안에서 새 용어가 없는 칸은 메모 키가 그대로라 예전 번역을 쓰고 새 용어가 든 칸만 다시 번역한다.
+    """
     copied = []
     if cache_from is None:
         return copied
-    for name in CACHE_FILES:
+    for name in (*CACHE_FILES, TEXT_CACHE):
         src, dst = cache_from / name, out / name
         if dst.exists() or not src.exists():
             continue
@@ -435,6 +461,132 @@ class TextMemo:
         return ko
 
 
+# ---------------- 고정 번역 (--pin, PT-88 v4) ----------------
+
+# 고정 번역 시트(팀원이 채움, UTF-8 BOM). q_ko_fixed / ref_ko_fixed 가 빈 칸이면 그 칸은 고정하지 않는다(칸별 독립).
+PIN_COLUMNS = ('priority', 'source', 'qid', 'example_id', 'rows_using_this', 'question_en', 'model_answer_en',
+               'q_ko_current', 'ref_ko_current', 'q_ko_fixed', 'ref_ko_fixed', 'note')
+# (고정 열, 번역 칸, 시트의 영어 열, 원천 영어 키)
+PIN_FIELDS = (('q_ko_fixed', 'question', 'question_en', 'q'),
+              ('ref_ko_fixed', 'model_answer', 'model_answer_en', 'ref'))
+# note 에서 찾는 AI 서비스 이름(뒤에 붙은 모델 이름까지 키로 쓴다: 'ChatGPT-4o'). 없으면 'unspecified'.
+PIN_AI_NAME = re.compile(r'(?:ChatGPT|GPT|Claude|Gemini|Copilot|Codex|OpenAI|Grok|Perplexity|DeepSeek|Clova|'
+                         r'HyperCLOVA|뤼튼|Wrtn)[\w.\-]*', re.IGNORECASE)
+# 사람 확인 표시(강지 판정 4(c), Round 1 F4). note 를 , | ; / ( ) · 로 나눈 마디마다 '확인' 을 찾고,
+#  - 뒤에 부정이 오거나('확인 안 함', '확인하지 않음', '확인 X', '확인되지 않음') 앞이 '미'('미확인', '미 확인')면 확인 아님,
+#  - 마디 안 '확인' 앞에 사람 주체(팀원·사람·검수자·사용자·직접·본인·PM)가 있거나 주체 없이 '확인함' 만 있으면 확인,
+#  - 다른 주체('AI가 확인함', 'Codex: 계산으로 확인함')면 사람 확인이 아니다.
+# 주체 없는 '확인함' 을 확인으로 세는 것은 test_pt88_v4_pin.py 의 계약('ChatGPT-4o 초안, 확인함' = 확인)이다.
+PIN_CLAUSE_SPLIT = re.compile(r'[,|;/()·]')
+PIN_CONFIRM_WORD = re.compile(r'확인')
+PIN_CONFIRM_NEG_AFTER = re.compile(r'\s*(?:안|않|하지|못|전|필요|요망|중|되지|예정|[Xx×])')
+PIN_HUMAN = re.compile(r'팀원|사람|검수자|사용자|직접|본인|PM')
+
+
+def pin_confirmed(note: str) -> bool:
+    """note 에 사람이 확인했다는 표시가 있는가(위 규칙)."""
+    for clause in PIN_CLAUSE_SPLIT.split(note or ''):
+        for m in PIN_CONFIRM_WORD.finditer(clause):
+            before, after = clause[:m.start()], clause[m.end():]
+            if PIN_CONFIRM_NEG_AFTER.match(after) or before.rstrip().endswith('미'):
+                continue
+            prefix = before.strip(' :-')
+            if not prefix or PIN_HUMAN.search(prefix):
+                return True
+    return False
+
+
+def _norm_en(text: str) -> str:
+    """엑셀을 거친 시트의 줄바꿈(CRLF)과 앞뒤 공백만 맞춘다. 그 밖의 차이는 원문이 다른 것으로 본다."""
+    return (text or '').replace('\r\n', '\n').replace('\r', '\n').strip()
+
+
+def load_pins(path: str | os.PathLike, by_qid: dict[str, dict]) -> tuple[dict[str, dict], dict]:
+    """고정 번역 시트를 읽고 검사한다. ({qid: {'question'?: 고정값, 'model_answer'?: {영어 모범 답안: 고정값}}}, 요약).
+
+    by_qid: qid → {'q': 영어 문제, 'refs': {정규화한 영어 모범 답안, ...}}. Mohler 에는 문제 문장은 같고 모범 답안이
+    다른 qid 가 2개 있어(README v2 절), 모범 답안 고정값은 시트의 model_answer_en 과 같은 모범 답안을 쓰는 행에만
+    적용한다. 그런 qid 는 모범 답안마다 한 줄씩 둘 수 있다.
+    열이 없거나, 모르는 qid, 영어 문제·모범 답안이 원천과 다르거나, 같은 (qid, 모범 답안) 이 두 번 나오거나, 한 qid 의
+    문제 고정값이 줄마다 다르거나, 고정값이 trans_check 에 걸리면(AI 초안이어도) 문제를 모두 모아 ValueError
+    (qid·열 이름 포함). 빈 칸만 있는 줄은 고정하지 않고 세지도 않는다. 요약의 by_ai·unconfirmed 는 고정한 줄 수다.
+    """
+    try:
+        with open(path, encoding='utf-8-sig', newline='') as f:
+            reader = csv.DictReader(f)
+            missing = [c for c in PIN_COLUMNS if c not in (reader.fieldnames or [])]
+            if missing:
+                raise ValueError(f'{Path(path).name}: 고정 번역 시트에 열이 없음: {missing}')
+            rows = list(reader)
+    except UnicodeDecodeError:
+        raise ValueError(f'{Path(path).name}: UTF-8 로 읽을 수 없음 — 엑셀이면 "CSV UTF-8(쉼표로 분리)" 로, '
+                         '다른 편집기면 UTF-8(BOM) 으로 다시 저장한다') from None
+    if not rows:
+        raise ValueError(f'{Path(path).name}: 고정 번역 시트에 줄이 없음(머리글만 있음)')
+    pins: dict[str, dict] = {}
+    seen: set[tuple[str, str]] = set()
+    problems: list[str] = []
+    by_ai: Counter = Counter()
+    unconfirmed = 0
+    for row in rows:
+        qid = (row['qid'] or '').strip()
+        q_fixed, ref_fixed = (row['q_ko_fixed'] or '').strip(), (row['ref_ko_fixed'] or '').strip()
+        if not (q_fixed or ref_fixed):
+            continue
+        src = by_qid.get(qid)
+        if src is None:
+            problems.append(f'{qid}: 원천 데이터에 없는 qid')
+            continue
+        q_en, ref_en = _norm_en(row['question_en']), _norm_en(row['model_answer_en'])
+        if q_en != _norm_en(src['q']):
+            problems.append(f'{qid}: question_en 이 원천 영어 원문과 다름')
+        if ref_en not in src['refs']:
+            problems.append(f'{qid}: model_answer_en 이 원천 영어 원문과 다름')
+        if (qid, ref_en) in seen:
+            problems.append(f'{qid}: 같은 qid·모범 답안이 두 번 고정됨')
+            continue
+        seen.add((qid, ref_en))
+        pin = pins.setdefault(qid, {})
+        if q_fixed:
+            if pin.get('question', q_fixed) != q_fixed:
+                problems.append(f'{qid}: q_ko_fixed 가 줄마다 다름')
+            pin['question'] = q_fixed
+            problems += _pin_value_problems(qid, 'q_ko_fixed', src['q'], q_fixed)
+        if ref_fixed:
+            pin.setdefault('model_answer', {})[ref_en] = ref_fixed
+            problems += _pin_value_problems(qid, 'ref_ko_fixed', ref_en, ref_fixed)
+        note = row['note'] or ''
+        m = PIN_AI_NAME.search(note)
+        by_ai[m.group(0) if m else 'unspecified'] += 1
+        unconfirmed += not pin_confirmed(note)
+    if problems:
+        raise ValueError(f'{Path(path).name}: 고정 번역 시트 문제 {len(problems)}건 — ' + '; '.join(problems))
+    return pins, {'file': Path(path).name, 'qids': len(pins), 'by_ai': dict(by_ai), 'unconfirmed': unconfirmed}
+
+
+def _pin_value_problems(qid: str, col: str, en: str, ko: str) -> list[str]:
+    """고정값 한 칸의 문제: JSON 잔해('"}'·'{')와 걸린 번역 규칙 전부(고치고 다시 돌리기를 줄이려고 한 번에 알림)."""
+    out = []
+    if any(d in ko for d in Q.FOREIGN_DEBRIS):
+        out.append(f'{qid}: {col} 에 JSON 잔해(\'"}}\' 또는 \'{{\')가 있음')
+    rules = Q.trans_check_all(en, ko)
+    if rules:
+        out.append(f'{qid}: {col} 가 번역 검사에 걸림 ({", ".join("trans_check:" + r for r in rules)})')
+    return out
+
+
+def pinned_fields(a: argparse.Namespace, x: dict) -> dict[str, str]:
+    """이 행에 적용할 고정값 {'question'?: ..., 'model_answer'?: ...}. 모범 답안은 영어 모범 답안이 같을 때만."""
+    pin = (getattr(a, 'pins', None) or {}).get(x.get('qid'))
+    if not pin:
+        return {}
+    out = {'question': pin['question']} if 'question' in pin else {}
+    ref = pin.get('model_answer', {}).get(_norm_en(x.get('ref', '')))
+    if ref is not None:
+        out['model_answer'] = ref
+    return out
+
+
 class CallCounter:
     """LLM 함수 호출 수를 센다(H.translate / H.generate 를 부를 때마다 1)."""
 
@@ -468,6 +620,7 @@ def build_parser():
                     help='v2: 정답 검수표 CSV(review_true_*.csv). OK·WEAK_KEEP 행은 짧아도 남긴다')
     ap.add_argument('--exclude-review', nargs='+', default=[],
                     help='v2: 사람 검수표 CSV(review_sheet.csv). verdict 가 LABEL_ERR 인 행은 선별 전에 뺀다')
+    ap.add_argument('--pin', help='v2: 고정 번역 시트 CSV(qid 별 q_ko_fixed·ref_ko_fixed). 고정한 칸은 번역하지 않는다')
     return ap
 
 
@@ -482,11 +635,12 @@ def _ok_cached(x: dict, a: argparse.Namespace, tcache: dict, wcache: dict) -> bo
     return bool(t and not t['error'] and c and not c['error'] and check(c['out'], x['label']) is None)
 
 
-def pick_v2(a: argparse.Namespace, out: Path,
-            cache_from: Path | None) -> tuple[list[dict], list[str], list[dict]]:
+def pick_v2(a: argparse.Namespace, out: Path, cache_from: Path | None,
+            by_qid: dict[str, dict] | None = None) -> tuple[list[dict], list[str], list[dict]]:
     """v2 선별: 원천(라벨 규칙) → 검수 LABEL_ERR 제외 → 핵심 누락 정답 제외 → qid 상한(과학은 예전 캐시가 있는 행만).
 
     (고른 항목, 핵심 누락으로 뺀 id, 라벨 규칙·검수로 뺀 행 {'source','source_id','error'}).
+    by_qid 를 주면 원천에서 읽은 모든 문항의 qid → {'q': 영어 문제, 'refs': 영어 모범 답안 집합}을 채운다(고정 번역 시트 대조용).
     """
     tcache = load_cache(cache_source(out, cache_from, 'trans_cache.jsonl'))
     wcache = load_cache(cache_source(out, cache_from, 'write_cache.jsonl'))
@@ -494,6 +648,8 @@ def pick_v2(a: argparse.Namespace, out: Path,
     label_drops: list[dict] = []
     items = []
     for x in B.load_sources_v2(a.datasets_dir, dropped=label_drops):
+        if by_qid is not None:
+            by_qid.setdefault(x['qid'], {'q': x['q'], 'refs': set()})['refs'].add(_norm_en(x['ref']))
         if item_id(x) in excluded:
             label_drops.append({'source': x['source'], 'source_id': x['source_id'], 'error': 'exclude_review'})
         else:
@@ -506,12 +662,12 @@ def main(argv: list[str] | None = None) -> None:
     ap = build_parser()
     a = ap.parse_args(argv)
     require_outside_repo(ap, a, '--out')  # 아무것도 읽거나 쓰기 전에 확인한다
-    refuse_input_as_output(ap, {'--review-true': a.review_true, '--exclude-review': a.exclude_review},
-                           [Path(a.out) / n for n in OUTPUT_FILES])
+    refuse_input_as_output(ap, {'--review-true': a.review_true, '--exclude-review': a.exclude_review,
+                                '--pin': [a.pin]}, [Path(a.out) / n for n in OUTPUT_FILES])
     if a.inject_ratio is None:
         a.inject_ratio = V2_INJECT_RATIO if a.v2 else V1_INJECT_RATIO
-    if not a.v2 and (a.cache_from or a.review_true or a.exclude_review):
-        ap.error('--cache-from, --review-true, --exclude-review 는 --v2 와 함께만 쓴다')
+    if not a.v2 and (a.cache_from or a.review_true or a.exclude_review or a.pin):
+        ap.error('--cache-from, --review-true, --exclude-review, --pin 은 --v2 와 함께만 쓴다')
     cache_from = Path(a.cache_from) if a.cache_from else None
     if cache_from is not None and not cache_from.is_dir():
         ap.error(f'--cache-from 폴더가 없음: {a.cache_from!r}')
@@ -531,10 +687,14 @@ def main(argv: list[str] | None = None) -> None:
     out = Path(a.out)
     missing_core_ids: list[str] = []
     label_drops: list[dict] = []
+    a.pins, pin_stats = {}, {}
     if a.v2:
+        by_qid: dict[str, dict] = {}
         try:
-            picked, missing_core_ids, label_drops = pick_v2(a, out, cache_from)
-        except (OSError, ValueError) as e:  # 검수표 없음·열 없음, 캐시 손상 등
+            picked, missing_core_ids, label_drops = pick_v2(a, out, cache_from, by_qid)
+            if a.pin:  # 폴더·캐시를 만들거나 LLM 을 부르기 전에 검사한다(문제가 있으면 아무것도 쓰지 않음)
+                a.pins, pin_stats = load_pins(a.pin, by_qid)
+        except (OSError, ValueError) as e:  # 검수표·고정 번역 시트 없음·열 없음, 캐시 손상 등
             exit_error(str(e))
         where = f'--datasets-dir {a.datasets_dir!r} (v2 는 --n 을 쓰지 않음)'
     else:
@@ -567,7 +727,9 @@ def main(argv: list[str] | None = None) -> None:
                 if key in tcache and not transient(tcache[key]['error']):
                     continue
                 try:
-                    tr, err = {k: translate_text(a.translator, x[src]) for k, src in FIELDS}, None
+                    pin = pinned_fields(a, x)  # 고정한 칸은 번역 모델에 보내지 않는다
+                    tr, err = {k: pin[k] if k in pin else translate_text(a.translator, x[src])
+                               for k, src in FIELDS}, None
                     if a.v2:  # 메모가 검사에 걸린 칸을 이미 한 번 다시 번역했다. 그래도 걸리면 거절
                         err = trans_error(x, tr)
                 except Exception as e:  # noqa: BLE001 - 사유만 남기고 다음으로
@@ -598,7 +760,7 @@ def main(argv: list[str] | None = None) -> None:
                     continue
                 tr = t['out']
                 if old and same_translation(old, tr) and not transient(old['error']):
-                    if old['out'] is not None and not check(old['out'], x['label'], a.v2):
+                    if old['out'] is not None and not check(old['out'], x['label'], a.v2, x['kind'], _row_en(x)):
                         continue  # 지금 규칙으로 통과하는 캐시는 그대로 쓴다(규칙이 느슨해져 살아난 거절 줄 포함)
                     if old['error']:
                         continue  # 이미 두 번 써서 규칙 위반으로 거절됐고 지금 규칙으로도 그렇다
@@ -610,7 +772,7 @@ def main(argv: list[str] | None = None) -> None:
                         system = H.WRITER_SYSTEM_V2 if a.v2 else H.WRITER_SYSTEM
                         w = json.loads(generate(a.writer, prompt, system=system, fmt='json', seed=a.seed + attempt))
                         o = {**tr, 'reason': str(w.get('reason', '')), 'feedback': str(w.get('feedback', ''))}
-                        err = check(o, x['label'], a.v2)
+                        err = check(o, x['label'], a.v2, x['kind'], _row_en(x))
                     except Exception as e:  # noqa: BLE001
                         err = type(e).__name__
                     if not err:
@@ -633,7 +795,7 @@ def main(argv: list[str] | None = None) -> None:
         t = tcache.get(tkey(x, a))
         noans = no_answer(x, a) and t is not None
         werr = c and c['error']
-        if werr and c['out'] is not None and not check(c['out'], x['label'], a.v2):
+        if werr and c['out'] is not None and not check(c['out'], x['label'], a.v2, x['kind'], _row_en(x)):
             werr = None  # 규칙 위반으로 거절됐지만 지금 규칙으로는 통과한다(번역 일치는 아래 stale_write 가 본다)
         err = (t and t['error']) or (None if noans else (werr or (None if c else 'missing')))
         if not err and a.v2:  # 캐시 번역도 지금 규칙으로 다시 검사하고, 다른 번역으로 쓴 작성 캐시는 쓰지 않는다
@@ -646,7 +808,7 @@ def main(argv: list[str] | None = None) -> None:
             o = {**t['out'], 'reason': Q.NO_ANSWER_REASON, 'feedback': Q.NO_ANSWER_FEEDBACK}
         else:
             o = c['out']
-        again = check(o, x['label'], a.v2)
+        again = check(o, x['label'], a.v2, x['kind'], _row_en(x))
         if again:
             rejected.append({'source': x['source'], 'source_id': x['source_id'], 'error': again})
             continue
@@ -693,8 +855,18 @@ def main(argv: list[str] | None = None) -> None:
             drops[r['error'].split(' ')[0] if r['error'].startswith('eval-like') else r['error']][r['source']] += 1
         if templated:
             drops['unknown_template'] = templated  # 버린 행은 아니고 무응답 고정 문장으로 남긴 행
+        by_source: Counter = Counter(r['source'] for r in rejected)
+        # 칸 사이 일관성 탈락: 용어별, 고정 번역 문항(qid)별(강지 Round 1 결정 2. 생성 뒤 Mohler 비꼼수 3% 기준 판단용)
+        qid_of = {(x['source'], x['source_id']): x['qid'] for x in picked}
+        cons = [r for r in rejected if r['error'].startswith('trans_check:consistency:')]
+        cons_pinned = Counter(qid_of.get((r['source'], r['source_id'])) for r in cons)
         stats.update({'prompt_hash': {'trans': trans_prompt_hash(), 'write': writer_prompt_hash()},
                       'drops': {k: dict(v) for k, v in sorted(drops.items())},
+                      'drops_by_source': dict(sorted(by_source.items())), 'pin': pin_stats,
+                      'consistency_drops': {
+                          'by_term': dict(sorted(Counter(r['error'].rsplit(':', 1)[1] for r in cons).items())),
+                          'by_source': dict(sorted(Counter(r['source'] for r in cons).items())),
+                          'by_pinned_qid': {k: v for k, v in sorted(cons_pinned.items()) if k in a.pins}},
                       'exclude_review_files': [Path(p).name for p in a.exclude_review]})
         stats.update({'v2': True, 'select_caps': V2_SELECT_CAPS,
                       'picked_source': Counter(x['source'] for x in picked),

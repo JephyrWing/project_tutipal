@@ -63,6 +63,8 @@ FALSE_FEEDBACK = "핵심 개념을 다시 확인해 보세요."
 
 def good_ko(text: str) -> str:
     keep = [w for w in text.split() if re.search(r"\d|[A-Z]{2}", w)]
+    # PT-88 v4 용어집(forms 항목)의 첫 허용형을 붙인다(가짜 번역이 v4 용어 규칙을 통과하게, 강지 판정 1).
+    keep += [e["ko"][0].strip() for e in Q.glossary_for(text) if e.get("forms")]
     return "번역 결과 문장입니다 " + " ".join(keep) + " 않음 오직 최대 최소 초과 미만"
 
 
@@ -356,7 +358,7 @@ def test_field_failing_twice_is_rejected_with_rule_and_field(env):
     expected = "trans_check:number:student_answer"
     assert _rejected(env)[(MOH, FAIL_ALWAYS_ID)] == expected
     assert f"{MOH}-{FAIL_ALWAYS_ID}" not in _train(env)
-    x = {"source": MOH, "source_id": FAIL_ALWAYS_ID}
+    x = next(i for i in env["items"] if i["source_id"] == FAIL_ALWAYS_ID)  # v4: 번역 키에 원문 용어가 들어감
     tc = {c["key"]: c for c in load_jsonl(env["out"] / "trans_cache.jsonl")}
     assert tc[BC.tkey(x, _ns())]["error"] == expected
 
@@ -373,7 +375,7 @@ def test_text_memo_keeps_only_passing_translations(env):
 def test_assemble_only_rechecks_cached_translation(env):
     _install(env)
     BC.main(_argv(env))
-    x = {"source": MOH, "source_id": FAIL_ONCE_ID}
+    x = next(i for i in env["items"] if i["source_id"] == FAIL_ONCE_ID)  # v4: 번역 키에 원문 용어가 들어감
     key = BC.tkey(x, _ns())
     tc = {c["key"]: c for c in load_jsonl(env["out"] / "trans_cache.jsonl")}
     bad = {**tc[key], "out": {**tc[key]["out"], "student_answer": BAD_KO}, "error": None}
@@ -541,7 +543,7 @@ def test_resume_retries_rows_that_failed_with_ollama_exception(env):
     """Ollama 장애(URLError 등)로 기록된 번역·작성 오류는 같은 명령으로 이어 돌리면 다시 시도한다."""
     _install(env)
     BC.main(_argv(env))
-    x = {"source": MOH, "source_id": "M02.A02"}
+    x = next(i for i in env["items"] if i["source_id"] == "M02.A02")  # v4: 번역 키에 원문 용어가 들어감
     tk, wk = BC.tkey(x, _ns()), BC.wkey(x, _ns())
     _append(env["out"] / "trans_cache.jsonl", {"key": tk, "out": None, "error": "URLError"})
     _install(env)

@@ -23,8 +23,11 @@ except ImportError:  # 모듈이 생기기 전에는 수집 오류로 전체 실
 
 TRAINING = Path(__file__).resolve().parents[1]
 
+# PT-88 v4 계획서 "열 형식은 v3 사람 시트와 같게"(강지 판정 2026-11-26: 항상 17열): 기존 14열 + 사람 점수 3열.
+# check 는 verdict 만 읽는다(점수 열은 판정에 쓰지 않음).
+SCORE_COLUMNS = ["사람 검토 - 번역 정확도·뉘앙스", "사람 검토 - 라벨 정확도", "사람 검토 - 판정 이유·피드백 정확도"]
 COLUMNS = ["id", "source", "q_en", "ref_en", "ans_en", "q_ko", "ref_ko", "ans_ko", "label", "kind",
-           "reason", "feedback", "verdict", "note"]
+           "reason", "feedback", "verdict", "note", *SCORE_COLUMNS]
 CHEAT = {"injection", "injection_with_answer", "tag_escape"}
 
 
@@ -172,7 +175,7 @@ def _write_sheet(path, verdicts):
         w.writerow(COLUMNS)
         for i, v in enumerate(verdicts):
             w.writerow([f"{MOH}-M{i:03d}", MOH, "q", "r", "a", "문", "모", "답", "True", "paraphrase", "이유",
-                        "피드백", v, ""])
+                        "피드백", v, "", "", "", ""])
     return path
 
 

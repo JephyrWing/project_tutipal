@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 
 from data_tools import build_grading_train as B
+from data_tools import quality as Q
 from data_tools.common import DEFAULT_SEED
 
 SCI = "SciEntsBank"
@@ -24,7 +25,8 @@ WRITER = "gemma3:4b"
 
 TRUE_REASON = "모범 답안과 같은 뜻을 담고 있다."
 TRUE_FEEDBACK = "핵심을 정확히 담았어요. 계속 이렇게 해 보세요."
-FALSE_REASON = "핵심 개념이 누락되어 있다."
+# PT-88 v4: 오답 reason 에 모범 답안 내용('순서 유지')을 넣어 expl:vague_missing 을 통과하게 한다(강지 판정 1).
+FALSE_REASON = "모범 답안의 핵심인 앞선 항목의 순서 유지가 누락되어 있다."
 FALSE_FEEDBACK = "핵심 개념을 다시 확인해 보세요."
 
 SCI_NAMES = ["correct", "contradictory", "partially_correct_incomplete", "irrelevant", "non_domain"]
@@ -192,6 +194,9 @@ def _tag(n: int) -> str:
 
 def _carry(en: str) -> str:
     keep = " ".join(w for w in en.split() if re.search(r"\d|[A-Z]{2}", w))
+    # PT-88 v4 용어집(forms 항목)의 첫 허용형도 옮긴다(가짜 번역이 v4 용어 규칙을 통과하게, 강지 판정 1).
+    terms = [e["ko"][0].strip() for e in Q.glossary_for(en) if e.get("forms")]
+    keep = " ".join([keep, *terms]).strip()
     return f" ({keep})" if keep else ""
 
 

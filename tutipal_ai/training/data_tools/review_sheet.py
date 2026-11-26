@@ -8,7 +8,12 @@
          verdict 가 하나라도 채워진 기존 시트는 덮지 않는다(종료 코드 2). --force 면 백업을 남기고 덮는다.
          =, +, -, @, 탭, CR 로 시작하는 칸은 엑셀 수식으로 실행되지 않게 앞에 ' 를 붙인다.
          후보가 모자라 --n 행이나 SAF --min-saf 행을 못 채우면 만들지 않는다(종료 코드 2).
+         시트 열은 v3 사람 시트와 같은 17열이다(기존 14열 + 사람 점수 3열, 점수는 check 에 쓰지 않음).
+         --exclude-ids <이전 사람 검수 CSV> (v4): 그 CSV 의 id 를 후보에서 뺀다. meta 에 파일 이름·sha256·id 수를 남기고,
+         같은 폴더에 review_regression.csv(이전 검수에서 OK 가 아닌 id 가 지금 어떻게 됐는지)를 쓴다. 이 리포트는
+         check 의 게이트 계산에 들어가지 않는다.
   check: verdict 가 모두 채워졌고(OK|LABEL_ERR|TRANS_ERR|EXPL_ERR) OK 가 아닌 행이 3개 이하면 통과.
+         verdict 열만 읽는다(점수 열이 없는 14열 옛 시트도 읽는다).
          종료 코드 0 통과, 1 OK 아닌 행 4개 이상, 2 빈칸·모르는 값·입력 오류(빈칸 판정이 우선).
          meta 는 필수다. 시트 옆 meta 로 같은 폴더의 train_aug.jsonl sha256·행 id 와 대조하고, 행 수·SAF 행 수가
          meta 의 n·min_saf 이상인지 본다(어기면 2).
@@ -18,6 +23,7 @@
 
 사용 (tutipal_ai/training 에서):
   python -m data_tools.review_sheet make --dir <derived/grading_v2> --datasets-dir <datasets 폴더> [--n 30] [--min-saf 8]
+      [--seed 20261126] [--exclude-ids <derived/grading_v3/review_sheet_human_20261126.csv>]
   python -m data_tools.review_sheet check --sheet <derived/grading_v2/review_sheet.csv>
 """
 
@@ -28,6 +34,7 @@ import csv
 import hashlib
 import io
 import json
+import math
 import shutil
 import sys
 import time
@@ -38,8 +45,14 @@ from data_tools.augment_tricks import largest_remainder
 from data_tools.clean_grading_c import CHEAT
 from data_tools.common import load_jsonl, require_outside_repo, utf8_stdout, write_files_atomic
 
+# 사람 점수 3열(v3 사람 시트와 같은 이름). 사람이 참고로 채우고, check 는 verdict 만 본다(강지 판정 2026-11-26: 항상 17열).
+SCORE_COLUMNS = ["사람 검토 - 번역 정확도·뉘앙스", "사람 검토 - 라벨 정확도", "사람 검토 - 판정 이유·피드백 정확도"]
 SHEET_COLUMNS = ["id", "source", "q_en", "ref_en", "ans_en", "q_ko", "ref_ko", "ans_ko", "label", "kind",
-                 "reason", "feedback", "verdict", "note"]
+                 "reason", "feedback", "verdict", "note", *SCORE_COLUMNS]
+REGRESSION_NAME = "review_regression.csv"
+REGRESSION_COLUMNS = ["id", "verdict_v3", "status"]
+REJECTED_NAME = "rejected.jsonl"
+DROPPED_NAME = "dropped.csv"
 VERDICTS = ("OK", "LABEL_ERR", "TRANS_ERR", "EXPL_ERR")
 MAX_NOT_OK = 3
 SAF_SOURCE = "SAF-communication-networks"
@@ -113,7 +126,76 @@ def sheet_text(picked: list[dict], origin: dict[tuple[str, str], dict]) -> str:
         x = origin[(r["source"], r["source_id"])]
         w.writerow([escape_cell(v) for v in (
             r["id"], r["source"], x["q"], x["ref"], x["ans"], r["question"], r["model_answer"],
-            r["student_answer"], r["label"], r["kind"], r["reason"], r["feedback"], "", "")])
+            r["student_answer"], r["label"], r["kind"], r["reason"], r["feedback"], "", "",
+            *([""] * len(SCORE_COLUMNS)))])
+    return buf.getvalue()
+
+
+def wilson_interval(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """이항 비율 k/n 의 윌슨 신뢰구간(하한, 상한). 30행 검수의 오류율 범위 추정에 쓴다. n 이 0 이하면 ValueError."""
+    if n <= 0 or not 0 <= k <= n:
+        raise ValueError(f"wilson_interval: 0 <= k <= n, n > 0 이어야 한다 (k={k}, n={n})")
+    p = k / n
+    denom = 1 + z * z / n
+    center = (p + z * z / (2 * n)) / denom
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / denom
+    return max(0.0, center - half), min(1.0, center + half)
+
+
+def read_review_ids(path: Path) -> list[tuple[str, str]]:
+    """이전 사람 검수 CSV 의 (id, verdict). id 열이 없으면 ValueError."""
+    fields, rows = read_sheet(path)
+    if "id" not in fields:
+        raise ValueError(f"{Path(path).name}: id 열이 없음")
+    out = []
+    for r in rows:
+        rid = unescape_cell((r.get("id") or "").strip())
+        if rid:
+            out.append((rid, unescape_cell((r.get("verdict") or "").strip())))
+    return out
+
+
+def drop_reasons(d: Path) -> dict[str, str]:
+    """같은 폴더의 생성·정리 단계 기록에서 뺀 행의 사유: rejected.jsonl(생성기)과 dropped.csv(정리 단계)."""
+    out: dict[str, str] = {}
+    rejected = d / REJECTED_NAME
+    if rejected.is_file():
+        for r in load_jsonl(rejected):
+            out.setdefault(f"{r['source']}-{r['source_id']}", str(r.get("error") or "unknown"))
+    dropped = d / DROPPED_NAME
+    if dropped.is_file():
+        _, rows = read_sheet(dropped)
+        for r in rows:
+            if r.get("id"):
+                out.setdefault(r["id"], r.get("drop_reason") or "unknown")
+    return out
+
+
+def _summary(r: dict, width: int = 40) -> str:
+    def cut(t: str) -> str:
+        t = " ".join((t or "").split())
+        return t if len(t) <= width else t[: width - 1] + "…"
+    return f"q={cut(r['question'])} | ref={cut(r['model_answer'])} | reason={cut(r['reason'])}"
+
+
+def regression_text(review: list[tuple[str, str]], rows: list[dict], reasons: dict[str, str]) -> str:
+    """이전 검수에서 OK 가 아닌 id 마다 지금 상태: present:<새 텍스트 요약> / dropped:<사유> / excluded_source."""
+    by_id = {r["id"]: r for r in rows}
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(REGRESSION_COLUMNS)
+    seen = set()
+    for rid, verdict in review:
+        if verdict == "OK" or rid in seen:
+            continue
+        seen.add(rid)
+        if rid in by_id:
+            status = "present:" + _summary(by_id[rid])
+        elif rid in reasons:
+            status = "dropped:" + reasons[rid]
+        else:
+            status = "excluded_source"
+        w.writerow([escape_cell(v) for v in (rid, verdict, status)])
     return buf.getvalue()
 
 
@@ -181,6 +263,15 @@ def cmd_make(ap: argparse.ArgumentParser, a: argparse.Namespace) -> int:
         ap.error(f"--n 은 1 이상, --min-saf 는 0 이상 --n 이하여야 한다 (--n {a.n}, --min-saf {a.min_saf})")
     d = Path(a.dir)
     train_path, sheet = d / TRAIN_NAME, d / SHEET_NAME
+    review: list[tuple[str, str]] = []
+    if a.exclude_ids:
+        ex = Path(a.exclude_ids)
+        if any(ex.resolve() == p.resolve() for p in (sheet, d / REGRESSION_NAME, meta_path(sheet))):
+            return _err(f"--exclude-ids {ex} 는 이 명령이 덮어쓰는 출력 파일이다. 다른 이름으로 저장한 뒤 지정한다")
+        try:
+            review = read_review_ids(ex)
+        except (OSError, ValueError) as e:
+            return _err(str(e))
     if not train_path.is_file():
         return _err(f"{train_path} 가 없음 (augment_tricks 를 먼저 실행)")
     if sheet.exists() and filled_verdicts(sheet) and not a.force:
@@ -190,11 +281,13 @@ def cmd_make(ap: argparse.ArgumentParser, a: argparse.Namespace) -> int:
     except ValueError as e:
         return _err(str(e))
     origin = {(x["source"], x["source_id"]): x for x in B.load_sources_v2(a.datasets_dir)}
-    picked = pick_rows(rows, n=a.n, min_saf=a.min_saf, seed=a.seed)
+    excluded = {rid for rid, _ in review}
+    pool_rows = [r for r in rows if r["id"] not in excluded]
+    picked = pick_rows(pool_rows, n=a.n, min_saf=a.min_saf, seed=a.seed)
     short = sample_shortfall(len(picked), sum(r["source"] == SAF_SOURCE for r in picked), a.n, a.min_saf)
     if short:
         # 표본이 작으면 "OK 아닌 행 3개 이하" 기준이 느슨해진다. 몰래 줄여 만들지 않는다.
-        pool = candidates(rows)
+        pool = candidates(pool_rows)
         return _err(f"{train_path}: {short} (가능한 수: 코딩 후보 {len(pool)}행, "
                     f"SAF {sum(r['source'] == SAF_SOURCE for r in pool)}행)")
     missing = [r["id"] for r in picked if (r["source"], r["source_id"]) not in origin]
@@ -205,8 +298,17 @@ def cmd_make(ap: argparse.ArgumentParser, a: argparse.Namespace) -> int:
         print(f"기존 시트 백업: {backup}")
     meta = {"train_file": TRAIN_NAME, "train_sha256": file_sha256(train_path), "seed": a.seed, "n": a.n,
             "min_saf": a.min_saf, "ids": [r["id"] for r in picked]}
-    write_files_atomic({sheet: (sheet_text(picked, origin), "utf-8-sig"),
-                        meta_path(sheet): (json.dumps(meta, ensure_ascii=False, indent=1), "utf-8")})
+    files = {sheet: (sheet_text(picked, origin), "utf-8-sig")}
+    if a.exclude_ids:
+        meta.update({"exclude_ids_file": Path(a.exclude_ids).name, "exclude_ids_sha256": file_sha256(a.exclude_ids),
+                     "exclude_ids_count": len(excluded)})
+        try:
+            reasons = drop_reasons(d)
+        except (OSError, ValueError, KeyError) as e:
+            return _err(f"뺀 행 기록을 읽을 수 없음: {e}")
+        files[d / REGRESSION_NAME] = (regression_text(review, rows, reasons), "utf-8-sig")
+    files[meta_path(sheet)] = (json.dumps(meta, ensure_ascii=False, indent=1), "utf-8")
+    write_files_atomic(files)
     saf = sum(r["source"] == SAF_SOURCE for r in picked)
     print(f"{sheet}: {len(picked)}행 (SAF {saf}행)")
     return 0
@@ -273,6 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
     mk.add_argument("--min-saf", type=int, default=DEFAULT_MIN_SAF, help="SAF 최소 행 수(모자라면 만들지 않고 2)")
     mk.add_argument("--seed", type=int, default=DEFAULT_SEED)
     mk.add_argument("--force", action="store_true", help="verdict 가 채워진 기존 시트도 덮는다(백업을 남김)")
+    mk.add_argument("--exclude-ids", help="이전 사람 검수 CSV(id·verdict 열). 그 id 는 시트에서 빼고 회귀 리포트를 쓴다")
     ck = sub.add_parser("check", help="채운 시트 검사")
     ck.add_argument("--sheet", required=True)
     return ap
