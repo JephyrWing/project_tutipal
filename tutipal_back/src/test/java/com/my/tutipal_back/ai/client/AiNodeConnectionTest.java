@@ -103,19 +103,23 @@ class AiNodeConnectionTest {
     }
 
     /**
-     * Guard: a new FastAPI client must use AiAccessHeaders too. Every main source file that sends X-Internal-Key
-     * also references AiAccessHeaders.
+     * Guard: a new FastAPI client must use AiAccessHeaders too. Every main / ragEval (PT-86 harness) source file
+     * that sends X-Internal-Key also references AiAccessHeaders.
      */
     @Test
     void everySourceThatSendsTheInternalKeyAlsoSendsTheAccessToken() throws IOException {
-        Path main = Path.of("src", "main", "java");
         List<Path> senders = new ArrayList<>();
-        try (Stream<Path> files = Files.walk(main)) {
-            for (Path file : files.filter(f -> f.toString().endsWith(".java")).toList()) {
-                String source = Files.readString(file, StandardCharsets.UTF_8);
-                if (source.contains("\"X-Internal-Key\"")) {
-                    senders.add(file);
-                    assertThat(source).as(file.toString()).contains("AiAccessHeaders");
+        for (Path root : List.of(Path.of("src", "main", "java"), Path.of("src", "ragEval", "java"))) {
+            if (!Files.isDirectory(root)) {
+                continue;
+            }
+            try (Stream<Path> files = Files.walk(root)) {
+                for (Path file : files.filter(f -> f.toString().endsWith(".java")).toList()) {
+                    String source = Files.readString(file, StandardCharsets.UTF_8);
+                    if (source.contains("\"X-Internal-Key\"")) {
+                        senders.add(file);
+                        assertThat(source).as(file.toString()).contains("AiAccessHeaders");
+                    }
                 }
             }
         }

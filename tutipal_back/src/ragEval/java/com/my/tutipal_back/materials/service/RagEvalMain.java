@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
+import com.my.tutipal_back.ai.client.AiAccessHeaders;
 import com.my.tutipal_back.ai.client.AiClient;
 import com.my.tutipal_back.rag.config.RagRerankProperties;
 import com.my.tutipal_back.rag.dto.RagHit;
@@ -72,6 +73,15 @@ public final class RagEvalMain {
     static String internalKey(Map<String, String> args) {
         String env = System.getenv("AI_INTERNAL_KEY");
         return args.getOrDefault("key", env == null ? "" : env);
+    }
+
+    /**
+     * PT-110 Cloudflare Access service token from CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET (same names as the
+     * Spring env), so the harness can also reach the AI node through the tunnel. Both unset = no header (local
+     * FastAPI); only one set fails like Spring start-up. No command-line option: secrets stay out of argv.
+     */
+    static AiAccessHeaders accessHeaders() {
+        return new AiAccessHeaders(System.getenv("CF_ACCESS_CLIENT_ID"), System.getenv("CF_ACCESS_CLIENT_SECRET"));
     }
 
     static Map<String, String> options(String[] argv) {
@@ -287,7 +297,7 @@ public final class RagEvalMain {
 
     private static void embed(Map<String, String> args) throws Exception {
         AiClient ai = new AiClient(args.getOrDefault("base-url", "http://127.0.0.1:18086"),
-                internalKey(args), JSON);
+                internalKey(args), accessHeaders(), JSON);
         Files.createDirectories(CACHE.getParent());
         Map<String, float[]> cache = loadCache();
         List<Doc> docs = corpus();
@@ -370,7 +380,7 @@ public final class RagEvalMain {
 
     /** AiClient whose embeddings come from the cache only (no network). */
     static AiClient cachedAi(String model, Map<String, float[]> cache) {
-        return new AiClient("http://127.0.0.1:9", "", JSON) {
+        return new AiClient("http://127.0.0.1:9", "", AiAccessHeaders.none(), JSON) {   // no network
             @Override
             public EmbedResponse embedWithModel(List<String> texts) {
                 List<float[]> vectors = new ArrayList<>();
