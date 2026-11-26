@@ -11,6 +11,7 @@ import org.springframework.stereotype.Repository;
  *   <li>이 사람이 연 세션: 세션 안의 퀴즈·답안·공지·게시글·자료·도움 요청·참가자까지 통째로 (세션 주인이 없어지므로)</li>
  *   <li>다른 세션: 이 사람의 답안·게시글(달린 댓글 포함)·댓글·도움 요청·자료·참가 기록</li>
  *   <li>복습 기록(review_items)은 users 삭제 때 ON DELETE CASCADE</li>
+ *   <li>AI 대화(ai_conversations · 메시지 · 요약 · ai_memories, PT-106)는 users · study_sessions 삭제 때 ON DELETE CASCADE</li>
  *   <li>PT-87 학생 질문 원문(chat_questions): 이 사람의 질문과 이 사람이 연 세션의 질문 전부를 명시적으로 지운다.
  *       개념(session_concepts · quiz_concepts)은 세션 · 퀴즈 삭제 때 ON DELETE CASCADE</li>
  * </ul>

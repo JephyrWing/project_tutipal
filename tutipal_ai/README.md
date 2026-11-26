@@ -20,6 +20,9 @@ PL 저장소 `jeonseolmin/tutipal`의 main `d60f705748da927375d77aedc11165ca0ea1
 | `GET /internal/ai/health`, `/health` | `status=ok`, 실제 Ollama 모델 파일을 확인한 `model_ready` | 없음, 내부 네트워크 전용 |
 | `POST /v1/chat` | `{system,messages:[{role,content,images?}],json_mode?}` → NDJSON `{delta}` 또는 `{error:"llm_unavailable"}` | `X-Internal-Key` |
 | `POST /v1/embed` | `{texts:[...]}` → `{model,vectors}` | `X-Internal-Key` |
+| `POST /v1/rerank` | `{query, documents:[...]}` (1~32개) → `{model,scores}` 같은 순서. 모델 없음·꺼짐은 503 | `X-Internal-Key` |
+
+`/v1/rerank`(PT-86)는 Spring이 고른 검색 후보를 ONNX cross-encoder로 CPU에서 점수화한다. 계약은 [AI 워크플로 계약](../docs/AI_WORKFLOW_CONTRACT.md) 3.1. `RERANK_ENABLED=true`일 때만 시작 시 `RERANK_MODEL_DIR`(`model.onnx`, `tokenizer.json`)의 모델을 읽는다. Docker 이미지는 `--build-arg WITH_RERANKER=true`일 때만(기본 false) 고정 revision의 `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1` 양자화본을 sha256 확인 뒤 `/models/reranker`에 넣는다. 앞 요청을 `RERANK_QUEUE_TIMEOUT_MS`(기본 1000)보다 오래 기다리면 503이다. venv 직접 실행에서는 `python -I docker/fetch_reranker.py …`(인자는 Dockerfile 참고)로 받은 폴더를 지정한다. `RERANK_MAX_LENGTH`(기본 256), `RERANK_THREADS`(기본 2)로 조정한다. 기본값은 PT-86 측정·동결값이다(리더 판정: 코드 기본값 = 측정값). Spring 후보 수 기본값은 10.
 
 `status=ok`는 HTTP 프로세스 생존이다. health에는 `local_chat_ready`, `local_embedding_ready`, `fallback_configured`도 표시한다. `model_ready=true`는 두 로컬 모델이 설치됐거나 대체 OpenAI 키가 설정되어 요청을 시도할 수 있다는 뜻이며, GPU 성능이나 OpenAI 자격 증명 유효성을 보장하지 않는다. health에서는 유료 OpenAI 요청을 호출하지 않는다. 모델 미접속·미설치 및 대체 키 미설정에도 HTTP 200과 `model_ready=false`로 응답하므로 컨테이너 자체는 healthy 상태를 유지할 수 있다.
 

@@ -251,6 +251,35 @@ public class AiClient {
         return null;
     }
 
+    /** PT-106 POST /v1/agent/summarize body (contract 6.5): only these three fields (FastAPI extra="forbid"). */
+    private record SummarizeBody(AgentDtos.Scope scope, List<AgentDtos.ContextMessage> messages,
+                                 String previousSummary) {
+    }
+
+    private record SummarizeResult(String summary) {
+    }
+
+    /**
+     * PT-106: summarizes stored conversation messages outside the chat turn (POST /v1/agent/summarize, contract 6.5).
+     * Non-2xx (422 / 502 empty_summary / 503 llm_unavailable ...), a broken or blank body and connection failures
+     * are all AiUnavailableException. Request and response bodies are never logged.
+     */
+    public String summarize(AgentDtos.Scope scope, List<AgentDtos.ContextMessage> messages, String previousSummary) {
+        try {
+            SummarizeResult result = rest.post().uri("/v1/agent/summarize")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(new SummarizeBody(scope, messages, previousSummary))
+                    .retrieve()
+                    .body(SummarizeResult.class);
+            if (result == null || result.summary() == null || result.summary().isBlank()) {
+                throw new AiUnavailableException();
+            }
+            return result.summary().strip();
+        } catch (RestClientException | JacksonException e) {
+            throw new AiUnavailableException();
+        }
+    }
+
     private static AiUnavailableException unavailable(boolean afterOutput) {
         return afterOutput ? AiUnavailableException.afterOutput() : new AiUnavailableException();
     }

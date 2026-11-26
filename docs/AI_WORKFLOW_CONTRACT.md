@@ -57,6 +57,57 @@ Spring의 pgvector 코사인 검색을 비교 기준으로 삼는다. [PT-86](ht
 - 튜터 답변은 마지막 노드만 NDJSON 스트리밍하고, 앱으로는 기존 SSE 계약을 유지한다.
 - 세부 요청·응답 형식과 실행 한도는 PT-85·PT-86 구현 계약에서 확정한다. 튜터 Agent의 형식과 한도는 [7절](#7-agent-실행-요청응답-post-v1agentchat)에서 확정했다. 고정한 재검색 상한과 Spring 권한 경계를 적용한다.
 
+### 3.1 검색 후보 재순위화 `/v1/rerank` (PT-86, 2026-11-25)
+
+Spring이 같은 수업·같은 임베딩 모델 범위에서 고른 후보만 FastAPI cross-encoder가 점수화한다. FastAPI는 요청 하나 안에서 계산하고 아무것도 저장하지 않는다. 채택 여부는 `docs/PT-86_RAG_EVAL.md`의 사전 등록 기준(sealed 질의)으로 정하며, 기준을 넘기 전에는 기능 플래그를 끈 채로 병합한다.
+
+**요청·응답**
+
+```
+POST /v1/rerank          헤더 X-Internal-Key (internal_only만 적용, 모델 제공자 검사 없음)
+{"query": "…", "documents": ["…", "…"]}
+200 {"model": "<모델 이름>", "scores": [1.2, -0.4]}
+```
+
+| 항목 | 규칙 |
+| --- | --- |
+| `query` | 문자열 1~1000자, 공백만 있는 값 거부 |
+| `documents` | 문자열 1~2000자 항목 1~32개, 공백만 있는 항목 거부 |
+| 빈 값 | 공백과 서식 문자(zero-width space, BOM 등)만 있는 `query`·항목도 422 |
+| 추가 필드 | `extra="forbid"` → 422 (오류 본문에 입력값을 다시 넣지 않음) |
+| `scores` | 입력과 같은 순서·같은 길이의 실수. 높을수록 관련. 범위는 모델마다 다르며(logit) Spring은 순서만 쓴다 |
+| 503 | 모델 파일 없음·모델 읽기 실패, `RERANK_ENABLED`가 `true`가 아님, `RERANK_*` 숫자 설정이 잘못됨(재순위화만 꺼지고 앱은 정상 기동), 앞 요청을 `RERANK_QUEUE_TIMEOUT_MS`보다 오래 기다림(`"rerank busy"`), 기다리는 사이 클라이언트가 연결을 끊음 |
+| 500 | 추론 실패·점수 개수 불일치 (본문은 고정 문구) |
+| 로그 | 모델 이름·후보 수·소요 ms만. 질문·조각 원문은 남기지 않는다 |
+
+**Spring 검색 흐름** (`RagSearchService.search(sessionId, query, limit)`, `RagHit` 형식 변경 없음, `similarity`는 항상 코사인 값)
+
+| 설정 (`application.yaml`) | 기본값 | 의미 |
+| --- | --- | --- |
+| `tutipal.rag.rerank.enabled` | `false` | 끄면 기존과 똑같이 `limit`개 코사인 검색 → 0.5 미만 제외 |
+| `tutipal.rag.rerank.candidates` | `10` (측정·동결값) | 켜면 가져올 후보 수 N. 1~32로 보정. N이 `limit`보다 작으면(1~2) 코사인으로 돌아가는 경로(min-candidates 미만·주소 없음·재순위화 실패)에서만 `limit`개로 한 번 더 읽어 꺼진 경로와 같은 수를 돌려준다. 재순위화가 성공하면 결과는 N개 이하다 |
+| `tutipal.rag.rerank.timeout` | `2s` | 요청 전체 읽기 제한 (연결 제한 1s) |
+| `tutipal.rag.rerank.min-candidates` | `2` | 0.5 필터 뒤 후보가 이보다 적으면 재순위화하지 않음 |
+
+- 켜졌을 때: 후보 N개 → 0.5 미만 제외 → 0개면 빈 목록(일반 답변 전환, 재순위화 호출 없음) → `min-candidates` 미만이면 코사인 순서 상위 `limit` → 그 밖에는 점수 내림차순(같은 점수는 코사인 순서 유지) 상위 `limit`. 튜터는 `limit=3`(FR-MAT-04 출처 최대 3개).
+- 결과는 항상 Spring이 고른 후보의 부분집합이다. FastAPI 응답은 순서를 바꾸는 데만 쓴다.
+- 주소와 내부 키는 기존 `AiClient`와 같은 `app.ai.base-url`·`app.ai.internal-key`(`FAST_API_BASE_URL`·`AI_INTERNAL_KEY`)를 쓴다.
+- `RagSearchService`에는 트랜잭션을 걸지 않는다. 재순위화 HTTP 대기 동안 DB 연결을 잡지 않기 위해서이며, 저장소 호출은 각각 독립된 읽기다.
+- Spring은 보내기 전에 질문을 1000자, 조각을 2000자로 자른다(서로게이트 쌍은 나누지 않음). 응답의 `RagHit.content`는 자르지 않은 원문이다.
+- `RagSearchService` 공개 생성자가 2개 인자에서 4개 인자(`RerankClient`, `RagRerankProperties` 추가)로 바뀌었다. Spring 주입은 그대로이고, 직접 생성하는 코드(PT-52/71 쪽)만 맞춰야 한다.
+
+**코사인 순서로 전환하는 경우** (코사인 상위 `limit` 반환, 로그에는 사유 코드만, 사유마다 1분에 한 번 + 생략 횟수): 연결 실패(`connect`)·시간 초과(`timeout`)·중단(`interrupted`), 4xx/5xx(503 포함, `status`), 점수 개수 불일치(`size`), NaN/Infinity(`nonfinite`), 해석할 수 없거나 64KB를 넘는 본문(`body`, chunked 응답도 넘는 즉시 끊음), 켜져 있지만 주소가 비어 있음(`unconfigured`).
+
+**FastAPI 설정**: `RERANK_ENABLED`(기본 `false`), `RERANK_MODEL_DIR`(Docker 이미지 `/models/reranker`), `RERANK_MODEL_NAME`, `RERANK_MAX_LENGTH`(기본 256 토큰, 측정·동결값. 질문·조각 쌍을 잘라 냄), `RERANK_THREADS`(기본 2, ONNX intra-op), `RERANK_QUEUE_TIMEOUT_MS`(기본 1000, Spring timeout 2s 안에 503이 도착하도록). 모델은 시작 시 한 번 읽고, 추론은 스레드에서 한 번에 하나씩(Semaphore 1) 실행한다. 앞 요청을 `RERANK_QUEUE_TIMEOUT_MS`보다 오래 기다리면 503을 돌려주고, 기다리는 사이 연결이 끊긴 요청은 추론하지 않는다. 1순위 모델은 `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`(Apache-2.0)의 양자화 ONNX이며 고정 revision과 sha256을 Dockerfile에서 확인한다. Docker 이미지에는 `--build-arg WITH_RERANKER=true`일 때만 모델이 들어간다(기본 false, 채택 전까지는 huggingface.co 접근 없음). torch는 쓰지 않는다.
+
+**측정·동결 설정** (`docs/PT-86_RAG_EVAL.md` 3절): 모델 a, N=10, `RERANK_MAX_LENGTH=256`, 스레드 2, 대기 상한 1000ms. 리더 판정: 코드 기본값 = 측정값(`application.yaml` `candidates: 10`, `settings.py` 256/1000). compose·env 예시·Dockerfile도 같은 값이다. 측정하지 않은 20/512는 dev p95가 3.8~8.9s로 Spring timeout 2s를 넘었다.
+
+**청킹 출처와 PT-29 재인덱싱**
+
+- `material_chunks.chunker`(V20, 기본 `char800-v1`)에 조각을 만든 청커를 기록한다. 검색 필터가 아니며 출처 격리는 계속 `embedding_model`로 한다.
+- `tutipal.materials.chunker`: `char800-v1`(기존 문단·800자 분할, 기본값) 또는 `section-v1`(제목 경로·문장 단위 분할). 바꾼 뒤 기존 자료는 `docs/RAG_REINDEX.md` 절차로 다시 인덱싱한다(강제하지 않음).
+- `section-v1` 조각은 제목이 있으면 첫 줄이 `[1장 > 1.2 절]` 형태의 제목 경로이고 다음 줄부터 본문이다. 이 줄도 임베딩 입력에 포함되므로 PT-29의 문서 입력 전처리 기준에서 함께 다룬다. 튜터 프롬프트(PT-85)에 그대로 들어가며 `RagHit.content` 형식(문자열)은 바뀌지 않는다.
+
 ## 4. 수업 학생과 개인 학습의 채팅 Agent · 목표 설계
 
 AI 채팅의 질문 제출을 LangGraph Agent 실행 진입점으로 삼는다. 현재 채팅은 Spring `TutorService`에서 FastAPI의 `/v1/chat`을 호출한다. 아래는 목표 동작이며 새 HTTP 경로나 DTO는 구현 계약에서 확정한다([6절 컨텍스트](#6-agent-컨텍스트-계약-pt-85--pt-106--pt-16) · [7절 요청·응답](#7-agent-실행-요청응답-post-v1agentchat)). [설계 원본](TUTIPAL_DESIGN.md#11-ai와-학습-지원-기능)

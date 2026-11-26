@@ -18,7 +18,7 @@
 | `quiz_concepts` | 문항 ↔ 개념, `source` TEACHER \| AI(선생님이 받아들인 추천) | 문항 · 개념 삭제 CASCADE |
 | `chat_questions` | 학생 질문 원문(1~1000자), `session_id`, `user_id`, `created_at`. 벡터 컬럼 없음 | 보관기간 · 나가기 · 탈퇴 · 수업 삭제 (5장) |
 
-V20(PT-86) · V21(PT-106)은 예약 번호다. 병합 순서가 바뀌면 번호를 다시 맞춘다. 백필 없음, 기존 테이블 무수정.
+V20(PT-86 `chunk_provenance`) · V21(PT-106 `ai_conversations`)은 develop에 병합됐고 V22는 그 뒤에 적용된다. 백필 없음, 기존 테이블 무수정.
 
 ## 3. Spring API
 
@@ -92,12 +92,18 @@ V20(PT-86) · V21(PT-106)은 예약 번호다. 병합 순서가 바뀌면 번호
 - 캐시 키의 임베딩 모델은 "직전 분석에서 본 모델"이다 (AiClient에 현재 모델 조회가 없음). 제공자 전환 직후 최대 10분간 이전 모델 결과가 나올 수 있다.
 - 캐시 · 한도는 서버 메모리라 단일 인스턴스 전제(AiQuota · AiSlots와 같음).
 - 채팅 재시도 시 같은 질문이 두 번 기록될 수 있다.
-- PT-106이 대화 이력을 저장하면 원문 저장소가 둘이 된다. 분석은 `SessionQuestionSource`로만 읽으므로(현재 구현은 어댑터 빈 `ChatQuestionSource` 하나, 계약은 그 인터페이스 javadoc), 그 빈을 PT-106 저장소 위의 구현으로 바꾸고 `chat_questions` · `ChatQuestionRecorder`를 걷어 내는 것이 이관 경로다.
+- **원문 이중 저장 (PT-106 병합 후)**: PT-106 대화 턴(`ConversationTurnService`)도 `TutorService.chat`을 감싸므로, 수업 학생이 저장 대화로 물은 질문은 `ai_conversation_messages`와 `chat_questions`에 모두 남는다. 기존 챗봇 경로(저장 대화 아님)의 질문은 `chat_questions`에만 남는다.
+- **PT-106 저장소로 바꾸지 않은 이유 (2026-11-26 판단)**: 분석은 `SessionQuestionSource`로만 읽으므로(현재 구현은 어댑터 빈 `ChatQuestionSource`, 계약은 그 인터페이스 javadoc) 빈 하나만 바꾸면 되지만, 지금 바꾸면 계약을 못 지킨다.
+  - 저장 대화를 거치지 않은 질문이 빠진다.
+  - 보관이 다르다: PT-106은 `retention-days` 기본 0으로 사용자가 지우거나 탈퇴할 때까지 남기고, 지운 대화는 soft delete 뒤 30일에 물리 삭제한다. 분석은 30일 창이다.
+  - PT-106은 나가기 · 내보내기 때 대화를 지우지 않는다.
+  - 학생 본인의 대화 이력을 선생님 분석에 쓰는 것은 목적이 달라 PT-13 고지 · 동의 결정이 먼저다.
+  - 이관 조건: 학생 챗봇이 모두 저장 대화를 거치고 PT-13이 정해지면 `ConversationQuestionSource`(`deleted_at IS NULL`, role `user`, 그 수업, 현재 STUDENT 참가자, `created_at >= now - 30일`, 메시지 id 순)로 바꾸고 `chat_questions` · `ChatQuestionRecorder`를 걷어 낸다.
 
 ## 9. 병합 조건 · 조율 항목
 
-- **Flyway 번호**: `validate-on-migrate: true`이고 `outOfOrder`는 꺼져 있다. V22가 V20(PT-86, PR #57) · V21(PT-106)보다 먼저 어떤 DB에든 적용되면, 나중에 V20/V21이 들어올 때 기동이 실패한다. 병합 순서는 V20 → V21 → V22를 지키거나, 먼저 병합되는 쪽이 다음 빈 번호를 쓰도록 이 파일 이름을 바꾼다 (이미 적용된 DB가 생긴 뒤에는 번호를 바꾸지 않는다).
-- **TutorService 생성자**: 9번째 파라미터 `StudentQuestionSink`를 추가했고, 기존 8인자 생성자를 NONE으로 위임하는 오버로드로 남겼다 (Spring은 `@Autowired`가 붙은 9인자 생성자를 쓴다). PT-106 브랜치의 8인자 테스트는 그대로 컴파일되고 의미도 같다 (기록 안 함).
+- **Flyway 번호**: `validate-on-migrate: true`이고 `outOfOrder`는 꺼져 있다. V20(#57) · V21(#61)이 develop에 먼저 병합됐으므로 V20 → V21 → V22 순서가 지켜진다. 이미 적용된 DB가 생긴 뒤에는 번호를 바꾸지 않는다.
+- **TutorService 생성자**: 9번째 파라미터 `StudentQuestionSink`를 추가했고, 기존 8인자 생성자를 NONE으로 위임하는 오버로드로 남겼다 (Spring은 `@Autowired`가 붙은 9인자 생성자를 쓴다). develop의 PT-106 `ConversationTurnAgentIntegrationTest`(8인자)는 병합 후 그대로 컴파일 · 통과한다.
 - **공유 파일 충돌 가능**: `build.gradle`(insightsDbTest), `requirements.txt` · `requirements.lock.txt`, `app/main.py`(라우터), `AccountCleanup`(DELETES · javadoc), `application.yaml`(quota.insights, insights.questions). 대부분 줄 추가라 병합 시 양쪽을 다 살리면 된다.
 - **보관기간 키**: `app.insights.questions.retention`은 PT-106의 보관기간 키와 이름 · 형식이 다르다. PT-13에서 보관기간이 정해질 때 하나의 형식으로 맞춘다.
 - **insightsDbTest 실행 기록**: 2026-11-25 21:44 KST, 로컬 일회용 컨테이너 `pgvector/pgvector:0.8.7-pg17-bookworm`(PostgreSQL 17.12, `infra/postgres/Dockerfile`과 같은 PG · pgvector 버전)에서 `./gradlew insightsDbTest` **19개 통과**(실패 · 건너뜀 0). AC-1(V19 시드 → V22 적용 후 기존 행 보존 · 백필 없음)과 저장소 SQL을 실제 DB로 확인했다. CI에는 아직 이 태스크가 없으므로 V22 · 저장소 SQL을 바꾸면 다시 돌린다.

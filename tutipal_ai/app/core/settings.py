@@ -1,5 +1,8 @@
+import logging
 import os
 from dataclasses import dataclass, field
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,55 @@ def load_model_settings() -> ModelSettings:
         internal_key=_setting("AI_INTERNAL_KEY"),
     )
 
+
+DEFAULT_RERANK_MODEL = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+
+
+@dataclass(frozen=True)
+class RerankSettings:
+    """PT-86 /v1/rerank. 모델이 없거나 꺼져 있어도 앱은 뜨고 /v1/rerank 만 503을 돌려준다."""
+
+    enabled: bool = False
+    model_dir: str = "/models/reranker"
+    model_name: str = DEFAULT_RERANK_MODEL
+    max_length: int = 256
+    threads: int = 2
+    # Spring 재순위화 timeout(2s)보다 짧게: 앞 요청을 기다리다 Spring이 이미 포기한 요청까지 추론하지 않는다.
+    queue_timeout_ms: int = 1000
+
+
+def _bounded_int(name: str, default: int, low: int, high: int) -> int:
+    try:
+        value = int(_setting(name, default=str(default)))
+    except ValueError:
+        raise ValueError(f"{name} must be an integer") from None
+    if not low <= value <= high:
+        raise ValueError(f"{name} must be between {low} and {high}")
+    return value
+
+
+def load_rerank_settings() -> RerankSettings:
+    """재순위화 설정. 꺼져 있으면 숫자 설정을 검사하지 않고, 켜져 있는데 값이 잘못되면 재순위화만 끈다.
+
+    어느 경우에도 예외를 올리지 않는다: 부가 기능 설정 때문에 채팅·임베딩 앱 기동이 막히지 않게 한다.
+    """
+    model_dir = _setting("RERANK_MODEL_DIR", default="/models/reranker")
+    model_name = _setting("RERANK_MODEL_NAME", default=DEFAULT_RERANK_MODEL)
+    if _setting("RERANK_ENABLED", default="false").lower() != "true":
+        return RerankSettings(enabled=False, model_dir=model_dir, model_name=model_name)
+    try:
+        return RerankSettings(
+            enabled=True,
+            model_dir=model_dir,
+            model_name=model_name,
+            max_length=_bounded_int("RERANK_MAX_LENGTH", 256, 16, 8192),
+            threads=_bounded_int("RERANK_THREADS", 2, 1, 64),
+            queue_timeout_ms=_bounded_int("RERANK_QUEUE_TIMEOUT_MS", 1000, 0, 60000),
+        )
+    except ValueError as error:
+        # 값 자체는 남기지 않고 어떤 설정이 잘못됐는지만 남긴다.
+        _log.warning("rerank disabled: invalid setting (%s)", str(error).split(" must ")[0])
+        return RerankSettings(enabled=False, model_dir=model_dir, model_name=model_name)
 
 # langsmith.utils.tracing_is_enabled reads TRACING_V2, then TRACING, in both the LANGSMITH_ and
 # LANGCHAIN_ namespaces, so all four names must be checked (PT-85 AC-25).
