@@ -1,5 +1,6 @@
 package com.my.tutipal_back.learning.conversation.repository;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -47,7 +48,25 @@ public class FakeConversationStore implements ConversationStore {
     /** Arguments of every memories(userId, sessionId, limit) query: {userId, sessionId, limit}. */
     public final List<Object[]> memoryQueries = Collections.synchronizedList(new ArrayList<>());
 
+    /** study_sessions columns the class retention reads (ended_at, ai_retention_days). */
+    private record SessionRow(Instant endedAt, Integer aiRetentionDays) {
+    }
+
+    /** session id → its row; a conversation whose session is not seeded belongs to an open session. */
+    private final Map<Long, SessionRow> sessions = new TreeMap<>();
+
     // ------------------------------------------------------------------ seeding helpers (not part of the port)
+
+    /** endedAt null = open session; aiRetentionDays null = a row without the column (treated as 90). */
+    public synchronized void seedSession(long sessionId, Instant endedAt, Integer aiRetentionDays) {
+        sessions.put(sessionId, new SessionRow(endedAt, aiRetentionDays));
+    }
+
+    /** Marks a seeded conversation saved at the given time (test shortcut for {@link #setSaved}). */
+    public synchronized void seedSaved(long conversationId, Instant savedAt) {
+        Conversation c = conversations.get(conversationId);
+        conversations.put(conversationId, withSavedAt(c, savedAt));
+    }
 
     public synchronized Conversation seedConversation(long userId, Long sessionId, String topic, Instant lastMessageAt) {
         long id = nextConversation++;
@@ -74,7 +93,7 @@ public class FakeConversationStore implements ConversationStore {
         Message m = new Message(id, conversationId, role, content, at);
         messages.put(id, m);
         conversations.put(conversationId, new Conversation(c.id(), c.userId(), c.sessionId(), c.topic(), c.title(),
-                c.messageCount() + 1, c.createdAt(), at));
+                c.messageCount() + 1, c.createdAt(), at, c.savedAt()));
         return m;
     }
 
@@ -293,7 +312,7 @@ public class FakeConversationStore implements ConversationStore {
         messages.put(userId, user);
         messages.put(assistantId, assistant);
         conversations.put(conversationId, new Conversation(c.id(), c.userId(), c.sessionId(), c.topic(),
-                c.title() == null ? title : c.title(), c.messageCount() + 2, c.createdAt(), now));
+                c.title() == null ? title : c.title(), c.messageCount() + 2, c.createdAt(), now, c.savedAt()));
         return new SavedPair(user, assistant);
     }
 
@@ -415,14 +434,71 @@ public class FakeConversationStore implements ConversationStore {
     }
 
     @Override
-    public synchronized int deleteInactiveBefore(Instant cutoff, int limit) {
+    public synchronized Optional<Conversation> setSaved(long conversationId, Instant savedAt) {
+        calls.add("setSaved:" + conversationId);
+        Conversation c = conversations.get(conversationId);
+        if (c == null || !live(conversationId)) {
+            return Optional.empty();
+        }
+        // like COALESCE(saved_at, ?): saving again keeps the first time
+        Conversation updated = withSavedAt(c, savedAt == null ? null : c.savedAt() != null ? c.savedAt() : savedAt);
+        conversations.put(conversationId, updated);
+        return Optional.of(updated);
+    }
+
+    /** ended_at IS NOT NULL AND ended_at + COALESCE(ai_retention_days, 90) days < now. */
+    private boolean sessionExpired(Long sessionId, Instant now) {
+        SessionRow s = sessionId == null ? null : sessions.get(sessionId);
+        if (s == null || s.endedAt() == null) {
+            return false;
+        }
+        int days = s.aiRetentionDays() == null ? 90 : s.aiRetentionDays();
+        return s.endedAt().plus(Duration.ofDays(days)).isBefore(now);
+    }
+
+    @Override
+    public synchronized int deleteExpiredClassConversations(Instant now, int limit) {
+        calls.add("deleteExpiredClass");
+        List<Long> due = conversations.values().stream()
+                .filter(c -> c.sessionId() != null && c.savedAt() == null && sessionExpired(c.sessionId(), now))
+                .map(Conversation::id)
+                .limit(limit)
+                .toList();
+        due.forEach(this::hardDelete);
+        return due.size();
+    }
+
+    @Override
+    public synchronized int deleteExpiredClassMemories(Instant now, int limit) {
+        calls.add("deleteExpiredClassMemories");
+        List<Long> due = memories.values().stream()
+                .filter(m -> sessionExpired(m.sessionId(), now))
+                .map(Memory::id)
+                .limit(limit)
+                .toList();
+        due.forEach(id -> {
+            memories.remove(id);
+            deletedMemories.remove(id);
+        });
+        return due.size();
+    }
+
+    @Override
+    public synchronized int deleteIdlePersonalConversationsBefore(Instant cutoff, int limit) {
+        calls.add("deleteIdlePersonal");
         List<Long> old = conversations.values().stream()
-                .filter(c -> c.lastMessageAt().isBefore(cutoff))
+                .filter(c -> c.sessionId() == null && c.savedAt() == null && c.lastMessageAt().isBefore(cutoff))
+                .sorted(Comparator.comparing(Conversation::lastMessageAt).thenComparing(Conversation::id))
                 .map(Conversation::id)
                 .limit(limit)
                 .toList();
         old.forEach(this::hardDelete);
         return old.size();
+    }
+
+    private static Conversation withSavedAt(Conversation c, Instant savedAt) {
+        return new Conversation(c.id(), c.userId(), c.sessionId(), c.topic(), c.title(), c.messageCount(),
+                c.createdAt(), c.lastMessageAt(), savedAt);
     }
 
     @Override

@@ -89,7 +89,7 @@ class RerankClientTest {
     }
 
     private static RerankClient client(String baseUrl) {
-        return new RerankClient(baseUrl, KEY, Duration.ofSeconds(2));
+        return new RerankClient(baseUrl, KEY, AiAccessHeaders.none(), Duration.ofSeconds(2));
     }
 
     @Test
@@ -127,7 +127,7 @@ class RerankClientTest {
     @ParameterizedTest
     @ValueSource(strings = {"", "   "})
     void blankBaseUrlIsNotConfiguredAndRerankThrowsWithoutNetwork(String blank) {
-        RerankClient client = new RerankClient(blank, KEY, Duration.ofSeconds(2));
+        RerankClient client = new RerankClient(blank, KEY, AiAccessHeaders.none(), Duration.ofSeconds(2));
 
         assertThat(client.isConfigured()).isFalse();
         assertThatThrownBy(() -> client.rerank("q", DOCS)).isInstanceOf(RerankUnavailableException.class);
@@ -135,7 +135,7 @@ class RerankClientTest {
 
     @Test
     void nullBaseUrlIsNotConfigured() {
-        RerankClient client = new RerankClient(null, KEY, Duration.ofSeconds(2));
+        RerankClient client = new RerankClient(null, KEY, AiAccessHeaders.none(), Duration.ofSeconds(2));
 
         assertThat(client.isConfigured()).isFalse();
         assertThatThrownBy(() -> client.rerank("q", DOCS)).isInstanceOf(RerankUnavailableException.class);
@@ -195,7 +195,7 @@ class RerankClientTest {
     @Test
     void slowServerTimesOutWithinConfiguredTimeout() throws IOException {
         String base = serving(200, "{\"model\":\"m\",\"scores\":[0.1,0.2,0.3]}", 3_000);
-        RerankClient client = new RerankClient(base, KEY, Duration.ofMillis(300));
+        RerankClient client = new RerankClient(base, KEY, AiAccessHeaders.none(), Duration.ofMillis(300));
 
         long started = System.nanoTime();
         assertThatThrownBy(() -> client.rerank("q", DOCS)).isInstanceOf(RerankUnavailableException.class);

@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -68,6 +69,13 @@ public class ConversationController {
     public ResponseEntity<Void> delete(@AuthenticationPrincipal OAuth2User me, @PathVariable long id) {
         conversations.delete(userId(me), id);
         return ResponseEntity.noContent().build();
+    }
+
+    /** PT-13 결정 C: {"saved": true|false} → {id, saved, savedAt}. Owner only (404 otherwise). */
+    @PutMapping("/{id}/saved")
+    public ConversationDtos.SavedState setSaved(@AuthenticationPrincipal OAuth2User me, @PathVariable long id,
+                                                @Valid @RequestBody ConversationDtos.SaveRequest request) {
+        return conversations.setSaved(userId(me), id, request.saved());
     }
 
     @PostMapping("/{id}/memories")

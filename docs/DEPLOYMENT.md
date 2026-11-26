@@ -93,7 +93,7 @@ redirect_uri 호스트가 `backend:8080`처럼 나오면 cloudflared가 원래 H
 | 구성 | 기본 정책 |
 | --- | --- |
 | Spring 8080 | 호스트 loopback 및 Cloudflare Tunnel에서만 접속 |
-| FastAPI 8000 | model 네트워크, 호스트 포트 없음 |
+| FastAPI 8000 | PT-110 기본: 팀 PC의 `127.0.0.1:8000`만 열고 EC2는 AI 전용 Tunnel(②)+Access로만 접근(7장). EC2 같은 호스트 실행(`--profile ec2-ai`) 시 model 네트워크, 호스트 포트 없음 |
 | PostgreSQL 5432 | 내부 data 네트워크, 호스트 포트 없음 |
 | LiveKit 7880 | realtime 네트워크, 원본 제어/API 포트 비공개 |
 | LiveKit 7881/tcp, 7882/udp | WebRTC 미디어 경로. 방화벽·라우터와 `LIVEKIT_NODE_IP` 확인 필요 |
@@ -134,3 +134,185 @@ ls -l ~/app/infra/.env.prod                            # -rw------- (600)
 ```bash
 docker buildx imagetools inspect cloudflare/cloudflared:<tag>
 ```
+
+## 7. PC AI 노드 분리 (PT-110)
+
+### 7.1 구성
+
+```text
+Electron 앱 ──HTTPS/WSS──▶ tutipal.<도메인> ─(Cloudflare Tunnel ①)─▶ EC2: Spring · PostgreSQL · LiveKit
+                                                                         │ AI가 필요할 때만
+                                                                         ▼
+          https://ai.<도메인> ─ Cloudflare Access(서비스 토큰) ─(Tunnel ②, PC에서 바깥으로 연결)─▶ 팀 PC
+                                                                         │
+                                                         cloudflared ─▶ FastAPI(fastapi:8000, 127.0.0.1:8000)
+                                                                         │
+                                                         Windows Ollama(GPU: gemma3:4b, bge-m3, 이후 채점 모델)
+```
+
+| 구분 | EC2 (`infra/docker-compose.prod.yml`) | 팀 PC (`infra/docker-compose.ai-node.yml`) |
+| --- | --- | --- |
+| 실행 | backend, tutipal-db, livekit, cloudflared(①) | fastapi, cloudflared(②), PC에 설치한 Ollama |
+| 책임 | 로그인·권한·저장·개인정보·RAG 검색·컨텍스트 구성 | 전달받은 입력의 계산만(채팅·임베딩·재순위화·집중도·군집화) |
+| 자격 증명 | DB·S3·LiveKit·OAuth, `AI_INTERNAL_KEY`, `CF_ACCESS_CLIENT_ID/SECRET` | `AI_INTERNAL_KEY`(EC2와 같은 값), `CLOUDFLARE_AI_TUNNEL_TOKEN`. DB·S3·LiveKit 자격 증명 없음 |
+| 외부 공개 | Tunnel ①의 Spring만 | 없음. 포트포워딩 없이 cloudflared가 바깥으로만 연결. FastAPI는 PC loopback `127.0.0.1:8000`만 |
+| env 예제 | `infra/.env.prod.example` | `infra/.env.ai-node.example` |
+
+- 앱은 PC에 직접 닿지 않는다. `ai.<도메인>`을 앱·`VITE_` 변수·Electron 설정에 넣지 않는다.
+- 인증은 두 겹이다. Cloudflare Access가 서비스 토큰(`CF-Access-Client-Id`/`CF-Access-Client-Secret`)이 없는 요청을 PC 앞에서 막고, FastAPI가 `X-Internal-Key`를 다시 확인한다(`tutipal_ai/app/core/security.py`). 둘 중 하나라도 틀리면 AI 호출은 실패하고 앱에는 "AI 조교에 연결할 수 없어요"(503)가 보인다.
+- Spring의 AI 클라이언트 네 곳(`AiClient`, `ClusterClient`, `RerankClient`, `FocusClient`)은 공통 `AiAccessHeaders` 한 곳에서 Access 헤더를 붙인다. 값이 둘 다 비면 헤더를 보내지 않고(같은 호스트 FastAPI), 하나만 있으면 Spring이 시작하지 않는다. 값은 로그에 남기지 않는다.
+- EC2 같은 호스트에서 FastAPI를 돌리던 이전 방식은 `--profile ec2-ai`(deploy.sh는 `ENABLE_EC2_AI=true`)와 `FAST_API_BASE_URL=http://fastapi:8000`으로 남겨 두었다. 기본은 PC 노드다.
+
+### 7.2 Cloudflare 준비 (대시보드, 관리자)
+
+1. Networking → Tunnels → Create Tunnel `tutipal-ai`(①과 별도) → 토큰을 PC의 `infra/.env.ai-node` `CLOUDFLARE_AI_TUNNEL_TOKEN`에만 넣는다.
+2. Published application: `ai.<도메인>` → `http://fastapi:8000`(compose 서비스 이름. `127.0.0.1`이 아니다).
+3. Zero Trust → Access → Service Auth → Service Token 생성. Client ID/Secret은 생성 화면에서 한 번만 보이므로 EC2 `infra/.env.prod`의 `CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET`로 바로 옮긴다. 만료일을 Jira(PT-110)에 기록하고 만료 전에 교체한다.
+4. Access → Applications → Self-hosted `ai.<도메인>`, 정책 동작 **Service Auth**, 포함 조건은 3의 토큰만. 사람 로그인(이메일·IdP) 정책은 넣지 않는다.
+5. Bot Fight Mode 등 봇 차단이 켜져 있으면 EC2의 Java/curl 요청이 도전 페이지(HTML)를 받을 수 있다. 7.5 확인에서 200이 아니면 먼저 이 설정과 Access 정책을 본다.
+
+토큰·Tunnel ID·서비스 토큰 이름은 공개 저장소에 적지 않고 Jira에만 남긴다.
+
+### 7.3 팀 PC 준비와 실행
+
+필요: Windows + NVIDIA GPU, Docker Desktop(WSL2), Windows용 Ollama.
+
+```powershell
+ollama pull gemma3:4b
+ollama pull bge-m3
+Copy-Item infra/.env.ai-node.example infra/.env.ai-node
+# AI_INTERNAL_KEY(EC2와 같은 값), CLOUDFLARE_AI_TUNNEL_TOKEN, 필요하면 FOCUS_MODEL_DIR/PATH/SHA256을 실제 값으로
+docker compose --env-file infra/.env.ai-node -f infra/docker-compose.ai-node.yml config --quiet
+docker compose --env-file infra/.env.ai-node -f infra/docker-compose.ai-node.yml up -d --build --wait
+curl.exe -s http://127.0.0.1:8000/health
+# {"status":"ok","model_ready":true,"local_chat_ready":true,"local_embedding_ready":true,...}
+docker compose --env-file infra/.env.ai-node -f infra/docker-compose.ai-node.yml logs --tail 20 cloudflared
+# "Registered tunnel connection" 줄이 보여야 한다(토큰 값은 출력하지 않는다)
+```
+
+- `MODEL_PROVIDER` 기본은 `ollama`다. `auto`에 `OPENAI_API_KEY`를 넣으면 PC 모델이 없을 때 OpenAI로 넘어가 입력이 외부로 나가므로(AGENTS.md 7장) PM 승인 없이 쓰지 않는다.
+- 집중도 모델은 이미지에 없다. `FOCUS_MODEL_DIR`(PC 폴더, 비우면 git 제외 폴더 `infra/ai-node-models`)이 `/models/focus`에 읽기 전용으로 붙고, `FOCUS_MODEL_PATH=/models/focus/<파일>.txt`와 `FOCUS_MODEL_SHA256`을 넣는다.
+- 재순위화를 켤 때는 `WITH_RERANKER=true`로 다시 빌드하고 `RERANK_ENABLED=true`, EC2의 `TUTIPAL_RAG_RERANK_ENABLED=true`를 함께 켠다.
+
+### 7.4 EC2 설정
+
+`~/app/infra/.env.prod`에 다음을 넣는다(값은 화면·Git·Jira에 남기지 않는다).
+
+- `FAST_API_BASE_URL=https://ai.<도메인>`(끝 `/` 없음). 비어 있으면 compose가 `Set FAST_API_BASE_URL`로 멈춘다.
+- `AI_INTERNAL_KEY`: PC `infra/.env.ai-node`와 **같은 값**. 다르면 FastAPI가 401을 돌려준다.
+- `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`: 7.2-3의 서비스 토큰. 둘 다 넣거나 둘 다 비운다.
+- `TUTIPAL_RAG_RERANK_TIMEOUT`, `APP_FOCUS_PREDICT_TIMEOUT`: 기본 `2s`. 7.6 측정에서 터널 왕복 때문에 부족할 때만 늘린다. PC의 `RERANK_QUEUE_TIMEOUT_MS`는 늘린 재순위화 제한보다 작게 둔다.
+
+```bash
+cd ~/app
+docker compose --env-file infra/.env.prod -f infra/docker-compose.prod.yml --profile cloudflare config --quiet
+docker compose --env-file infra/.env.prod -f infra/docker-compose.prod.yml --profile cloudflare up -d --wait --remove-orphans
+docker compose --env-file infra/.env.prod -f infra/docker-compose.prod.yml ps   # fastapi가 목록에 없어야 한다
+```
+
+이전에 같은 EC2에서 돌던 `fastapi` 컨테이너가 남아 있으면 `docker compose ... --profile ec2-ai stop fastapi && docker compose ... --profile ec2-ai rm -f fastapi`로 정리한다. 이전 방식으로 되돌릴 때는 `FAST_API_BASE_URL=http://fastapi:8000`, Access 값 비움, `--profile ec2-ai`(deploy.sh는 `ENABLE_EC2_AI=true`)로 다시 띄운다. CD 워크플로는 `ENABLE_EC2_AI`를 넘기지 않으므로 CD 배포는 항상 PC 노드 구성이다.
+
+### 7.5 연결 확인 (EC2에서)
+
+비밀값이 명령줄·셸 기록·`ps`에 남지 않게 헤더를 권한 600 임시 파일로 넘긴다(`curl -H @파일`).
+
+```bash
+cd ~/app && umask 077
+AI=https://ai.<도메인>
+val() { sed -n "s/^$1=//p" infra/.env.prod | tail -n 1 | tr -d '\r'; }
+HA=$(mktemp); H=$(mktemp)   # HA: Access 토큰만, H: Access 토큰 + 내부 키
+{ echo "CF-Access-Client-Id: $(val CF_ACCESS_CLIENT_ID)"
+  echo "CF-Access-Client-Secret: $(val CF_ACCESS_CLIENT_SECRET)"; } > "$HA"
+{ cat "$HA"; echo "X-Internal-Key: $(val AI_INTERNAL_KEY)"; } > "$H"
+
+curl -sS -o /dev/null -w '%{http_code}\n' "$AI/health"                 # 토큰 없음: 403 또는 302(Access가 막음)
+curl -sS -H @"$HA" "$AI/health"                                         # 200, model_ready=true
+curl -sS -o /dev/null -w '%{http_code}\n' -H @"$HA" -H 'Content-Type: application/json' \
+  -d '{"texts":["확인"]}' "$AI/v1/embed"                                # 내부 키 없음: 401
+curl -sS -o /dev/null -w '%{http_code}\n' -H @"$H" -H 'Content-Type: application/json' \
+  -d '{"texts":["확인"]}' "$AI/v1/embed"                                # 200 (AI_INTERNAL_KEY 양쪽 일치)
+rm -f "$HA" "$H"
+```
+
+마지막 명령이 401이면 EC2와 PC의 `AI_INTERNAL_KEY`가 다르다. 앱에서 로그인한 뒤 AI 채팅·자료 업로드가 되는지도 확인한다. PC를 끈 상태에서 채팅을 보내 "AI 조교에 연결할 수 없어요"가 보이고 Cloudflare 오류 페이지 내용이 앱에 나오지 않는지 확인한다.
+
+### 7.6 응답 시간 측정 (PT-29 기준 비교용)
+
+목적: Tunnel ②를 지나도 PT-29 수치 기준을 지키는지 본다. 측정 위치는 EC2(Spring과 같은 위치)이고, 결과는 Jira(PT-110, PT-29)에 작업 키·SHA·시각(KST)·모델·반복 횟수와 함께 남긴다.
+
+- **첫 응답 시간**: 요청을 보낸 뒤 첫 `delta`(답변 첫 조각)를 받기까지. `/v1/chat`은 응답 헤더를 바로 보내므로 curl의 `time_starttransfer`는 첫 조각 시간이 아니다. 아래 스크립트로 잰다.
+- **완료 시간**: 마지막 줄까지 받은 시간(`time_total`, 스크립트의 `total`).
+- **콜드/웜**: 콜드는 PC에서 `ollama stop gemma3:4b`(또는 keep-alive 시간 경과) 직후 첫 요청, 웜은 바로 이어지는 요청.
+- **반복**: 콜드 3회, 웜 10회 이상. 중앙값과 최댓값을 적는다. 100초에 가까운 값이 있으면 7.8의 위험으로 따로 표시한다.
+
+헤더 파일 `$H`(Access 토큰 + 내부 키)는 7.5와 같은 방법으로 만들고 끝나면 지운다.
+
+```bash
+# 임베딩·짧은 호출: 연결/첫 바이트/전체 시간(초)
+for i in $(seq 1 10); do
+  curl -sS -o /dev/null -H @"$H" -H 'Content-Type: application/json' -d '{"texts":["광합성은 빛 에너지를 쓴다"]}' \
+    -w '%{http_code} connect=%{time_connect} tls=%{time_appconnect} first_byte=%{time_starttransfer} total=%{time_total}\n' \
+    "$AI/v1/embed"
+done
+
+# 채팅 스트림: 첫 delta 시간과 완료 시간(초). 반복은 for 문으로 감싼다.
+python3 - "$H" "$AI" <<'PY'
+import json, sys, time, urllib.request
+headers = dict(l.rstrip("\n").split(": ", 1) for l in open(sys.argv[1], encoding="utf-8") if ": " in l)
+headers["Content-Type"] = "application/json"
+body = json.dumps({"system": "두 문장으로 답한다.", "messages": [{"role": "user", "content": "광합성을 설명해 줘"}]}).encode()
+request = urllib.request.Request(sys.argv[2] + "/v1/chat", data=body, headers=headers, method="POST")
+start, first, deltas, error = time.monotonic(), None, 0, False
+with urllib.request.urlopen(request, timeout=300) as response:
+    head = time.monotonic() - start
+    for raw in response:
+        line = raw.strip()
+        if not line:
+            continue
+        item = json.loads(line)
+        if "error" in item:
+            error = True
+            break
+        if "delta" in item:
+            deltas += 1
+            first = first if first is not None else time.monotonic() - start
+total = time.monotonic() - start
+print(f"headers={head:.2f} first_delta={'-' if first is None else f'{first:.2f}'} total={total:.2f} deltas={deltas} error={error}")
+PY
+```
+
+기록 양식(같은 표를 Jira에 붙인다):
+
+| 회차 | 시각(KST) | 호출 | 콜드/웜 | 상태 | 첫 응답(초) | 완료(초) | 비고(모델·입력 길이·동시 요청) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 |  | /v1/chat | 콜드 |  |  |  |  |
+| 2 |  | /v1/chat | 웜 |  |  |  |  |
+| 3 |  | /v1/embed | 웜 |  | (first_byte) |  |  |
+| 요약 |  |  |  |  | 중앙값 / 최댓값 | 중앙값 / 최댓값 | PT-29 기준 충족 여부 |
+
+앱 전체 경로(앱 → ① → Spring → ② → PC)는 Electron 개발자 도구 Network의 `/api/tutor/chat` EventStream에서 첫 `delta` 이벤트 시각과 마지막 이벤트 시각으로 같은 표에 따로 적는다. 위 EC2 측정과 섞어 집계하지 않는다.
+
+### 7.7 운영 규칙
+
+- 수업·시연 중 PC 절전·최대 절전·화면 잠금 후 절전을 끈다(전원 옵션: 절전 "안 함", 덮개 닫기 "아무 것도 안 함"). Windows 업데이트 재시작은 사용 시간 밖으로 미룬다.
+- 수업·시연 중에는 GPU를 학습(PT-88/89 파인튜닝 등)·게임·다른 모델에 쓰지 않는다. 학습은 수업 밖 시간에 하고, 끝나면 `ollama ps`와 `nvidia-smi`로 GPU가 비었는지 확인한다.
+- PC 부팅 시 자동 기동: Docker Desktop "Start when you sign in"(Windows 로그인이 필요하다), compose `restart: unless-stopped`, Ollama 시작 프로그램 등록(Windows 설치본 기본값). 재부팅 후 7.3의 `/health`와 cloudflared 로그를 확인한다.
+- 수업 전 콜드 시작을 줄이려면 PC 사용자 환경변수 `OLLAMA_KEEP_ALIVE`(예: `1h`)를 두고 수업 시작 전에 채팅 한 번으로 모델을 올려 둔다.
+- `AI_INTERNAL_KEY`를 바꿀 때는 EC2와 PC를 같이 바꾸고 둘 다 다시 띄운다. Access 서비스 토큰도 만료 전에 새 토큰을 정책에 추가 → EC2 교체 → 이전 토큰 삭제 순서로 바꾼다.
+
+### 7.8 장애 동작과 남은 위험
+
+**PC가 꺼졌거나 Tunnel ②가 끊겼을 때.** Cloudflare는 502/504/524 또는 530(오류 1033) HTML을, Access는 토큰 오류에 302/403을 돌려준다. Spring은 상태 코드만 보고 본문은 읽어 넘기지 않는다. 채팅·요약·임베딩·군집화는 `AiUnavailableException` → 앱에는 503 `{"status":503,"message":"AI 조교에 연결할 수 없어요"}`, 재순위화는 코사인 순서로 전환, 집중도는 "알 수 없음"이다(`AiNodeConnectionTest`가 연결 거부·502/503/504/524/530·302를 모두 확인).
+
+**자료 업로드 임베딩 실패(PT-99 경로 확인 결과).** `MaterialIndexWorker`는 FastAPI가 붙이는 `503 + X-Embedding-Failure: transient`(Ollama 연결 실패 확인)이나 연결 실패만 자동 재시도(10초, 30초 뒤 두 번)로 본다. PC가 꺼져 Cloudflare 530 등이 오면 자동 재시도 없이 `FAILED`, `index_retryable=true`, 오류 문구 "임베딩을 만들지 못했어요. 잠시 후 다시 시도해 주세요"가 된다. 선생님이 PC를 켠 뒤 자료 화면의 다시 처리(`requestIndex` → `queueIndex`)를 누르면 `PROCESSING`으로 돌아가 처음부터 다시 인덱싱된다. 즉 복구는 되지만 자동이 아니라 수동 재처리다. FastAPI는 켜져 있고 Ollama만 꺼진 경우는 자동 재시도 대상이다.
+
+**짧은 타임아웃.** 재순위화(`tutipal.rag.rerank.timeout`)와 집중도(`app.focus.predict-timeout`)는 응답 본문까지 포함한 전체 2초 제한이고, 이미 설정값이다. compose가 `TUTIPAL_RAG_RERANK_TIMEOUT`, `APP_FOCUS_PREDICT_TIMEOUT`(기본 2s)으로 넘긴다. 연결 제한 1초는 코드 상수지만 전체 제한 안에 포함된다. 터널 왕복이 길어 시간 초과가 잦으면 7.6 측정 뒤 값을 늘린다. 재순위화는 실패해도 코사인 순서로 답하고, 집중도는 "알 수 없음"이 된다.
+
+**긴 응답·콜드 시작과 Cloudflare 100초 제한.** 판단 근거:
+
+- 앱 ← Spring(Tunnel ①): `TutorController`와 `ConversationTurnController`가 주기적으로 SSE 주석 `: ping`을 보내 이미 대비돼 있다.
+- Spring ← FastAPI(Tunnel ②) Agent 경로(`/v1/agent/chat`): FastAPI가 첫 조각 전까지 10초마다 `{"ping":true}`를 보내고 120초 마감이 있다.
+- 기본 채팅 경로(`/v1/chat`)에는 ping 줄이 없다. 다만 `StreamingResponse`가 응답 헤더를 바로 보내므로 Cloudflare의 "100초 안에 응답 헤더" 조건에는 걸리지 않고, 생성이 시작되면 조각이 계속 온다. 남는 공백은 첫 조각 전 대기(모델 적재 5~30초 + 입력 처리)다. GPU의 gemma3:4b에서는 100초보다 충분히 짧다고 보고 이번에는 코드를 바꾸지 않았다. FastAPI에 하트비트를 넣으려면 생성기를 별도 작업으로 옮겨야 해서(Agent 경로의 `_pump` 방식) 취소·시간 제한 동작이 바뀐다. Spring은 빈 줄을 무시하므로 필요하면 빈 줄 하트비트로 호환성을 지키며 추가할 수 있다.
+- 남은 위험: Ollama가 다른 긴 요청을 처리하는 동안 대기열에 걸리면 첫 조각 전 공백이 100초에 가까워질 수 있다. 응답 헤더를 한꺼번에 보내는 호출(`/v1/embed` 최대 125초, `/v1/agent/summarize`, `/v1/insights/cluster`)이 100초를 넘으면 Cloudflare가 524로 끊고 Spring은 AI 연결 불가로 처리한다(임베딩이면 위의 수동 재처리). 7.6 측정에서 첫 응답·완료 시간이 60초를 넘는 경우가 보이면 `/v1/chat` 빈 줄 하트비트를 후속 작업으로 넣는다.
+
+**그 밖에.** PC 한 대라 이중화가 없다(PC 장애 = AI 기능 중단, 로그인·자료·화면공유는 EC2에서 계속 동작). 실제 Tunnel ② 연결과 Access 정책 동작은 이 문서 작성 시점에 시험하지 않았다(7.5에서 처음 확인).

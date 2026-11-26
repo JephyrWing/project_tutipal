@@ -27,7 +27,7 @@ class ConversationPropertiesTest {
             assertThat(context).hasNotFailed();
             ConversationProperties p = context.getBean(ConversationProperties.class);
             assertThat(p).isEqualTo(ConversationProperties.defaults());
-            assertThat(p.retentionDays()).isZero();
+            assertThat(p.personalRetentionDays()).isEqualTo(30);
             assertThat(p.retentionBatchSize()).isEqualTo(500);
             assertThat(p.deletedPurgeDays()).isEqualTo(30);
             assertThat(p.summary().threshold()).isEqualTo(20);
@@ -40,7 +40,7 @@ class ConversationPropertiesTest {
     @Test
     void bindsConfiguredValues() {
         runner.withPropertyValues(
-                        "app.ai.conversations.retention-days=30",
+                        "app.ai.conversations.personal-retention-days=14",
                         "app.ai.conversations.retention-batch-size=100",
                         "app.ai.conversations.summary.threshold=10",
                         "app.ai.conversations.summary.keep-recent=4",
@@ -48,7 +48,7 @@ class ConversationPropertiesTest {
                         "app.ai.conversations.summary.slot-wait=2s")
                 .run(context -> {
                     ConversationProperties p = context.getBean(ConversationProperties.class);
-                    assertThat(p.retentionDays()).isEqualTo(30);
+                    assertThat(p.personalRetentionDays()).isEqualTo(14);
                     assertThat(p.retentionBatchSize()).isEqualTo(100);
                     assertThat(p.deletedPurgeDays()).isEqualTo(30);
                     assertThat(p.summary()).isEqualTo(
@@ -74,6 +74,19 @@ class ConversationPropertiesTest {
                             .isInstanceOf(IllegalArgumentException.class)
                             .hasMessageContaining("app.ai.conversations.deleted-purge-days")
                             .hasMessageContaining("1 이상");
+                });
+    }
+
+    /** PT-13 B fixes personal retention at 30 days by default; there is no "off" value any more. */
+    @ParameterizedTest
+    @ValueSource(strings = {"0", "-1"})
+    void personalRetentionDaysBelowOneFailsAtStartup(String days) {
+        runner.withPropertyValues("app.ai.conversations.personal-retention-days=" + days)
+                .run(context -> {
+                    assertThat(context).hasFailed();
+                    assertThat(context.getStartupFailure()).rootCause()
+                            .isInstanceOf(IllegalArgumentException.class)
+                            .hasMessageContaining("app.ai.conversations.personal-retention-days");
                 });
     }
 }

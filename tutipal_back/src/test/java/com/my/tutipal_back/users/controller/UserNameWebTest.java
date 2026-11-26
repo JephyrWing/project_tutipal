@@ -28,6 +28,7 @@ import com.my.tutipal_back.common.auth.service.AppLoginSuccessHandler;
 import com.my.tutipal_back.common.config.SecurityConfig;
 import com.my.tutipal_back.common.exception.GlobalExceptionHandler;
 import com.my.tutipal_back.users.entity.User;
+import com.my.tutipal_back.users.repository.AccountLocks;
 import com.my.tutipal_back.users.repository.UserRepository;
 import com.my.tutipal_back.users.service.*;
 
@@ -45,6 +46,7 @@ class UserNameWebTest {
     @Import({SecurityConfig.class, CsrfController.class, UserController.class, UserService.class, GlobalExceptionHandler.class})
     static class Config {
         @Bean UserRepository users() { return mock(UserRepository.class); }
+        @Bean AccountLocks accountLocks() { return mock(AccountLocks.class); }
         @Bean WithdrawalService withdrawal() { return mock(WithdrawalService.class); }
         @Bean SocialOAuth2UserService oauth() { return mock(SocialOAuth2UserService.class); }
         @Bean AppLoginSuccessHandler loginSuccess() { return mock(AppLoginSuccessHandler.class); }
@@ -52,14 +54,20 @@ class UserNameWebTest {
 
     @Autowired WebApplicationContext context;
     @Autowired UserRepository repository;
+    @Autowired AccountLocks locks;
     MockMvc mvc;
     User owner;
 
     @BeforeEach
     void setup() {
-        reset(repository);
+        reset(repository, locks);
         owner = new User("google", "owner", "기존 이름");
         ReflectionTestUtils.setField(owner, "id", 12L);
+        // name-only SQL update (AccountLocks.renameIfActive), applied to the mocked row
+        when(locks.renameIfActive(eq(12L), anyString())).thenAnswer(call -> {
+            ReflectionTestUtils.setField(owner, "name", call.getArgument(1));
+            return 1;
+        });
         when(repository.findById(12L)).thenReturn(Optional.of(owner));
         mvc = MockMvcBuilders.webAppContextSetup(context)
                 .addFilters(context.getBean("springSecurityFilterChain", Filter.class)).build();

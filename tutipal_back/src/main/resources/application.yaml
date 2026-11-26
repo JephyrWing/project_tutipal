@@ -90,6 +90,11 @@ app:
   ai:
     base-url: ${FAST_API_BASE_URL:http://fastapi:8000}
     internal-key: ${AI_INTERNAL_KEY:}
+    # PT-110 Cloudflare Access service token for the PC AI node (https://ai.<domain>). Both empty = no header
+    # (FastAPI on the same host). Set both or neither; values come only from env and are never logged.
+    access:
+      client-id: ${CF_ACCESS_CLIENT_ID:}
+      client-secret: ${CF_ACCESS_CLIENT_SECRET:}
     max-concurrent: ${AI_MAX_CONCURRENT:2}
     wait-for-slot: 30s
     # PT-85 학생 · 개인 학습 Agent (/v1/agent/chat). 기본 false = 모든 역할이 기존 /v1/chat 경로. FastAPI 배포 확인 후 true
@@ -114,11 +119,15 @@ app:
         limit: 10
         window: 1h
       cleanup-interval: 10m
-    # PT-106 저장 AI 대화. retention-days 0 = 자동 삭제 끔 (보관 기간 PT-13 미정: 사용자 삭제 · 탈퇴 때까지 보관)
+    # PT-106 저장 AI 대화. 보관 기간은 PT-13 PM 결정(2026-11-26), 1시간마다 정리. "저장"한 대화는 보관 기간으로 지우지 않음.
+    # 수업 대화는 수업마다 선생님이 정한 study_sessions.ai_retention_days(수업 종료 뒤 0..90일)를 따르므로 여기 설정이 없다.
+    # 회원 탈퇴는 계정만 익명화하므로 대화는 보존한다 (PM 2026-11-26).
     conversations:
-      retention-days: ${AI_CONVERSATION_RETENTION_DAYS:0}
+      # 개인 대화: 마지막 활동(마지막 메시지, 없으면 만든 시각) 뒤 N일 지나면 물리 삭제. 1 이상, 기본 30
+      personal-retention-days: ${AI_CONVERSATION_PERSONAL_RETENTION_DAYS:30}
+      # 보관 기간 · 삭제 유예 정리 작업이 한 문장에 지우는 최대 행 수
       retention-batch-size: 500
-      # 사용자가 지운 대화 · 기억(soft delete)을 물리 삭제하기 전 유예 일수. 1 이상, 기본 30 (PT-13 결정 전 임시값)
+      # 사용자가 지운 대화 · 기억(soft delete)을 물리 삭제하기 전 유예 일수. 1 이상, 기본 30 (저장한 대화도 같음)
       deleted-purge-days: ${AI_CONVERSATION_DELETED_PURGE_DAYS:30}
       # 활성 요약 뒤 메시지 중 최신 keep-recent 개를 뺀 수가 threshold 이상이면 오래된 것부터 최대 max-input 개 요약
       summary:

@@ -1,106 +1,94 @@
 package com.my.tutipal_back.users.repository;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.mockingDetails;
+import static org.mockito.Mockito.verify;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
 import org.junit.jupiter.api.Test;
-import org.mockito.invocation.Invocation;
-import org.springframework.jdbc.core.JdbcTemplate;
+import org.mockito.ArgumentCaptor;
+import org.springframework.jdbc.core.simple.JdbcClient;
 
-import com.my.tutipal_back.learning.focus.repository.JdbcFocusStore;
+import com.my.tutipal_back.users.entity.User;
 
 /**
- * PT-90 AC-9: account deletion removes the user's focus rows before study_sessions and users
- * (focus_states, focus_samples of the user or of sessions the user owns, focus_consents).
+ * PM 2026-11-26 (PT-13): withdrawal anonymizes the users row and deletes nothing. Replaces the old deletion-order
+ * checks (PT-90 AC-9 focus rows, PT-87 AC-7 chat_questions): those rows are now kept with the anonymized account.
+ * The real-database effect is checked in FocusStorePostgresTest and ConceptInsightsPostgresTest.
  */
 class AccountCleanupTest {
 
-    private static List<String> deletes() {
-        return AccountCleanup.DELETES.stream().map(s -> s.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ")).toList();
+    private static String normalized(String sql) {
+        return sql.toLowerCase(Locale.ROOT).replaceAll("\\s+", " ");
     }
 
-    private static int indexOf(String table) {
-        List<String> all = deletes();
-        for (int i = 0; i < all.size(); i++) {
-            if (all.get(i).startsWith("delete from " + table + " ")) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    @Test
-    void focusTablesAreDeleted() {
-        assertThat(indexOf("focus_states")).as("focus_states delete").isNotNegative();
-        assertThat(indexOf("focus_samples")).as("focus_samples delete").isNotNegative();
-        assertThat(indexOf("focus_consents")).as("focus_consents delete").isNotNegative();
+    /** Every SQL statement a full withdrawal sends through AccountCleanup, in call order. */
+    private static List<String> statementsOfAWithdrawal() {
+        JdbcClient jdbc = mock(JdbcClient.class, RETURNS_DEEP_STUBS);
+        AccountCleanup cleanup = new AccountCleanup(jdbc);
+        cleanup.lockHelpSessions(5L);
+        cleanup.openOwnedSessionIds(5L);
+        cleanup.anonymize(5L);
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbc, atLeastOnce()).sql(sql.capture());
+        return sql.getAllValues().stream().map(AccountCleanupTest::normalized).toList();
     }
 
     @Test
-    void focusTablesComeBeforeSessionsAndUsers() {
-        int sessions = indexOf("study_sessions");
-        int users = indexOf("users");
-        assertThat(sessions).isNotNegative();
-        assertThat(users).isNotNegative();
-
-        for (String table : List.of("focus_states", "focus_samples", "focus_consents")) {
-            assertThat(indexOf(table)).as(table).isNotNegative().isLessThan(sessions).isLessThan(users);
-        }
+    void withdrawalDeletesNoRecord() {
+        assertThat(statementsOfAWithdrawal()).hasSize(3).noneMatch(s -> s.contains("delete"));
     }
 
     @Test
-    void focusTablesAreAtTheFront() {
-        assertThat(deletes().subList(0, 3)).allSatisfy(s -> assertThat(s).contains("focus_"));
+    void onlyTheUsersRowIsUpdated() {
+        assertThat(statementsOfAWithdrawal()).filteredOn(s -> s.startsWith("update"))
+                .singleElement().satisfies(s -> assertThat(s).startsWith("update users set "));
     }
 
     @Test
-    void samplesAndStatesOfOwnedSessionsGoToo() {
-        String samples = deletes().get(indexOf("focus_samples"));
-        String states = deletes().get(indexOf("focus_states"));
+    void anonymizeRemovesNameEmailAndSocialIdAndResetsRole() {
+        String sql = normalized(AccountCleanup.ANONYMIZE);
 
-        assertThat(samples).contains("user_id = :u").contains("session_id in (select id from study_sessions where owner_id = :u)");
-        assertThat(states).contains("user_id = :u");
+        assertThat(sql).contains("provider = :withdrawn")
+                .contains("provider_id = cast(id as varchar(100))")   // keeps uk_users_provider unique per user
+                .contains("name = :name")
+                .contains("email = null")
+                .contains("role = 'user'")
+                .contains("where id = :u");
     }
 
     @Test
-    void consentsAreDeletedByUser() {
-        assertThat(deletes().get(indexOf("focus_consents"))).contains("user_id = :u");
+    void alreadyWithdrawnRowIsNotUpdatedAgain() {
+        assertThat(normalized(AccountCleanup.ANONYMIZE)).contains("and provider <> :withdrawn");
     }
 
     @Test
-    void existingOrderIsKept() {
-        List<String> tables = List.of("comments", "posts", "notices", "quiz_answers", "quizzes", "help_requests",
-                "materials", "session_participants", "study_sessions", "users");
-        int previous = -1;
-        for (String table : tables) {
-            int at = indexOf(table);
-            assertThat(at).as(table).isGreaterThan(previous);
-            previous = at;
-        }
+    void anonymizeBindsTheWithdrawnProviderAndDisplayName() {
+        JdbcClient jdbc = mock(JdbcClient.class, RETURNS_DEEP_STUBS);
+        JdbcClient.StatementSpec spec = jdbc.sql(AccountCleanup.ANONYMIZE);
+
+        new AccountCleanup(jdbc).anonymize(5L);
+
+        verify(spec).param("withdrawn", User.WITHDRAWN_PROVIDER);
+        assertThat(User.WITHDRAWN_PROVIDER).isEqualTo("withdrawn");
+        assertThat(User.WITHDRAWN_NAME).isEqualTo("탈퇴한 사용자");
     }
 
-    /** Codex round 1: one lock order for account deletion and consent withdrawal (no deadlock between them). */
     @Test
-    void focusTablesAreDeletedInTheSameOrderAsConsentWithdrawal() {
-        JdbcTemplate jdbc = mock(JdbcTemplate.class);
-        new JdbcFocusStore(jdbc).deleteUserData(2L);
-        List<String> withdrawal = new ArrayList<>();
-        for (Invocation i : mockingDetails(jdbc).getInvocations()) {
-            String sql = String.valueOf(i.getRawArguments()[0]).toLowerCase(Locale.ROOT);
-            for (String table : List.of("focus_consents", "focus_samples", "focus_states")) {
-                if (sql.startsWith("delete from " + table + " ")) {
-                    withdrawal.add(table);
-                }
-            }
-        }
+    void sessionsAreLockedInIdOrder() {
+        String lock = statementsOfAWithdrawal().getFirst();
 
-        assertThat(withdrawal).containsExactly("focus_consents", "focus_samples", "focus_states");
-        assertThat(indexOf("focus_consents")).isLessThan(indexOf("focus_samples"));
-        assertThat(indexOf("focus_samples")).isLessThan(indexOf("focus_states"));
+        assertThat(lock).contains("owner_id = :u").contains("session_participants").endsWith("order by id for update");
+    }
+
+    @Test
+    void openOwnedSessionsAreThoseNotEndedYet() {
+        String open = statementsOfAWithdrawal().get(1);
+
+        assertThat(open).contains("owner_id = :u").contains("ended_at is null");
     }
 }

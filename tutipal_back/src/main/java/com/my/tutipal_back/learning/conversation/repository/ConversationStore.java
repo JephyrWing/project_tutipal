@@ -12,12 +12,25 @@ import java.util.UUID;
  *
  * <p>삭제: 사용자가 지운 대화 · 기억은 deleted_at 만 채운다 (soft delete). 아래 조회는 모두 살아 있는 것만 본다:
  * 지운 대화는 소유자 조회 · 잠금 · 목록에 없고, 그 대화의 메시지 · 요약 · 기억도 조회되지 않는다 (없는 것과 같다).
- * 물리 삭제는 유예 기간 뒤 purgeDeleted* 와 보관 기간 작업, 탈퇴 · 수업 삭제(FK CASCADE)뿐이다.
+ * 물리 삭제는 유예 기간 뒤 purgeDeleted* 와 보관 기간 작업(deleteExpired* / deleteIdlePersonal*), 수업 삭제
+ * (FK CASCADE)뿐이다. 회원 탈퇴는 users 행을 익명화만 하므로(PM 2026-11-26) 대화는 남는다.
+ * 보관 기간 작업은 저장(saved_at)한 대화를 지우지 않는다.
  */
 public interface ConversationStore {
 
+    /** savedAt: the owner's "저장" (kept beyond retention); null = not saved. */
     record Conversation(long id, long userId, Long sessionId, String topic, String title, int messageCount,
-                        Instant createdAt, Instant lastMessageAt) {
+                        Instant createdAt, Instant lastMessageAt, Instant savedAt) {
+
+        /** Not saved. */
+        public Conversation(long id, long userId, Long sessionId, String topic, String title, int messageCount,
+                            Instant createdAt, Instant lastMessageAt) {
+            this(id, userId, sessionId, topic, title, messageCount, createdAt, lastMessageAt, null);
+        }
+
+        public boolean saved() {
+            return savedAt != null;
+        }
     }
 
     record Message(long id, long conversationId, String role, String content, Instant createdAt) {
@@ -126,9 +139,28 @@ public interface ConversationStore {
     boolean softDeleteMemory(long conversationId, long memoryId, Instant now);
 
     /**
-     * last_message_at < cutoff 인 대화를 (지운 것 포함) 최대 limit 개 물리 삭제하고 지운 수를 돌려준다 (보관 기간 작업).
+     * 저장 표시: savedAt 이 있으면 saved_at 을 채우고 (이미 저장된 대화는 처음 시각 유지), null 이면 지운다.
+     * 호출자가 대화 행을 잠근 상태여야 한다. 바뀐 뒤의 대화 (지운 대화면 empty).
      */
-    int deleteInactiveBefore(Instant cutoff, int limit);
+    Optional<Conversation> setSaved(long conversationId, Instant savedAt);
+
+    /**
+     * 보관 기간 A: 수업이 끝났고 ended_at + ai_retention_days(없으면 90)일 < now 인 수업의 저장 안 한 대화를
+     * (지운 것 포함) 최대 limit 개 물리 삭제한다 (메시지 · 요약 · 그 대화의 기억은 CASCADE). 진행 중인 수업은 대상이 아니다.
+     */
+    int deleteExpiredClassConversations(Instant now, int limit);
+
+    /**
+     * 보관 기간 A: 위와 같은 수업의 수업 범위 기억(ai_memories.session_id)을 최대 limit 개 물리 삭제한다. 기억은 대화가 아니라
+     * 범위 단위라 저장한 대화에서 쓴 기억도 수업 보관 기간을 따른다.
+     */
+    int deleteExpiredClassMemories(Instant now, int limit);
+
+    /**
+     * 보관 기간 B: 개인 대화(session_id 없음) 중 저장 안 했고 last_message_at < cutoff 인 것을 (지운 것 포함) 최대 limit 개
+     * 물리 삭제한다.
+     */
+    int deleteIdlePersonalConversationsBefore(Instant cutoff, int limit);
 
     /** deleted_at < cutoff 인 대화를 최대 limit 개 물리 삭제한다 (메시지 · 요약 · 기억은 CASCADE). */
     int purgeDeletedConversationsBefore(Instant cutoff, int limit);

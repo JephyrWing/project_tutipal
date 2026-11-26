@@ -1,4 +1,4 @@
-/* 디자인 토큰 — docs/mockups 기준 */
+/* 디자인 토큰 — 규칙과 사용처는 docs/STYLE_GUIDE.md. 화면 CSS 에 색상 hex 를 새로 쓰지 말고 여기 토큰을 쓴다 */
 :root {
   --bg: #eef3fa;
   --surface: #ffffff;
@@ -15,12 +15,48 @@
   --yellow: #fee500;
   --naver: #03c75a;
   --red: #ef4444;
+  --red-hover: #dc2626;
+  --on-primary: #ffffff;
+
+  /* 상태 색 (배경 weak · 글자 text · 테두리 line) */
+  --success-weak: #e8f8ee;
+  --success-bg: #effaf3;
+  --success-line: #86d9a5;
+  --success-text: #15803d;
+  --danger-weak: #fff5f5;
+  --danger-line: #f5b5b5;
+  --danger-text: #b42318;
+  --warn: #facc15;
+  --warn-weak: #fef3c7;
+  --warn-text: #92400e;
+  --pin: #f5b301;
+
+  /* 채움 · 막대 · 미디어 */
+  --fill: #e9edf3;
+  --track: #e3e8ef;
+  --media-bg: #0f172a;
   --radius-sm: 10px;
   --radius: 16px;
   --radius-lg: 22px;
   --shadow: 0 1px 2px rgba(31, 38, 51, 0.04), 0 6px 18px rgba(31, 38, 51, 0.06);
   --shadow-float: 0 8px 28px rgba(31, 38, 51, 0.16);
   --font: 'Pretendard Variable', Pretendard, 'Malgun Gothic', system-ui, sans-serif;
+
+  /* 간격 (4px 단위) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* 글자 크기 (본문 15px) */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
 }
 
 * { box-sizing: border-box; }
@@ -67,7 +103,7 @@ button, input, textarea, select { font: inherit; color: inherit; }
 }
 .btn:hover:not(:disabled) { background: var(--surface-2); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn-primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); }
 .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
 .btn-sm { height: 34px; padding: 0 12px; font-size: 13px; }
 

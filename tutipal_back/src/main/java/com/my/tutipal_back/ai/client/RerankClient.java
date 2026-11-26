@@ -10,6 +10,7 @@ import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -38,13 +39,15 @@ public class RerankClient {
 
     private final URI endpoint;
     private final String internalKey;
+    private final AiAccessHeaders access;
     private final Duration timeout;
     private final HttpClient http;
     private final JsonMapper json = JsonMapper.builder().build();
 
-    public RerankClient(String baseUrl, String internalKey, Duration timeout) {
+    public RerankClient(String baseUrl, String internalKey, AiAccessHeaders access, Duration timeout) {
         this.endpoint = baseUrl == null || baseUrl.isBlank() ? null : URI.create(stripSlash(baseUrl.strip()) + "/v1/rerank");
         this.internalKey = internalKey == null ? "" : internalKey;
+        this.access = Objects.requireNonNull(access, "access");
         this.timeout = timeout;
         // HTTP/1.1 고정: JDK 기본(HTTP/2 업그레이드 시도)을 uvicorn 이 거부한다 (AiClient 와 같은 이유)
         this.http = endpoint == null ? null : HttpClient.newBuilder()
@@ -65,7 +68,7 @@ public class RerankClient {
         if (documents.isEmpty()) {
             return new double[0];
         }
-        HttpRequest request = HttpRequest.newBuilder(endpoint)
+        HttpRequest request = access.addTo(HttpRequest.newBuilder(endpoint))   // PT-110 Access token, if any
                 .timeout(timeout)
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")

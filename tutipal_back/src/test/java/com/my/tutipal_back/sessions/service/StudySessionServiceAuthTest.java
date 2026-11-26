@@ -58,7 +58,7 @@ class StudySessionServiceAuthTest {
         service = new StudySessionService(sessions, participants, mock(UserService.class), events,
                 mock(Presence.class), publisher);
 
-        session = new StudySession("자바 기초", "자바", "ABC234", TEACHER);
+        session = new StudySession("자바 기초", "자바", "ABC234", TEACHER, 30);
         ReflectionTestUtils.setField(session, "id", SESSION);
         when(sessions.findById(SESSION)).thenReturn(Optional.of(session));
         when(participants.findBySessionIdAndUserId(SESSION, TEACHER))

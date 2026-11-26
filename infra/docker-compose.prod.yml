@@ -7,7 +7,16 @@ services:
       DB_URL: jdbc:postgresql://tutipal-db:5432/${DB_NAME:-tutipal_db}
       DB_USER: ${DB_USER:-tutipal}
       DB_PW: ${DB_PW:?Set DB_PW}
-      FAST_API_BASE_URL: http://fastapi:8000
+      # PT-110: AI node address. PC AI server through Cloudflare: https://ai.<domain> (docs/DEPLOYMENT.md 7).
+      # FastAPI on this host (old layout): http://fastapi:8000 together with --profile ec2-ai.
+      FAST_API_BASE_URL: ${FAST_API_BASE_URL:?Set FAST_API_BASE_URL (https://ai.<domain> or http://fastapi:8000 with --profile ec2-ai)}
+      # PT-110 Cloudflare Access service token for the AI hostname. Both empty = no header (same-host FastAPI).
+      CF_ACCESS_CLIENT_ID: ${CF_ACCESS_CLIENT_ID:-}
+      CF_ACCESS_CLIENT_SECRET: ${CF_ACCESS_CLIENT_SECRET:-}
+      # PT-110: whole-request limits of the short AI calls (defaults = application.yaml). Raise only if the
+      # measured tunnel latency needs it (docs/DEPLOYMENT.md 7.6); keep RERANK_QUEUE_TIMEOUT_MS below the rerank one.
+      TUTIPAL_RAG_RERANK_TIMEOUT: ${TUTIPAL_RAG_RERANK_TIMEOUT:-2s}
+      APP_FOCUS_PREDICT_TIMEOUT: ${APP_FOCUS_PREDICT_TIMEOUT:-2s}
       # PT-86: RAG rerank flag and chunker (docs/AI_WORKFLOW_CONTRACT.md 3.1, docs/RAG_REINDEX.md)
       TUTIPAL_RAG_RERANK_ENABLED: ${TUTIPAL_RAG_RERANK_ENABLED:-false}
       # measured/frozen candidate count (docs/PT-86_RAG_EVAL.md 3), same as the application.yaml default
@@ -47,15 +56,20 @@ services:
     depends_on:
       tutipal-db:
         condition: service_healthy
+      # only with --profile ec2-ai (FastAPI on this host); ignored when the AI runs on the PC node
       fastapi:
         condition: service_healthy
+        required: false
       livekit:
         condition: service_started
     restart: unless-stopped
     networks: [app, data, model, realtime]
 
+  # PT-110: the AI now runs on the PC node (infra/docker-compose.ai-node.yml). This same-host FastAPI is kept
+  # as a fallback layout and starts only with --profile ec2-ai (deploy.sh: ENABLE_EC2_AI=true).
   fastapi:
     image: ${IMAGE_REGISTRY:?Set IMAGE_REGISTRY}/tutipal-fastapi:${IMAGE_TAG:?Set IMAGE_TAG}
+    profiles: [ec2-ai]
     environment:
       AI_INTERNAL_KEY: ${AI_INTERNAL_KEY:?Set AI_INTERNAL_KEY}
       MODEL_PROVIDER: ${MODEL_PROVIDER:-auto}

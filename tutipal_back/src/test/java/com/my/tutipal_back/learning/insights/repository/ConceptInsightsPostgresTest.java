@@ -174,6 +174,9 @@ class ConceptInsightsPostgresTest {
         jdbc.update("DELETE FROM chat_questions");
         jdbc.update("DELETE FROM quiz_concepts");
         jdbc.update("DELETE FROM session_concepts");
+        // Withdrawal now anonymizes instead of deleting (PT-13 2026-11-26), so the withdrawal test's student 402 would
+        // stay a participant of the shared ACTIVE session and leak into the mastery snapshot of later tests.
+        jdbc.update("DELETE FROM session_participants WHERE session_id = ? AND user_id = 402", ACTIVE);
         participant(ACTIVE, PARK, "STUDENT");
         questions = new ChatQuestionStore(jdbc);
         concepts = new ConceptStore(jdbc);
@@ -288,7 +291,7 @@ class ConceptInsightsPostgresTest {
     }
 
     @Test
-    void accountDeletionRemovesOwnQuestionsAndEverythingInOwnedSessions() {
+    void accountWithdrawalKeepsQuestionsAndConceptsAndAnonymizesTheAccount() {
         user(401, "탈퇴 선생님");
         user(402, "탈퇴 학생");
         session(41, 401, "INS041", false);
@@ -304,16 +307,25 @@ class ConceptInsightsPostgresTest {
                 + "VALUES (41,'수업41 개념','수업41 개념',now())");
         AccountCleanup cleanup = new AccountCleanup(JdbcClient.create(dataSource));
 
-        cleanup.deleteAll(401L);
+        // PM 2026-11-26 (PT-13): withdrawal anonymizes the account and keeps every record
+        assertThat(cleanup.anonymize(401L)).isEqualTo(1);
 
-        assertThat(count("SELECT count(*) FROM chat_questions WHERE session_id = 41")).isZero();
-        assertThat(count("SELECT count(*) FROM session_concepts WHERE session_id = 41")).isZero();
+        assertThat(count("SELECT count(*) FROM chat_questions WHERE session_id = 41")).isEqualTo(2);
+        assertThat(count("SELECT count(*) FROM session_concepts WHERE session_id = 41")).isEqualTo(1);
         assertThat(questionCount(ACTIVE, 402)).isEqualTo(1);
 
-        cleanup.deleteAll(402L);
+        assertThat(cleanup.anonymize(402L)).isEqualTo(1);
 
-        assertThat(questionCount(ACTIVE, 402)).isZero();
+        assertThat(questionCount(ACTIVE, 402)).isEqualTo(1);
         assertThat(questionCount(ACTIVE, KIM)).isEqualTo(1);
+        assertThat(jdbc.queryForList("SELECT provider || '/' || provider_id || '/' || name || '/' || role || '/' "
+                + "|| (email IS NULL) FROM users WHERE id IN (401, 402) ORDER BY id", String.class))
+                .containsExactly("withdrawn/401/탈퇴한 사용자/USER/true", "withdrawn/402/탈퇴한 사용자/USER/true");
+        assertThat(cleanup.anonymize(402L)).isZero();
+        // the same social account signs up again as a new row (uk_users_provider is free again)
+        jdbc.update("INSERT INTO users(id,created_at,updated_at,name,provider,provider_id,role) "
+                + "VALUES (403,now(),now(),'다시 가입','dev','insights-402','USER')");
+        assertThat(count("SELECT count(*) FROM users WHERE provider = 'dev' AND provider_id = 'insights-402'")).isEqualTo(1);
     }
 
     @Test

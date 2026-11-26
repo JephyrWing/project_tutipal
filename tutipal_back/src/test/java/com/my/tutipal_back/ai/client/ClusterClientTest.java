@@ -65,7 +65,8 @@ class ClusterClientTest {
             exchange.close();
         });
         server.start();
-        return new ClusterClient("http://127.0.0.1:" + server.getAddress().getPort(), "test-key", JSON);
+        return new ClusterClient("http://127.0.0.1:" + server.getAddress().getPort(), "test-key",
+                AiAccessHeaders.none(), JSON);
     }
 
     private static float[] vector(float fill) {
@@ -193,7 +194,7 @@ class ClusterClientTest {
 
     @Test
     void unreachableServerIsAiUnavailable() {
-        ClusterClient client = new ClusterClient("http://127.0.0.1:1", "test-key", JSON);
+        ClusterClient client = new ClusterClient("http://127.0.0.1:1", "test-key", AiAccessHeaders.none(), JSON);
 
         assertThatThrownBy(() -> client.cluster(ten(0.1f), List.of()))
                 .isInstanceOf(AiUnavailableException.class);

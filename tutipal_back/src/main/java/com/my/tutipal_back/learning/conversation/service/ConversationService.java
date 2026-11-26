@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.my.tutipal_back.ai.dto.AgentDtos;
 import com.my.tutipal_back.common.exception.ApiException;
+import com.my.tutipal_back.learning.conversation.ConversationProperties;
 import com.my.tutipal_back.learning.conversation.dto.ConversationDtos;
 import com.my.tutipal_back.learning.conversation.repository.ConversationStore;
 import com.my.tutipal_back.learning.tutor.dto.ChatRequest;
@@ -62,16 +63,31 @@ public class ConversationService {
     private final ConversationStore store;
     private final StudySessionService sessions;
     private final Clock clock;
+    /** Sent to the screen so its retention notice matches what ConversationRetention really deletes. */
+    private final int personalRetentionDays;
 
     @Autowired
+    public ConversationService(ConversationStore store, StudySessionService sessions,
+                               ConversationProperties properties) {
+        this(store, sessions, Clock.systemUTC(), properties);
+    }
+
+    /** Default properties (tests). */
     public ConversationService(ConversationStore store, StudySessionService sessions) {
         this(store, sessions, Clock.systemUTC());
     }
 
+    /** Default properties (tests). */
     public ConversationService(ConversationStore store, StudySessionService sessions, Clock clock) {
+        this(store, sessions, clock, ConversationProperties.defaults());
+    }
+
+    public ConversationService(ConversationStore store, StudySessionService sessions, Clock clock,
+                               ConversationProperties properties) {
         this.store = store;
         this.sessions = sessions;
         this.clock = clock;
+        this.personalRetentionDays = properties.personalRetentionDays();
     }
 
     // ------------------------------------------------------------------ CRUD
@@ -107,7 +123,8 @@ public class ConversationService {
         boolean hasMore = rows.size() > size;
         List<ConversationStore.Conversation> page = hasMore ? rows.subList(0, size) : rows;
         String next = hasMore ? encodeCursor(page.getLast()) : null;
-        return new ConversationDtos.Page(page.stream().map(ConversationService::item).toList(), next, hasMore);
+        return new ConversationDtos.Page(page.stream().map(ConversationService::item).toList(), next, hasMore,
+                personalRetentionDays);
     }
 
     @Transactional(readOnly = true)
@@ -144,6 +161,22 @@ public class ConversationService {
         ConversationStore.Conversation c = store.lockOwned(userId, conversationId)
                 .orElseThrow(ConversationService::notFound);
         store.softDeleteConversation(c.id(), clock.instant());
+    }
+
+    /**
+     * PT-13 결정 C: the owner marks ("저장") or unmarks a conversation. A saved conversation is skipped by both
+     * retention periods and kept until the user deletes it; unmarking makes it follow retention again (an already
+     * expired one goes at the next hourly run). Someone else's, missing or deleted conversation is 404. Locks the
+     * live row first, so the retention DELETE (FOR UPDATE SKIP LOCKED + saved_at re-check) and this cannot cross.
+     * Allowed in an ended session too (that is when it matters).
+     */
+    @Transactional
+    public ConversationDtos.SavedState setSaved(long userId, long conversationId, boolean saved) {
+        ConversationStore.Conversation c = store.lockOwned(userId, conversationId)
+                .orElseThrow(ConversationService::notFound);
+        ConversationStore.Conversation updated = store.setSaved(c.id(), saved ? clock.instant() : null)
+                .orElseThrow(ConversationService::notFound);
+        return new ConversationDtos.SavedState(String.valueOf(updated.id()), updated.saved(), updated.savedAt());
     }
 
     /** At most 20 memories per (user, scope). Text is what the user wrote (the screen pre-fills it). */
@@ -364,16 +397,17 @@ public class ConversationService {
 
     private static ConversationDtos.ListItem item(ConversationStore.Conversation c) {
         return new ConversationDtos.ListItem(String.valueOf(c.id()), c.topic(), c.title(), id(c.sessionId()),
-                c.messageCount(), c.lastMessageAt());
+                c.messageCount(), c.lastMessageAt(), c.saved(), c.savedAt());
     }
 
-    private static ConversationDtos.Detail detail(ConversationStore.Conversation c, ConversationStore.Summary summary,
-                                                  List<ConversationStore.Memory> memories) {
+    private ConversationDtos.Detail detail(ConversationStore.Conversation c, ConversationStore.Summary summary,
+                                           List<ConversationStore.Memory> memories) {
         ConversationDtos.SummaryView view = summary == null ? null
                 : new ConversationDtos.SummaryView(summary.text(), summary.createdAt());
         return new ConversationDtos.Detail(String.valueOf(c.id()), c.topic(), c.title(), id(c.sessionId()),
                 c.messageCount(), c.createdAt(), c.lastMessageAt(), view,
-                memories.stream().map(ConversationService::memory).toList());
+                memories.stream().map(ConversationService::memory).toList(), c.saved(), c.savedAt(),
+                personalRetentionDays);
     }
 
     private static ConversationDtos.MemoryView memory(ConversationStore.Memory m) {

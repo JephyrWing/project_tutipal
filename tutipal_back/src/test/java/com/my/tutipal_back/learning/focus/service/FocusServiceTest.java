@@ -86,7 +86,7 @@ class FocusServiceTest {
         StudySessionService sessionService = new StudySessionService(sessions, participants, mock(UserService.class),
                 mock(SessionEvents.class), mock(Presence.class), mock(ApplicationEventPublisher.class));
 
-        session = new StudySession("자바 기초", "자바", "ABC234", TEACHER);
+        session = new StudySession("자바 기초", "자바", "ABC234", TEACHER, 30);
         ReflectionTestUtils.setField(session, "id", SESSION);
         when(sessions.findById(SESSION)).thenReturn(Optional.of(session));
         when(sessions.lockById(SESSION)).thenReturn(Optional.of(session));

@@ -33,6 +33,7 @@
 MODEL_PROVIDER=ollama MODEL_BASE_URL=http://127.0.0.1:11434 EMBEDDING_MODEL=bge-m3 AI_INTERNAL_KEY=local-eval-key \
   .venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 18086
 export AI_INTERNAL_KEY=local-eval-key   # 하네스는 Spring처럼 환경 변수에서 내부 키를 읽는다 (--key는 로컬 덮어쓰기용)
+# PT-110 AI 노드(https://ai.<도메인>)로 돌릴 때만 CF_ACCESS_CLIENT_ID·CF_ACCESS_CLIENT_SECRET도 환경 변수로 둔다(둘 다 비우면 헤더 없음, 명령줄 옵션 없음)
 ./gradlew --no-daemon ragEval -PevalArgs="embed --base-url http://127.0.0.1:18086"
 curl localhost:11434/api/generate -d '{"model":"bge-m3","keep_alive":0}'      # 임베딩 모델 내리기
 # 2) 코사인 행

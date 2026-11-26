@@ -25,6 +25,7 @@ import com.my.tutipal_back.sessions.dto.CreateSessionRequest;
 import com.my.tutipal_back.sessions.dto.JoinSessionRequest;
 import com.my.tutipal_back.sessions.dto.ParticipantResponse;
 import com.my.tutipal_back.sessions.dto.SessionResponse;
+import com.my.tutipal_back.sessions.dto.UpdateAiRetentionRequest;
 import com.my.tutipal_back.sessions.dto.UpdateSettingsRequest;
 import com.my.tutipal_back.sessions.service.InviteCodeJoinService;
 import com.my.tutipal_back.sessions.service.InviteCodeJoinService.RetryLater;
@@ -79,6 +80,13 @@ public class StudySessionController {
     public SessionResponse updateSettings(@AuthenticationPrincipal OAuth2User me, @PathVariable Long id,
                                           @Valid @RequestBody UpdateSettingsRequest request) {
         return service.updateSettings(userId(me), id, request);
+    }
+
+    /** PT-13 결정 A: 수업 AI 대화 보관 일수 (선생님만, 끝난 수업도 가능). {"aiRetentionDays": 0..90} */
+    @PutMapping("/{id}/ai-retention")
+    public SessionResponse updateAiRetention(@AuthenticationPrincipal OAuth2User me, @PathVariable Long id,
+                                             @Valid @RequestBody UpdateAiRetentionRequest request) {
+        return service.updateAiRetention(userId(me), id, request.aiRetentionDays());
     }
 
     /** 즐겨찾기: {"pinned": true|false} */

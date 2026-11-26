@@ -115,7 +115,8 @@ class SummaryPolicyTest {
 
     @Test
     void numbersAreConfigurable() {
-        ConversationProperties custom = new ConversationProperties(0, 500,
+        ConversationProperties custom = new ConversationProperties(
+                ConversationProperties.DEFAULT_PERSONAL_RETENTION_DAYS, 500,
                 new ConversationProperties.Summary(5, 2, 3, Duration.ofSeconds(1)));
         SummaryPolicy small = new SummaryPolicy(custom);
 

@@ -68,8 +68,10 @@ public class StudySessionService {
     /** 세션을 연 사람이 그 세션의 TEACHER. */
     @Transactional
     public SessionResponse create(Long userId, CreateSessionRequest request) {
+        userService.lockActiveAccount(userId);   // first lock: serialized with withdrawal
         String topic = TopicPrompt.subject(request.topic());
-        StudySession session = sessions.save(new StudySession(request.title().trim(), topic, newCode(), userId));
+        StudySession session = sessions.save(new StudySession(request.title().trim(), topic, newCode(), userId,
+                request.aiRetentionDays()));
         participants.save(new SessionParticipant(session.getId(), userId, SessionRole.TEACHER));
         return SessionResponse.of(session, SessionRole.TEACHER, 1);
     }
@@ -81,6 +83,7 @@ public class StudySessionService {
      */
     @Transactional
     public SessionResponse join(Long userId, String code) {
+        userService.lockActiveAccount(userId);   // before the class row lock (same order as withdrawal)
         StudySession session = sessions.findByInviteCode(InviteCodes.normalize(code))
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "코드에 맞는 방이 없어요"));
         if (session.isEnded()) {
@@ -137,6 +140,18 @@ public class StudySessionService {
         session.updateSettings(TopicPrompt.subject(request.topic()), request.difficulty(),
                 request.hideAnswers(), request.preferMaterials());
         events.toSession(sessionId, "settings", sessionId);
+        return response(session, SessionRole.TEACHER);
+    }
+
+    /**
+     * PT-13 결정 A: 수업 AI 대화 보관 일수 변경 (선생님만: 비참가자 404, 학생 403). 끝난 수업에서도 바꿀 수 있다:
+     * 보관 기간은 종료 시각부터 세므로, 줄이면 이미 지난 대화는 다음 정리 작업(1시간마다)에서 지워진다.
+     */
+    @Transactional
+    public SessionResponse updateAiRetention(Long userId, Long sessionId, int aiRetentionDays) {
+        requireTeacher(sessionId, userId);
+        StudySession session = findSession(sessionId);
+        session.changeAiRetentionDays(aiRetentionDays);
         return response(session, SessionRole.TEACHER);
     }
 

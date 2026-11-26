@@ -184,7 +184,7 @@ function AccountTab() {
   )
 }
 
-/** 회원 탈퇴 (FR-MY-02): 한 번 더 확인한 뒤 서버가 기록을 지우면 로그인 화면으로 */
+/** 회원 탈퇴 (FR-MY-02): 한 번 더 확인한 뒤 서버가 계정을 익명화하면(기록은 보존, PM 2026-11-26) 로그인 화면으로 */
 function Withdraw() {
   const { refresh } = useAuth()
   const [confirming, setConfirming] = useState(false)
@@ -205,7 +205,7 @@ function Withdraw() {
     return (
       <div className="settings-danger row-gap">
         <span className="muted small">
-          탈퇴하면 내가 연 세션(안의 퀴즈 · 자료 · 게시판 포함), 내 답안 · 글 · 복습 기록이 모두 지워져요. 되돌릴 수 없어요
+          탈퇴하면 이름 · 이메일 · 소셜 계정 연결이 지워지고 다시 로그인할 수 없어요. 수업 · 답안 · 글 같은 기록은 '탈퇴한 사용자'로 남아요. 되돌릴 수 없어요
         </span>
         <button className="btn btn-danger btn-sm" onClick={() => void run()} disabled={busy}>탈퇴</button>
         <button className="btn btn-sm" onClick={() => setConfirming(false)} disabled={busy}>취소</button>

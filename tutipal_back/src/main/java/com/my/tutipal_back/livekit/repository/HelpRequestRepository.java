@@ -25,5 +25,7 @@ public interface HelpRequestRepository extends JpaRepository<HelpRequest, Long> 
 
     List<HelpRequest> findBySessionIdAndUserIdAndStatusIn(Long sessionId, Long userId, Collection<HelpRequest.Status> statuses);
 
+    List<HelpRequest> findByUserIdAndStatusInOrderByIdAsc(Long userId, Collection<HelpRequest.Status> statuses);
+
     long countBySessionIdAndStatus(Long sessionId, HelpRequest.Status status);
 }

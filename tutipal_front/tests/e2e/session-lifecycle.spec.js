@@ -27,7 +27,7 @@ test('수업 종료와 초대 참여가 겹쳐도 종료 응답과 최종 참가
     await test.step(`새 수업 ${round}의 참여와 종료`, async () => {
       const created = await sessionRequest(teacher, '/api/sessions', {
         ...teacherPost,
-        body: JSON.stringify({ title: `PT15 동시 참여와 종료 ${round}`, topic: '수학' }),
+        body: JSON.stringify({ title: `PT15 동시 참여와 종료 ${round}`, topic: '수학', aiRetentionDays: 30 }),
       })
       expect(created.status).toBe(201)
       expect(created.body).toMatchObject({ participantCount: 1, ended: false, myRole: 'TEACHER' })
