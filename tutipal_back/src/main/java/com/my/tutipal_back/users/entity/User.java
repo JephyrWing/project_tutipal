@@ -16,12 +16,17 @@ import jakarta.persistence.UniqueConstraint;
 @Table(name = "users", uniqueConstraints = @UniqueConstraint(columnNames = {"provider", "providerId"}))
 public class User extends BaseTimeEntity {
 
+    /** 탈퇴한 계정의 provider. 소셜 로그인 provider(google · naver · kakao · dev)와 겹치지 않아 다시 로그인할 수 없다. */
+    public static final String WITHDRAWN_PROVIDER = "withdrawn";
+    /** 탈퇴한 계정의 표시 이름. 남은 기록(참가자 · 글 · 답안 · 도움 채팅)에 이 이름이 보인다. */
+    public static final String WITHDRAWN_NAME = "탈퇴한 사용자";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @Column(nullable = false, length = 20)
-    private String provider;        // google | naver | kakao
+    private String provider;        // google | naver | kakao | dev | withdrawn(탈퇴, AccountCleanup.anonymize)
 
     @Column(nullable = false, length = 100)
     private String providerId;      // 소셜 쪽 사용자 id
@@ -48,6 +53,11 @@ public class User extends BaseTimeEntity {
     /** 앱 표시 이름. 소셜 로그인은 최초 가입 이후 이 값을 덮어쓰지 않는다. */
     public void rename(String name) {
         this.name = name;
+    }
+
+    /** 회원 탈퇴로 익명화된 계정. 없는 사용자처럼 다룬다 (PM 2026-11-26, PT-13). */
+    public boolean isWithdrawn() {
+        return WITHDRAWN_PROVIDER.equals(provider);
     }
 
     public Long getId() { return id; }

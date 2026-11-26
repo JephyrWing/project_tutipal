@@ -32,14 +32,19 @@ public class UserService {
                         profile.provider(), profile.providerId(), profile.displayName())));
     }
 
-    /** 다른 도메인(auth)용: 엔티티 그대로 (세션 로그인 만들 때). */
+    /**
+     * 다른 도메인(auth)용: 엔티티 그대로 (세션 로그인 만들 때). 탈퇴한 계정은 없는 사용자처럼 404 (앱 로그인 교환 코드가
+     * 탈퇴 전에 발급됐어도 새 로그인 세션을 만들지 않게).
+     */
     public User getUser(Long userId) {
         return userRepository.findById(userId)
+                .filter(user -> !user.isWithdrawn())
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다"));
     }
 
     public UserResponse getMe(Long userId) {
         return userRepository.findById(userId)
+                .filter(user -> !user.isWithdrawn())
                 .map(UserResponse::from)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "사용자를 찾을 수 없습니다"));
     }

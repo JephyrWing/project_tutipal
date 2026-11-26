@@ -47,7 +47,8 @@ import com.my.tutipal_back.users.repository.AccountCleanup;
  * PT-90: dedicated Gradle task focusDbTest only (excluded from test). Disposable loopback PostgreSQL, synthetic data,
  * no env files or production DB. Missing env fails instead of skipping (CI also fails when nothing ran).
  * Checks V23 constraints (FK CASCADE, UNIQUE, CHECK), ON CONFLICT and the 15-minute read, the consent row lock
- * (FOR SHARE vs withdrawal, both orders), account deletion racing withdrawal without deadlock, and retention.
+ * (FOR SHARE vs withdrawal, both orders), account withdrawal (anonymize, rows kept) racing consent withdrawal
+ * without deadlock, and retention.
  */
 class FocusStorePostgresTest {
 
@@ -297,10 +298,15 @@ class FocusStorePostgresTest {
         assertThat(count("focus_states")).isZero();
     }
 
-    // ------------------------------------------------------------------ account deletion vs withdrawal
+    // ------------------------------------------------------------------ account withdrawal vs consent withdrawal
 
+    /**
+     * PM 2026-11-26 (PT-13): account withdrawal anonymizes the users row and keeps every focus row, also the rows of
+     * other students in the classes the withdrawn teacher owns. It still runs together with consent withdrawals
+     * (session rows first, then the users row) without a deadlock.
+     */
     @Test
-    void accountDeletionAndWithdrawalsRunTogetherWithoutDeadlock() throws Exception {
+    void accountWithdrawalKeepsFocusRowsAndRunsWithConsentWithdrawalsWithoutDeadlock() throws Exception {
         AccountCleanup cleanup = new AccountCleanup(JdbcClient.create(jdbc));
         for (int round = 0; round < 5; round++) {
             if (round > 0) {
@@ -310,12 +316,16 @@ class FocusStorePostgresTest {
                 store.insertSamples(SESSION, user, List.of(sample(MINUTE), sample(MINUTE.minusSeconds(60))));
                 store.upsertState(SESSION, user, FocusState.FOCUS, "v", MINUTE);
             }
-            jdbc.update("INSERT INTO focus_consents(user_id,version,consented_at) VALUES (?,?,now())", TEACHER, VERSION);
             CyclicBarrier start = new CyclicBarrier(3);
             List<Future<?>> runs = List.of(
                     pool.submit(() -> {
                         start.await(10, TimeUnit.SECONDS);
-                        tx.executeWithoutResult(s -> cleanup.deleteAll(TEACHER));   // owner: all session rows
+                        tx.executeWithoutResult(s -> {   // same SQL order as WithdrawalService (owner of SESSION)
+                            cleanup.lockHelpSessions(TEACHER);
+                            jdbc.update("UPDATE study_sessions SET ended_at = now() WHERE owner_id = ? AND ended_at IS NULL",
+                                    TEACHER);
+                            assertThat(cleanup.anonymize(TEACHER)).isEqualTo(1);
+                        });
                         return null;
                     }),
                     pool.submit(() -> {
@@ -325,14 +335,29 @@ class FocusStorePostgresTest {
                     }),
                     pool.submit(() -> {
                         start.await(10, TimeUnit.SECONDS);
-                        tx.executeWithoutResult(s -> store.deleteUserData(TEACHER));
+                        tx.executeWithoutResult(s -> {   // the student withdraws the account too
+                            cleanup.lockHelpSessions(OTHER);
+                            assertThat(cleanup.anonymize(OTHER)).isEqualTo(1);
+                        });
                         return null;
                     }));
             for (Future<?> run : runs) {
                 run.get(30, TimeUnit.SECONDS);   // a deadlock would surface as an exception from PostgreSQL
             }
-            assertThat(count("focus_samples")).isZero();
-            assertThat(count("focus_states")).isZero();
+            // consent withdrawal deleted STUDENT's rows; account withdrawal deleted nothing
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM focus_samples WHERE user_id = ?", Long.class, OTHER))
+                    .isEqualTo(2L);
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM focus_states WHERE user_id = ?", Long.class, OTHER))
+                    .isEqualTo(1L);
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM focus_consents WHERE user_id = ?", Long.class, OTHER))
+                    .isEqualTo(1L);
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM focus_samples WHERE user_id = ?", Long.class, STUDENT))
+                    .isZero();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM study_sessions WHERE owner_id = ?", Long.class, TEACHER))
+                    .isEqualTo(3L);
+            assertThat(jdbc.queryForList("SELECT provider FROM users WHERE id IN (?,?)", String.class, TEACHER, OTHER))
+                    .containsOnly("withdrawn");
+            assertThat(cleanup.anonymize(TEACHER)).isZero();   // second withdrawal changes nothing
         }
     }
 

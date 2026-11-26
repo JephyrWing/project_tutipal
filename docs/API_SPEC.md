@@ -132,7 +132,7 @@
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/users/me` | 로그인 | — | 200 `UserResponse{id, name, provider, role(ADMIN\|USER)}` | 404 |
 | PATCH | `/api/users/me/name` | 로그인 | `UpdateNameRequest{name}` (`@Valid` 없음, 서비스가 검사) | 200 `UserResponse` | 400 제어문자·1~50자 위반 |
-| DELETE | `/api/users/me` | 로그인 | — | 204, 기록 삭제 후 세션 종료 (커밋 d5e3536 이후 그 사용자의 모든 로그인 세션) | 404 |
+| DELETE | `/api/users/me` | 로그인 | — | 204. 계정 익명화(provider=`withdrawn`, 이름 `탈퇴한 사용자`, 이메일·소셜 ID 제거), 기록은 모두 보존. 내가 연 진행 중 수업은 종료(`ended`), 내 열린 도움 요청은 DONE(`helpEnded`). 커밋 뒤 그 사용자의 모든 로그인 세션 종료 (PM 2026-11-26, PT-13) | 404 (없거나 이미 탈퇴한 사용자) |
 
 ### 2.4 수업 (`/api/sessions`)
 
@@ -340,7 +340,7 @@ payload는 항상 `{"type": string, "id": number}` 하나. **원문은 싣지 �
 | `/topic/sessions/{sid}/events` | 수업 참가자 전체 | `quiz` | quizId | 퀴즈 출제 |
 | 〃 | 〃 | `quizClosed` | quizId | 퀴즈 마감 |
 | 〃 | 〃 | `settings` | sessionId | 수업 설정 변경 |
-| 〃 | 〃 | `ended` | sessionId | 수업 종료, 교사 탈퇴로 수업 닫힘 |
+| 〃 | 〃 | `ended` | sessionId | 수업 종료, 교사 탈퇴로 수업 종료 |
 | 〃 | 〃 | `notice` / `notices` | noticeId | 알림 공지(`alert=true`) / 일반 공지 등록·삭제 |
 | 〃 | 〃 | `posts` | postId | 글·댓글 등록·삭제 |
 | 〃 | 〃 | `materialAlert` / `materials` | materialId | 알림 업로드(`alert=true`) / 업로드·재사용·삭제·재색인·색인 완료 |

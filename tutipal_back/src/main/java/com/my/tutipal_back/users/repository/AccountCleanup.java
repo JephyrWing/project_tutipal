@@ -5,44 +5,26 @@ import java.util.List;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 
+import com.my.tutipal_back.users.entity.User;
+
 /**
- * 회원 탈퇴(FR-MY-02) 때 그 사람의 기록을 지운다. 여러 도메인 테이블을 외래키 순서대로 한 번에 지워야 해서 SQL 로 모았다.
- * <ul>
- *   <li>이 사람이 연 세션: 세션 안의 퀴즈·답안·공지·게시글·자료·도움 요청·참가자까지 통째로 (세션 주인이 없어지므로)</li>
- *   <li>다른 세션: 이 사람의 답안·게시글(달린 댓글 포함)·댓글·도움 요청·자료·참가 기록</li>
- *   <li>복습 기록(review_items)은 users 삭제 때 ON DELETE CASCADE</li>
- *   <li>AI 대화(ai_conversations · 메시지 · 요약 · ai_memories, PT-106)는 users · study_sessions 삭제 때 ON DELETE CASCADE</li>
- *   <li>집중도 기록(focus_consents · focus_samples · focus_states, PT-90, 동의 철회와 같은 순서)는 맨 앞에서 지운다 (FK CASCADE 도 있음)</li>
- *   <li>PT-87 학생 질문 원문(chat_questions): 이 사람의 질문과 이 사람이 연 세션의 질문 전부를 명시적으로 지운다.
- *       개념(session_concepts · quiz_concepts)은 세션 · 퀴즈 삭제 때 ON DELETE CASCADE</li>
- * </ul>
- * ponytail: NFR-PRV-02 보관 기간이 미정(PT-13)이라 "탈퇴 즉시 전부 삭제"로 둠. 보관 기간이 정해지면 바로 지우지 말고
- *   익명화(author_id → 탈퇴 계정) 또는 지연 삭제 작업으로 바꾼다. 새 테이블이 users 를 참조하면 아래 목록에도 추가해야 한다.
+ * 회원 탈퇴(FR-MY-02) SQL. PM 결정(2026-11-26, PT-13): 계정은 익명화하고 기록은 하나도 지우지 않는다.
+ * 답안 · 게시글 · 댓글 · 도움 요청과 도움 채팅 · 참가 기록 · 내가 연 수업(안의 다른 학생 기록 포함) · 자료와 파일 ·
+ * 복습 기록 · AI 대화 · 집중도 기록이 모두 남고, 화면에는 이름 대신 {@link User#WITHDRAWN_NAME} 이 보인다.
+ * users 행이 남으므로 새 테이블이 users 를 참조해도 여기 추가할 것은 없다.
  */
 @Repository
 public class AccountCleanup {
 
-    private static final String OWNED = "(SELECT id FROM study_sessions WHERE owner_id = :u)";
-
-    /** 외래키 순서. 자식 → 부모. 집중도 기록(PT-90)은 FK CASCADE 도 있지만 먼저 명시적으로 지운다.
-     *  focus 3줄은 맨 앞(동의 철회와 같은 순서), 그 다음 PT-87 chat_questions. 테스트가 순서를 읽으므로 package-private. */
-    static final List<String> DELETES = List.of(
-            // same order as consent withdrawal (JdbcFocusStore.deleteUserData): consent row first, so both paths lock
-            // in one order (no deadlock) and a running focus write holding it FOR SHARE finishes before its rows go
-            "DELETE FROM focus_consents WHERE user_id = :u",
-            "DELETE FROM focus_samples WHERE user_id = :u OR session_id IN " + OWNED,
-            "DELETE FROM focus_states WHERE user_id = :u OR session_id IN " + OWNED,
-            "DELETE FROM chat_questions WHERE user_id = :u OR session_id IN " + OWNED,
-            "DELETE FROM comments WHERE author_id = :u",
-            "DELETE FROM posts WHERE author_id = :u OR session_id IN " + OWNED,   // 남이 단 댓글은 ON DELETE CASCADE
-            "DELETE FROM notices WHERE author_id = :u OR session_id IN " + OWNED,
-            "DELETE FROM quiz_answers WHERE user_id = :u OR quiz_id IN (SELECT id FROM quizzes WHERE session_id IN " + OWNED + ")",
-            "DELETE FROM quizzes WHERE session_id IN " + OWNED,
-            "DELETE FROM help_requests WHERE user_id = :u OR accepted_by_user_id = :u OR session_id IN " + OWNED,
-            "DELETE FROM materials WHERE uploader_id = :u OR session_id IN " + OWNED,   // 청크는 ON DELETE CASCADE
-            "DELETE FROM session_participants WHERE user_id = :u OR session_id IN " + OWNED,
-            "DELETE FROM study_sessions WHERE owner_id = :u",
-            "DELETE FROM users WHERE id = :u");
+    /**
+     * provider_id 에 우리 id 를 넣어 uk_users_provider(provider, provider_id) 를 지키고 원래 소셜 id 를 지운다.
+     * 소셜 로그인은 (provider, provider_id) 로 찾으므로 같은 소셜 계정으로 다시 들어오면 새 사용자가 만들어진다.
+     * email 은 엔티티에 매핑돼 있지 않아(PT-14, V13 이후 항상 NULL) 여기서 함께 비운다.
+     * 이미 익명화된 행은 바꾸지 않아 0을 돌려준다 (동시에 두 번 탈퇴하면 뒤의 것이 행 잠금을 기다린 뒤 0).
+     */
+    static final String ANONYMIZE = "UPDATE users SET provider = :withdrawn, provider_id = CAST(id AS VARCHAR(100)),"
+            + " name = :name, email = NULL, role = 'USER', updated_at = CURRENT_TIMESTAMP"
+            + " WHERE id = :u AND provider <> :withdrawn";
 
     private final JdbcClient jdbc;
 
@@ -50,25 +32,22 @@ public class AccountCleanup {
         this.jdbc = jdbc;
     }
 
-    /** 이 사람이 연 세션 중 아직 안 끝난 것 (참가자 화면에 종료 알림을 보내려고). */
+    /** 계정을 익명화한다. 바뀐 행 수 (0 = 없는 사용자이거나 이미 탈퇴). */
+    public int anonymize(Long userId) {
+        return jdbc.sql(ANONYMIZE)
+                .param("withdrawn", User.WITHDRAWN_PROVIDER)
+                .param("name", User.WITHDRAWN_NAME)
+                .param("u", userId)
+                .update();
+    }
+
+    /** 이 사람이 연 세션 중 아직 안 끝난 것 (탈퇴 때 닫으려고). */
     public List<Long> openOwnedSessionIds(Long userId) {
-        return jdbc.sql("SELECT id FROM study_sessions WHERE owner_id = :u AND ended_at IS NULL")
+        return jdbc.sql("SELECT id FROM study_sessions WHERE owner_id = :u AND ended_at IS NULL ORDER BY id")
                 .param("u", userId).query(Long.class).list();
     }
 
-    /** 지울 자료의 저장소 키 (DB 커밋 뒤 파일도 지우려고). */
-    public List<String> materialKeys(Long userId) {
-        return jdbc.sql("SELECT storage_key FROM materials WHERE uploader_id = :u OR session_id IN " + OWNED)
-                .param("u", userId).query(String.class).list();
-    }
-
-    public void deleteAll(Long userId) {
-        for (String sql : DELETES) {
-            jdbc.sql(sql).param("u", userId).update();
-        }
-    }
-
-    /** Same session-first order as chat and help state changes; transcript deletion is atomic. */
+    /** Same session-first order as chat and help state changes (lock before closing sessions and help requests). */
     public void lockHelpSessions(Long userId) {
         jdbc.sql("SELECT id FROM study_sessions WHERE owner_id = :u OR id IN "
                 + "(SELECT session_id FROM session_participants WHERE user_id = :u) ORDER BY id FOR UPDATE")

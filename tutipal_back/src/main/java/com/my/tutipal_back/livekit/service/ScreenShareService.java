@@ -135,6 +135,18 @@ public class ScreenShareService {
         }
     }
 
+    /**
+     * 회원 탈퇴: 그 학생의 열린 도움 요청을 모든 세션에서 나가기와 같은 방식(DONE + helpEnded)으로 닫는다. 기록은 남는다.
+     * 호출하는 쪽이 세션 행을 먼저 잠근다 (WithdrawalService → AccountCleanup.lockHelpSessions).
+     */
+    @Transactional
+    public void closeOpenHelpsOf(Long userId) {
+        for (HelpRequest help : helps.findByUserIdAndStatusInOrderByIdAsc(userId, OPEN)) {
+            help.moveTo(Status.DONE);
+            notifyBoth(help, "helpEnded");
+        }
+    }
+
     /** 방 B 입장권: 진행 중(ACCEPTED)일 때 요청한 학생과 그 세션 선생님만. */
     public JoinInfo helpToken(Long userId, Long helpId) {
         HelpRequest help = helps.findById(helpId)

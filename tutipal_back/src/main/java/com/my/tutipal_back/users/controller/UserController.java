@@ -43,7 +43,7 @@ public class UserController {
         return userService.updateName(Long.valueOf(principal.getName()), request.name());
     }
 
-    /** 회원 탈퇴 (FR-MY-02). 기록을 지운 뒤(커밋 완료) 이 사용자의 모든 로그인 세션을 끊는다. */
+    /** 회원 탈퇴 (FR-MY-02). 계정을 익명화하고(기록은 보존) 커밋 뒤 이 사용자의 모든 로그인 세션을 끊는다. 이미 탈퇴했으면 404. */
     @DeleteMapping("/me")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void withdraw(@AuthenticationPrincipal OAuth2User principal, HttpServletRequest request) {
