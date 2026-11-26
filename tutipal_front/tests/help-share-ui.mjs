@@ -14,7 +14,7 @@ const mock = `
 export const RoomEvent=Object.fromEntries(['TrackSubscribed','TrackUnsubscribed','SignalReconnecting','Reconnecting','Reconnected','Disconnected','ParticipantConnected','ParticipantDisconnected'].map(k=>[k,k]));
 window.testRooms=[];window.testCapture=[];
 export class Room {
- constructor(){this.handlers=new Map();this.state='disconnected';this.remoteParticipants=new Map();this.localParticipant={trackPublications:new Map(),setScreenShareEnabled:async on=>{
+ constructor(){this.handlers=new Map();this.state='disconnected';this.remoteParticipants=new Map(location.search.includes('noTeacher')?[]:[['teacher',{identity:'teacher',trackPublications:new Map()}]]);this.localParticipant={trackPublications:new Map(),setScreenShareEnabled:async on=>{
   window.testCapture.push(on);if(!on)return;const media=new EventTarget();media.readyState='live';media.getSettings=()=>({width:800,height:600});const track={mediaStreamTrack:media,stop(){media.readyState='ended'},attach(){},detach(){}};this.localParticipant.trackPublications.set('screen',{track});return{track};}};window.testRooms.push(this);}
  on(e,fn){if(!this.handlers.has(e))this.handlers.set(e,new Set());this.handlers.get(e).add(fn);return this}
  off(e,fn){this.handlers.get(e)?.delete(fn);return this}
@@ -93,13 +93,39 @@ try {
   await page.evaluate(() => { const r = window.testRooms.at(-1); r.state = 'reconnecting'; r.emit('Reconnecting'); r.state = 'connected'; r.emit('Reconnected') })
   await expect(picker).toBeEnabled(); await expect(picker).toHaveValue(''); await expect(consent).not.toBeChecked(); await expect(start).toBeDisabled()
   expect(await page.evaluate(() => window.testCapture.filter(Boolean).length)).toBe(captureCount); checks++
+  // Last teacher leaves while capture is live: stop pixels, reset consent and never republish on return.
+  await picker.selectOption('window:123:0'); await consent.check(); await start.click()
+  await expect(page.getByRole('button', { name: '화면 공유 중지', exact: true })).toBeVisible()
+  const peerCaptureCount = await page.evaluate(() => window.testCapture.filter(Boolean).length)
+  await page.evaluate(() => { const r=window.testRooms.at(-1); const p=r.remoteParticipants.get('teacher'); r.remoteParticipants.delete('teacher'); r.emit('ParticipantDisconnected',p) })
+  await expect(page.getByText('선생님 화면 연결을 기다리는 중', { exact: true })).toBeVisible()
+  await expect(picker).toHaveValue(''); await expect(consent).not.toBeChecked(); await expect(start).toBeDisabled()
+  await expect(page.getByRole('button', { name: '화면 공유 중지', exact: true })).toHaveCount(0)
+  expect(await page.evaluate(() => window.testRooms.at(-1).localParticipant.trackPublications.get('screen').track.mediaStreamTrack.readyState)).toBe('ended')
+  await expect.poll(() => page.evaluate(() => window.testCapture.at(-1))).toBe(false); checks++
+  await page.evaluate(() => { const r=window.testRooms.at(-1),p={identity:'teacher',trackPublications:new Map()};r.remoteParticipants.set(p.identity,p);r.emit('ParticipantConnected',p) })
+  await expect(page.getByText('선생님과 연결됨', { exact: true })).toBeVisible()
+  await expect(start).toBeDisabled(); await expect(consent).not.toBeChecked(); await expect(picker).toHaveValue('')
+  expect(await page.evaluate(() => window.testCapture.filter(Boolean).length)).toBe(peerCaptureCount); checks++
+  // Departure while Main is still selecting also cancels a late publish, including a quick teacher return.
+  await picker.selectOption('window:123:0'); await consent.check()
+  await page.evaluate(() => { window.mainGate=new Promise(resolve=>{window.releaseMain=resolve}) })
+  await start.click(); await expect(page.getByRole('button', {name:'공유 준비 중…',exact:true})).toBeDisabled()
+  await page.evaluate(() => {const r=window.testRooms.at(-1),p=r.remoteParticipants.get('teacher');r.remoteParticipants.delete(p.identity);r.emit('ParticipantDisconnected',p);r.remoteParticipants.set(p.identity,p);r.emit('ParticipantConnected',p);window.releaseMain();window.mainGate=null})
+  await expect(picker).toBeEnabled(); await expect(picker).toHaveValue(''); await expect(start).toBeDisabled()
+  expect(await page.evaluate(() => window.testCapture.filter(Boolean).length)).toBe(peerCaptureCount); checks++
   await picker.selectOption('window:123:0'); await consent.check()
   await page.evaluate(() => { window.mainGate = new Promise(resolve => { window.releaseMain = resolve }) })
   await start.click(); await expect(page.getByRole('button', { name: '공유 준비 중…', exact: true })).toBeDisabled()
   await page.getByRole('button', { name: '끝내기', exact: true }).click()
   await expect(page.getByRole('button', { name: '✋ 도움 요청', exact: true })).toBeVisible()
   await page.evaluate(() => window.releaseMain())
-  expect(await page.evaluate(() => window.testCapture.filter(Boolean).length)).toBe(captureCount); checks++
+  expect(await page.evaluate(() => window.testCapture.filter(Boolean).length)).toBe(peerCaptureCount); checks++
+  await page.goto(`http://127.0.0.1:${port}/share-test.html?noTeacher`)
+  await expect(page.getByText('선생님 화면 연결을 기다리는 중', {exact:true})).toBeVisible()
+  await picker.selectOption('window:123:0')
+  await expect(consent).toBeDisabled(); await expect(start).toBeDisabled()
+  expect(await page.evaluate(() => window.testCapture)).toEqual([]); checks++
   expect(errors).toEqual([])
   console.log(`Synthetic Electron share UI: scenarios=${checks} passed=${checks} failed=0 rendererErrors=${errors.length}`)
 } finally {

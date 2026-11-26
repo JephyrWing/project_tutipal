@@ -82,6 +82,9 @@ function StudentView({ session, reload }) {
   const [quiz, setQuiz] = useState(null)
   const [dismissed, setDismissed] = useState([])
   const [helpKey, setHelpKey] = useState(0)
+  /** 챗봇 답변의 "선생님께 도움 요청" 버튼이 넘긴 초안 {text, sessionId, seq}. seq 가 바뀔 때마다 StudentHelp 가
+   * 같은 수업의 초안이면 모달을 연다 (PT-113) */
+  const [helpDraft, setHelpDraft] = useState(null)
   const [removed, setRemoved] = useState(false)
 
   // 화면을 열 때 이미 열려 있는 질문이 있으면 띄운다 (늦게 들어온 학생 · 새로고침)
@@ -145,7 +148,7 @@ function StudentView({ session, reload }) {
   return (
     <div className="page session-page">
       <SessionHead session={session} badge="학생" live={live}
-        actions={<><StudentHelp sessionId={session.id} reloadKey={helpKey} /><LeaveButton sessionId={session.id} /></>} />
+        actions={<><StudentHelp sessionId={session.id} reloadKey={helpKey} draft={helpDraft} /><LeaveButton sessionId={session.id} /></>} />
       <StudentFocusCard sessionId={session.id} />
       {showQuiz && (
         <StudentQuizModal
@@ -162,7 +165,8 @@ function StudentView({ session, reload }) {
         <button role="tab" aria-selected={tab === 'board'} onClick={() => setTab('board')}>게시판</button>
         <button role="tab" aria-selected={tab === 'materials'} onClick={() => setTab('materials')}>자료</button>
       </nav>
-      {tab === 'chat' && <ChatPanel topic={session.topic} sessionId={session.id} />}
+      {tab === 'chat' && <ChatPanel topic={session.topic} sessionId={session.id}
+        onRequestHelp={(text) => setHelpDraft((d) => ({ text, sessionId: session.id, seq: (d?.seq ?? 0) + 1 }))} />}
       {tab === 'live' && <StudentLiveTab sessionId={session.id} />}
       {tab === 'notice' && <NoticesPanel sessionId={session.id} teacher={false} reloadKey={keys.notice} />}
       {tab === 'board' && <BoardPanel sessionId={session.id} teacher={false} reloadKey={keys.board} />}

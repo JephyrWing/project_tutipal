@@ -3,11 +3,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { screenshare } from '../api/screenshare'
 import { request } from '../api/client'
 import { useHelpDrawing } from '../api/realtime'
+import { HELP_MESSAGE_MAX } from '../utils/helpDraft'
 import { applyDraw, COLORS, hitStrokes, renderDraw } from '../draw'
 import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
 import { createLiveRoomSession } from '../utils/liveRoomSession'
 import { createScreenShareSession } from '../utils/screenShareSession'
+import { watchHelpPeers } from '../utils/helpPeerPresence'
 import { createShareSourceCatalog } from '../utils/shareSourceCatalog'
 import HelpSharePicker from '../components/HelpSharePicker'
 import HelpChat from '../components/HelpChat'
@@ -244,25 +246,89 @@ export function StudentLiveTab({ sessionId }) {
 
 // ---------------- 도움 요청 (방 B) ----------------
 
-/** 수락 뒤 학생이 대상 선택·미리보기·동의를 거쳐 공유한다. */
-export function StudentHelp({ sessionId, reloadKey }) {
+/**
+ * 수락 뒤 학생이 대상 선택·미리보기·동의를 거쳐 공유한다.
+ * draft {text, seq}: 챗봇이 도움 요청을 추천한 답변에서 학생이 버튼을 누르면 넘어온다 (PT-113).
+ * 메시지 칸을 AI 요약으로 채워 모달만 연다. 요청은 학생이 고치거나 지운 뒤 "요청 보내기"를 눌러야만 나간다.
+ */
+export function StudentHelp({ sessionId, reloadKey, draft }) {
   const [mine, setMine] = useState(null)
   const [open, setOpen] = useState(false)
   const [message, setMessage] = useState('')
   const [share, setShare] = useState(true)
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
+  const [fromDraft, setFromDraft] = useState(false)
+  /** 이 수업의 내 도움 요청 목록 상태: loading → ok | failed. ok 일 때만 열린 요청 유무를 알 수 있으므로 초안 모달을 연다 */
+  const [listState, setListState] = useState('loading')
+  const handledDraft = useRef(0)
+  /** 초안이 올 때마다 그 초안에 대해 한 번 목록을 새로 조회한다. 이전 조회 결과(성공·실패 모두)에 기대지 않는다 */
+  const checkedDraft = useRef(0)
+  const [refreshKey, setRefreshKey] = useState(0)
+  const active = mine?.status === 'PENDING' || mine?.status === 'ACCEPTED'
+
+  // 다른 수업으로 바뀌면 이전 수업의 요청 상태 · 모달 · 초안을 버린다
+  useEffect(() => {
+    setListState('loading')
+    setMine(null)
+    setOpen(false)
+    setMessage('')
+    setFromDraft(false)
+    setNote('')
+  }, [sessionId])
 
   useEffect(() => {
+    if (!draft || draft.seq === handledDraft.current) return
+    if (draft.sessionId !== sessionId) {
+      handledDraft.current = draft.seq
+      return
+    }
+    if (checkedDraft.current !== draft.seq) {
+      checkedDraft.current = draft.seq
+      setListState('loading')
+      setRefreshKey((k) => k + 1)
+      return
+    }
+    if (listState === 'loading') return
+    handledDraft.current = draft.seq
+    if (listState === 'failed') {
+      setNote('도움 요청 상태를 확인하지 못했어요. 잠시 후 다시 눌러 주세요')
+      return
+    }
+    if (active) {
+      setNote('이미 보낸 도움 요청이 있어요. 선생님 답을 기다려 주세요')
+      return
+    }
+    setMessage(Array.from(draft.text).slice(0, HELP_MESSAGE_MAX).join(''))
+    setFromDraft(true)
+    setError('')
+    setOpen(true)
+  }, [draft, listState, active, sessionId])
+
+  // 초안 모달이 열려 있는 사이 열린 요청이 확인되면(다른 창에서 보냄 등) 모달을 닫고 안내만 한다
+  useEffect(() => {
+    if (open && fromDraft && active) {
+      setOpen(false)
+      setNote('이미 보낸 도움 요청이 있어요. 선생님 답을 기다려 주세요')
+    }
+  }, [open, fromDraft, active])
+
+  useEffect(() => {
+    let current = true // 수업이 바뀐 뒤 늦게 온 이전 수업 응답은 버린다
     screenshare.listHelp(sessionId).then((l) => {
+      if (!current) return
       const next = l[0] ?? null
       // 대기 중이던 요청이 사라짐 = 선생님이 "나중에" (내가 취소한 경우는 cancel() 이 먼저 mine 을 비움)
       setMine((prev) => {
         if (prev?.status === 'PENDING' && !next) setNote('선생님이 조금 뒤에 볼게요. 잠시 후 다시 요청해 주세요')
         return next
       })
-    }, () => undefined)
-  }, [sessionId, reloadKey])
+      setListState('ok')
+    }, () => {
+      if (current) setListState((s) => (s === 'ok' ? s : 'failed'))
+    })
+    return () => { current = false }
+  }, [sessionId, reloadKey, refreshKey])
 
   async function onSubmit(e) {
     e.preventDefault()
@@ -292,7 +358,11 @@ export function StudentHelp({ sessionId, reloadKey }) {
           <button className="btn btn-sm" onClick={() => void cancel()}>취소</button>
         </span>
       ) : (
-        <button className="btn btn-sm" onClick={() => setOpen(true)}>✋ 도움 요청</button>
+        <button className="btn btn-sm" onClick={() => {
+          if (fromDraft) setMessage('') // 닫아 둔 AI 초안을 안내 없이 남기지 않는다
+          setFromDraft(false)
+          setOpen(true)
+        }}>✋ 도움 요청</button>
       )}
       {note && <span className="muted small">{note}</span>}
       {open && (
@@ -302,7 +372,10 @@ export function StudentHelp({ sessionId, reloadKey }) {
               <Mascot mood="happy" size={80} />
               <h2>선생님에게 도움 요청</h2>
             </header>
-            <textarea className="input" rows={4} maxLength={300} value={message} onChange={(e) => setMessage(e.target.value)}
+            {fromDraft && (
+              <p className="muted small">AI 조교가 만든 요약이에요. 질문 원문은 들어 있지 않아요. 고치거나 지운 뒤 보내 주세요.</p>
+            )}
+            <textarea className="input" rows={4} maxLength={HELP_MESSAGE_MAX} value={message} onChange={(e) => setMessage(e.target.value)}
               placeholder="어디서 막혔는지 적어 주세요" autoFocus required />
             <label className="check-row">
               <input type="checkbox" checked={share} onChange={(e) => setShare(e.target.checked)} />
@@ -332,6 +405,8 @@ function HelpSession({ help, refreshKey, onEnd }) {
   const [starting, setStarting] = useState(false)
   const [selected, setSelected] = useState(null)
   const [previewTrack, setPreviewTrack] = useState(null)
+  const [teacherConnected, setTeacherConnected] = useState(false)
+  const [peerNotice, setPeerNotice] = useState('')
   const selectedRef = useRef(null)
   selectedRef.current = selected
   const approvedSource = useRef(null)
@@ -346,12 +421,15 @@ function HelpSession({ help, refreshKey, onEnd }) {
     setShareError('')
     setSelected(null)
     setPreviewTrack(null)
+    setTeacherConnected(false)
+    setPeerNotice('')
     if (!room) return
+    let peers
     const control = createScreenShareSession({
       participant: room.localParticipant,
       requiresConsent: true,
       prepare: () => {
-        if (!help.shareScreen || room.state !== 'connected') return false
+        if (!help.shareScreen || room.state !== 'connected' || !peers?.hasPeer()) return false
         const source = selectedRef.current
         if (desktop && !source) throw new Error('공유할 창을 먼저 골라 주세요')
         approvedSource.current = source
@@ -366,8 +444,21 @@ function HelpSession({ help, refreshKey, onEnd }) {
       onSharing: setSharing,
       onError: (e) => setShareError(errText(e, '화면을 공유하지 못했어요')),
     })
+    peers = watchHelpPeers({
+      room, events: RoomEvent,
+      onChange: setTeacherConnected,
+      onLastPeerLeft: () => {
+        void control.stop()
+        approvedSource.current = null
+        setSelected(null)
+        setConsented(false)
+        setShareError('')
+        setPeerNotice('선생님 연결이 끊겨 화면 공유를 중지했어요. 다시 연결되면 창을 고르고 공유에 동의해 주세요')
+      },
+    })
     shareControl.current = control
     return () => {
+      peers.dispose()
       shareControl.current = null
       void control.dispose()
     }
@@ -410,6 +501,7 @@ function HelpSession({ help, refreshKey, onEnd }) {
     if (!control || !consented) return
     setStarting(true)
     setShareError('')
+    setPeerNotice('')
     await control.start(consented)
     if (shareControl.current === control) {
       setStarting(false)
@@ -419,19 +511,19 @@ function HelpSession({ help, refreshKey, onEnd }) {
 
   return (
     <div className="help-chip" style={{ flexWrap: 'wrap' }}>
-      <span className={`badge ${error || shareError || !room ? 'badge-warn' : 'badge-live'}`}>
-        <span className="dot" /> {error || shareError ? '도움 연결 오류' : room ? '선생님과 연결됨' : '도움 연결 중'}
+      <span className={`badge ${error || shareError || !room || !teacherConnected ? 'badge-warn' : 'badge-live'}`}>
+        <span className="dot" /> {error || shareError ? '도움 연결 오류' : !room ? '도움 연결 중' : teacherConnected ? '선생님과 연결됨' : '선생님 화면 연결을 기다리는 중'}
       </span>
       {help.shareScreen && !sharing && (
         <>
           {desktop && <HelpSharePicker desktop={desktop} disabled={starting || !room} selected={selected}
             onSelect={source => { setSelected(source); setConsented(false); setShareError('') }} onError={setShareError} />}
           <label className="check-row small">
-            <input type="checkbox" checked={consented} disabled={starting || !room || (!!desktop && !selected)}
+            <input type="checkbox" checked={consented} disabled={starting || !room || !teacherConnected || (!!desktop && !selected)}
               onChange={(e) => setConsented(e.target.checked)} />
             {desktop ? `선택한 ${selected?.id.startsWith('screen:') ? '전체 화면' : '창'}을 선생님에게 보여주는 데 동의해요` : '브라우저에서 고를 화면을 공유하는 데 동의해요'}
           </label>
-          <button className="btn btn-sm btn-primary" disabled={!room || !consented || starting || (!!desktop && !selected)}
+          <button className="btn btn-sm btn-primary" disabled={!room || !teacherConnected || !consented || starting || (!!desktop && !selected)}
             onClick={() => void startSharing()}>{starting ? '공유 준비 중…' : '화면 공유 시작'}</button>
         </>
       )}
@@ -444,6 +536,7 @@ function HelpSession({ help, refreshKey, onEnd }) {
       )}
       <button className="btn btn-sm" onClick={onEnd}>끝내기</button>
       <ConnectionNotice {...connection} />
+      {peerNotice && <span className="muted small">{peerNotice}</span>}
       {shareError && <span className="error-text small">{shareError}</span>}
       {!desktop && <span className="muted small">(그림 설명은 앱에서 보여요)</span>}
       <HelpChat helpId={help.id} refreshKey={refreshKey} partnerName="선생님" />

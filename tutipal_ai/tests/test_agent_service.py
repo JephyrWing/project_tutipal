@@ -207,6 +207,28 @@ async def test_student_help_suggestion_reported_in_meta(monkeypatch):
     assert meta_of(events)["suggestHelp"] is False
 
 
+@pytest.mark.parametrize("question,history", [
+    ("그래도 모르겠어요", ["모르겠어요", "정답 알려줘"]),
+    ("Traceback (most recent call last): 또 에러", ["Traceback: NameError", "에러가 나요 Traceback"]),
+], ids=["stuck_at_level_3", "third_code_debug"])
+async def test_help_suggestion_meta_has_route_and_hint_level_for_summary(monkeypatch, question, history):
+    # PT-113: Spring builds the help draft from meta.route and meta.hintLevel only.
+    body = student_body(question=question)
+    body["context"]["messages"] = [
+        item for text in history for item in ({"role": "user", "content": text}, {"role": "assistant", "content": "힌트"})
+    ]
+    meta = meta_of((await run(body, monkeypatch))[0])
+    assert meta["suggestHelp"] is True
+    assert meta["route"] in {"concept", "answer_request", "answer_check", "code_debug"}
+    assert isinstance(meta["hintLevel"], int) and 1 <= meta["hintLevel"] <= 3
+
+    personal = personal_body(question=question)
+    personal["context"]["messages"] = body["context"]["messages"]
+    personal_meta = meta_of((await run(personal, monkeypatch))[0])
+    assert personal_meta["suggestHelp"] is False
+    assert personal_meta["hintLevel"] is None
+
+
 # ---------------------------------------------------------------- isolation and memory (AC-10, AC-22, AC-23)
 
 async def test_concurrent_requests_only_see_their_own_context(monkeypatch):

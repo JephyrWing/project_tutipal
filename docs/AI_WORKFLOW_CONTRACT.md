@@ -288,7 +288,7 @@ Spring 매핑: `ChatRequest.messages`의 마지막 원소(role `user`)가 `quest
 | `question_variant` | 기존 문항 변형 | 허용 | 금지 | PT-84 `generate_question_variant` 호출 |
 | `screen_analyze`, `screen_summary` | 화면 분석, 현재 화면 요약 | 예약 | 예약 | PT-45에서 활성화. 지금 들어오면 422 |
 
-도움 요청 추천은 도구가 아니라 student Agent 규칙이다. Spring은 추천 문구만 보내고 도움 요청을 만들지 않는다.
+도움 요청 추천은 도구가 아니라 student Agent 규칙이다. Spring은 추천 문구만 보내고 도움 요청을 만들지 않는다. 메시지 초안(`helpDraft`, 7.7)도 만들기만 하고 전송하지 않는다. 학생 화면이 도움 요청 메시지 칸에 채우고, 학생이 고치거나 지운 뒤 직접 보낼 때만 기존 `POST /api/sessions/{sessionId}/help`로 나간다(PT-113).
 
 ### 7.3 검증 규칙 (422)
 
@@ -431,13 +431,13 @@ Spring 매핑: `ChatRequest.messages`의 마지막 원소(role `user`)가 `quest
 
 ### 7.7 Spring SSE 매핑
 
-기존 SSE 계약(`sources {"items"}` / `delta {"t"}` / `done` / `error {"message"}`)은 바꾸지 않고 `agent` 이벤트 하나를 추가한다. 화면은 모르는 이벤트를 무시하므로 프런트를 바꾸지 않아도 된다.
+기존 SSE 계약(`sources {"items"}` / `delta {"t"}` / `done` / `error {"message"}`)은 바꾸지 않고 `agent` 이벤트 하나를 추가한다. 화면은 모르는 이벤트를 무시한다. 수업 학생 챗봇은 PT-113부터 `agent.suggestHelp`·`agent.helpDraft`만 읽는다.
 
 | 순서 | SSE 이벤트 | 내용 |
 | --- | --- | --- |
 | 1 | `sources` (있으면) | `start.materialIds`에 해당하는 출처, 최대 3개 |
 | 2 | `delta` … | FastAPI 답변 조각, 그리고 Spring이 만든 사용자 문구: 변형 문항 텍스트(정책 적용), 도움 요청 추천 문구, 고정 안내·재시도 안내 |
-| 3 | `agent` | `{route, suggestHelp, variant, answerHidden, retryable}`. `done` 직전 1회. TEACHER 경로(기존 `/v1/chat`)에서는 보내지 않는다 |
+| 3 | `agent` | `{route, suggestHelp, variant, answerHidden, retryable, helpDraft}`. `done` 직전 1회. TEACHER 경로(기존 `/v1/chat`)에서는 보내지 않는다 |
 | 4 | `done` / 실패 시 `error` | 기존과 같음 |
 
 | `agent` 필드 | 의미 |
@@ -445,6 +445,7 @@ Spring 매핑: `ChatRequest.messages`의 마지막 원소(role `user`)가 `quest
 | `route`, `suggestHelp`, `retryable` | `meta` 값 |
 | `variant` | 정책 적용본 `{type, question, choices?, answerIndex?, modelAnswer?, explanation?}` 또는 `null`. `hideAnswers=true`이면 `type`, `question`, `choices`만 |
 | `answerHidden` | 정답·해설을 정책으로 숨겼는지. student는 `policy.hideAnswers`, personal은 `false` |
+| `helpDraft` | 문자열 또는 `null`(PT-113). student 턴에서 `suggestHelp=true`일 때만 Spring이 만드는 도움 요청 메시지 초안: `[AI 조교 요약] 수업 주제: {주제} · 질문 종류: {route 라벨} · 받은 힌트: {n}단계까지 · {고정 문장}`. 한 줄, 300자 이하(도움 요청 API 상한). 주제의 제어·서식·줄 구분 문자는 공백으로 바꾸고 30자로 자른다. 질문·답변·자료 원문과 정답·해설은 담지 않는다. 그 밖(personal 포함)은 `null` |
 
 - `hideAnswers=true`이면 변형 문항의 `answerIndex`·`modelAnswer`·`explanation`은 `delta`·`agent`를 포함해 SSE 어디에도 나가지 않는다. `false`이면 문제 뒤에 정답·해설 단락을 붙인다.
 - Spring `ChatRequest` 추가 필드: `variantQuizId`(Long, 선택. `sessionId` 없이 오면 400, TEACHER면 403, 접근 확인 조건은 PT-85 AC-12), `screenSummary`(문자열 ≤4000자, 선택). 거절은 모두 한도 예약 전에 HTTP로 나간다.
