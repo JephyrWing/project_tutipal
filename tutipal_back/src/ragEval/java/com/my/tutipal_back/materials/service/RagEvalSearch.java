@@ -37,7 +37,7 @@ final class RagEvalSearch {
         String lastError;
 
         TimedRerankClient(String baseUrl, String key, Duration timeout) {
-            super(baseUrl, key, timeout);
+            super(baseUrl, key, RagEvalMain.accessHeaders(), timeout);
         }
 
         void reset() {

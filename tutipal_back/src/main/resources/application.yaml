@@ -90,6 +90,11 @@ app:
   ai:
     base-url: ${FAST_API_BASE_URL:http://fastapi:8000}
     internal-key: ${AI_INTERNAL_KEY:}
+    # PT-110 Cloudflare Access service token for the PC AI node (https://ai.<domain>). Both empty = no header
+    # (FastAPI on the same host). Set both or neither; values come only from env and are never logged.
+    access:
+      client-id: ${CF_ACCESS_CLIENT_ID:}
+      client-secret: ${CF_ACCESS_CLIENT_SECRET:}
     max-concurrent: ${AI_MAX_CONCURRENT:2}
     wait-for-slot: 30s
     # PT-85 학생 · 개인 학습 Agent (/v1/agent/chat). 기본 false = 모든 역할이 기존 /v1/chat 경로. FastAPI 배포 확인 후 true

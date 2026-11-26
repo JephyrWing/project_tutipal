@@ -17,6 +17,8 @@
 .agents/
 credentials*.json
 infra/cloudflare/*.json
+# PT-110 AI node model folder (FOCUS_MODEL_DIR default)
+infra/ai-node-models/
 
 # Editors and OS
 .idea/

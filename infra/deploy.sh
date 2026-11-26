@@ -8,8 +8,16 @@ if [ ! -f infra/.env.prod ]; then
   exit 1
 fi
 
+profiles=''
 if [ "${ENABLE_CLOUDFLARE:-false}" = 'true' ]; then
-  export COMPOSE_PROFILES=cloudflare
+  profiles='cloudflare'
+fi
+# PT-110: FastAPI on this host (old layout). Default: the AI runs on the PC node at FAST_API_BASE_URL.
+if [ "${ENABLE_EC2_AI:-false}" = 'true' ]; then
+  profiles="${profiles:+$profiles,}ec2-ai"
+fi
+if [ -n "$profiles" ]; then
+  export COMPOSE_PROFILES="$profiles"
 fi
 
 compose() {

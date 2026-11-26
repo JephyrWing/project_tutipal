@@ -124,6 +124,8 @@ jobs:
           docker compose --env-file infra/.env.local.example -f infra/docker-compose.local.yml config --quiet
           docker compose --env-file infra/.env.local.example -f infra/docker-compose.local.yml -f infra/docker-compose.dev.yml config --quiet
           docker compose --env-file infra/.env.prod.example -f infra/docker-compose.prod.yml --profile cloudflare config --quiet
+          docker compose --env-file infra/.env.prod.example -f infra/docker-compose.prod.yml --profile cloudflare --profile ec2-ai config --quiet
+          docker compose --env-file infra/.env.ai-node.example -f infra/docker-compose.ai-node.yml config --quiet
       - name: Build FastAPI image (default, without reranker model)
         # PT-86: the multi-stage Dockerfile must build before deploy does. WITH_RERANKER defaults to false, so this
         # step needs no huggingface.co access; the model stage is built with --build-arg WITH_RERANKER=true on adoption.

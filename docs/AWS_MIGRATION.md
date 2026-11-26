@@ -6,6 +6,13 @@
 > 실제 버킷 이름, IAM 역할 이름, Tunnel ID, OAuth 앱 ID 같은 운영 식별자는 공개 저장소에 적지 않고 Jira(PT-82, PT-110)에만 남긴다.
 
 대상: AWS EC2 **서울(ap-northeast-2), x86_64, Ubuntu 24.04**. 이미지는 amd64다.
+
+PT-110부터 서버는 두 대다. 그림·Cloudflare/Access 준비·PC 실행·확인 명령·응답 시간 측정·운영 규칙은 [DEPLOYMENT.md](DEPLOYMENT.md) 7장을 따른다.
+
+| 서버 | 실행 | 연결 |
+| --- | --- | --- |
+| EC2 (이 문서) | Spring · PostgreSQL · LiveKit · cloudflared ① | 앱 → `tutipal.faultfinder.link` → Tunnel ① → Spring |
+| 팀 PC | FastAPI · cloudflared ② · Ollama(GPU) | Spring → `https://ai.faultfinder.link` → Access(서비스 토큰) → Tunnel ② → FastAPI. 포트포워딩 없음 |
 관리 PC는 Windows이며 기본 `ssh`를 사용한다.
 
 ## 0. 정한 값
@@ -16,7 +23,7 @@
 | 서버 | EC2 `t3.large`(2 vCPU/8 GiB), gp3 30 GiB, Elastic IP | `LIVEKIT_NODE_IP`, `EC2_HOST` |
 | 운영 방식 | 필요할 때만 켜고 쓰지 않을 때 중지(총 사용 시간 예상 24시간 안팎) | — |
 | 자료 저장소 | S3 버킷(서울, 퍼블릭 차단). 이 버킷 Get/Put/Delete/List만 허용한 EC2 IAM 역할로 접근한다. 실제 이름은 Jira | `MATERIAL_STORAGE=s3`, `S3_BUCKET` |
-| 모델 제공자 | 외부 API(Workers AI 또는 OpenAI) 결정 대기. 외부 전송 고지·동의 필요 | `MODEL_*`, `OPENAI_*` |
+| AI 계산 | PT-110: 팀 PC의 FastAPI + Ollama(GPU: gemma3:4b, bge-m3)를 AI 전용 Tunnel ②(`ai.faultfinder.link`)와 Cloudflare Access 서비스 토큰으로 연결. EC2에서는 FastAPI를 띄우지 않는다(이전 방식은 `--profile ec2-ai`). 외부 API(OpenAI)는 PM 승인 전 쓰지 않는다 | EC2: `FAST_API_BASE_URL`, `AI_INTERNAL_KEY`, `CF_ACCESS_*` / PC: `infra/.env.ai-node` |
 | PM 승인 | 담당 변경·일정·비용·`ENABLE_CD` | Jira |
 
 비용(서울, 대략): `t3.large` 시간당 약 $0.104 + 디스크·Elastic IP 월 $6~7. 월 100 GB까지 인터넷 송신 무료라 4명 시연의 화면공유 트래픽은 추가 비용이 거의 없다.
@@ -62,9 +69,12 @@ git clone --branch develop https://github.com/JephyrWing/project_tutipal.git ~/a
 cd ~/app && SHA=$(git rev-parse HEAD)
 APP_VERSION=$(sed -nE "s/^version *= *['\"]([^'\"]+)['\"].*/\1/p" tutipal_back/build.gradle | head -n 1)
 DOCKER_BUILDKIT=1 docker build -t local/tutipal-db:$SHA      infra/postgres
-DOCKER_BUILDKIT=1 docker build -t local/tutipal-fastapi:$SHA tutipal_ai
 DOCKER_BUILDKIT=1 docker build -t local/tutipal-back:$SHA \
   --build-arg GIT_SHA=$SHA --build-arg APP_VERSION=${APP_VERSION:-unknown} tutipal_back
+# FastAPI 이미지는 이전 방식(--profile ec2-ai)으로 같은 EC2에서 돌릴 때만 빌드한다. 기본 구성(PC 노드)에서는 건너뛴다.
+if [ "${ENABLE_EC2_AI:-false}" = "true" ]; then
+  DOCKER_BUILDKIT=1 docker build -t local/tutipal-fastapi:$SHA tutipal_ai
+fi
 ```
 
 ## 5. 비밀값 (`~/app/infra/.env.prod`)
@@ -78,6 +88,7 @@ cd ~/app/infra && umask 077 && cp .env.prod.example .env.prod
 - `LIVEKIT_NODE_IP=<Elastic IP>`, `APP_ALLOWED_ORIGINS=https://tutipal.faultfinder.link`
 - S3: `AWS_REGION`(비우면 `ap-northeast-2`), `S3_BUCKET=<버킷 이름>`. EC2 IAM 역할을 연결했으면 `AWS_ACCESS_KEY_ID`·`AWS_SECRET_ACCESS_KEY`는 비워 둔다(AWS SDK 기본 자격 증명 체인이 역할 자격 증명을 쓴다). 역할이 없는 서버에서만 이 버킷 전용 키를 넣는다
 - `CLOUDFLARE_TUNNEL_TOKEN`(6단계), OAuth `GOOGLE_*`·`KAKAO_*`·`NAVER_*`
+- PT-110 AI 노드: `FAST_API_BASE_URL=https://ai.faultfinder.link`, `CF_ACCESS_CLIENT_ID`·`CF_ACCESS_CLIENT_SECRET`(Access 서비스 토큰). `AI_INTERNAL_KEY`는 PC `infra/.env.ai-node`와 같은 값이어야 한다(DEPLOYMENT.md 7.4)
 - 값은 화면·Git·Jira·Drive에 남기지 않는다. 콘솔의 복사 버튼으로 클립보드에 담아 서버 파일로 바로 넘긴다
 
 ## 6. Cloudflare Tunnel과 실행
@@ -93,7 +104,9 @@ docker compose --env-file infra/.env.prod -f infra/docker-compose.prod.yml --pro
 docker compose --env-file infra/.env.prod -f infra/docker-compose.prod.yml logs backend | grep 'TUTIPAL started'   # sha가 $SHA와 같아야 한다
 ```
 
-확인 결과(2026-11-19): 5개 컨테이너 기동, `https://tutipal.faultfinder.link/actuator/health` 200 `UP`, 외부 공개 포트는 7881/tcp·7882/udp뿐, 8080은 `127.0.0.1`만.
+PT-110 이후에는 fastapi가 빠져 4개 컨테이너(backend, tutipal-db, livekit, cloudflared)가 정상이다. AI 연결은 DEPLOYMENT.md 7.5로 확인한다.
+
+확인 결과(2026-11-19, PT-110 이전 구성): 5개 컨테이너 기동, `https://tutipal.faultfinder.link/actuator/health` 200 `UP`, 외부 공개 포트는 7881/tcp·7882/udp뿐, 8080은 `127.0.0.1`만.
 
 `application-prod.yaml`의 `forward-headers-strategy: native`가 없는 이미지는 OAuth `redirect_uri`를 `http://`로 만든다. PT-110 이전 이미지로 운영할 때는 backend에 `SERVER_FORWARD_HEADERS_STRATEGY=native`를 환경변수로 준다.
 
@@ -112,7 +125,8 @@ Electron 설치 앱의 서버 주소 설정은 PT-103의 `docs/RELEASE_CONFIGURA
 ## 8. 남은 확인
 
 - 실제 로그인(각 제공자), 외부망 두 장비 화면공유(7881/7882·`LIVEKIT_NODE_IP`), Electron WSS 연결
-- 모델 제공자와 외부 전송 동의 (S3는 2026-11-19 역할 연결 후 컨테이너에서 put/get/list/delete 확인 완료, 앱 업로드 경로는 로그인 후 확인)
+- PT-110 AI 노드: Tunnel ②·Access 정책 생성, EC2 → `ai.faultfinder.link` 확인(DEPLOYMENT.md 7.5), 응답 시간 측정(7.6, PT-29 기준), PC를 끈 상태의 503 표시 확인
+- 외부 모델 제공자(OpenAI) 사용 시 외부 전송 동의 (S3는 2026-11-19 역할 연결 후 컨테이너에서 put/get/list/delete 확인 완료, 앱 업로드 경로는 로그인 후 확인)
 - DB 백업: CD의 `deploy.sh`는 배포 전 `pg_dump`를 남긴다. 수동 운영 중에는 정기 `pg_dump`. Flyway는 자동 롤백이 없다
 - `CLOUDFLARED_IMAGE` 태그 고정(확인 명령은 DEPLOYMENT.md 6장), Cloudflare 계정 이메일 인증
 - CD: GitHub Secrets(`EC2_HOST`=Elastic IP, `EC2_USER`=`ubuntu`, `EC2_SSH_KEY`=CD 전용 키)와 `ENABLE_CD`는 PM 승인 후

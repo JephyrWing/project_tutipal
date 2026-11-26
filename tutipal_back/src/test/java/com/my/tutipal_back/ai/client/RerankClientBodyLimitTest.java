@@ -48,6 +48,7 @@ class RerankClientBodyLimitTest {
         });
         server.start();
         RerankClient client = new RerankClient("http://127.0.0.1:" + server.getAddress().getPort(), "k",
+                AiAccessHeaders.none(),
                 Duration.ofSeconds(4));
 
         long started = System.nanoTime();
