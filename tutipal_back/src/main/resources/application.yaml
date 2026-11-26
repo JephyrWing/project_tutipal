@@ -114,7 +114,7 @@ app:
         limit: 10
         window: 1h
       cleanup-interval: 10m
-    # PT-106 저장 AI 대화. retention-days 0 = 자동 삭제 끔 (보관 기간 PT-13 미정: 사용자 삭제 · 탈퇴 때까지 보관)
+    # PT-106 저장 AI 대화. retention-days 0 = 자동 삭제 끔 (보관 기간 PT-13 미정: 사용자가 지울 때까지 보관, 회원 탈퇴 때도 보존)
     conversations:
       retention-days: ${AI_CONVERSATION_RETENTION_DAYS:0}
       retention-batch-size: 500

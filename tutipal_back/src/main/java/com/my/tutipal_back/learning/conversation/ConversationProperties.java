@@ -10,7 +10,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * PT-106 app.ai.conversations.*: 저장 대화 보관과 요약 규칙.
  *
  * <p>retentionDays: 마지막 메시지 뒤 N일 지난 대화를 (사용자가 지운 것 포함) 물리 삭제한다. 0 = 끔(기본).
- * 보관 기간은 PT-13 미정이라 사용자가 지우거나 탈퇴할 때까지 남긴다. retentionBatchSize: 한 번에 지우는 행 수
+ * 보관 기간은 PT-13 미정이라 사용자가 지울 때까지 남긴다 (회원 탈퇴는 계정만 익명화하고 대화는 남긴다, PM 2026-11-26). retentionBatchSize: 한 번에 지우는 행 수
  * (보관 기간 작업과 삭제 유예 작업이 같이 쓴다).
  *
  * <p>deletedPurgeDays: 사용자가 지운 대화 · 기억(deleted_at)을 N일 뒤 물리 삭제한다. 기본 30 (PT-13 결정 전 임시값).
