@@ -149,7 +149,27 @@ class TutorAgentSseWebTest {
         assertThat(eventNames(body)).containsExactly("sources", "delta", "delta", "agent", "done");
         assertThat(body).contains("a.pdf p.1");
         assertThat(body).doesNotContain("ping", "materialIds", "\"meta\"", "nodes");
-        assertThat(body).contains("\"suggestHelp\":false", "\"answerHidden\":true");
+        assertThat(body).contains("\"suggestHelp\":false", "\"answerHidden\":true", "\"helpDraft\":null");
+    }
+
+    @Test
+    void agentEventAddsHelpDraftOnlyWhenHelpIsSuggested() throws Exception {
+        AgentDtos.Meta helpMeta = new AgentDtos.Meta("student", "code_debug", List.of("classify", "respond"),
+                1, 3, true, 0, null, false, META.context(), List.of(), null);
+        when(ai.agentStream(any(), any())).thenAnswer(inv -> {
+            AgentListener listener = inv.getArgument(1);
+            listener.onDelta("힌트");
+            return new AgentOutcome.Completed(helpMeta);
+        });
+
+        String body = stream("""
+                {"topic":"수학","sessionId":10,"messages":[{"role":"user","content":"SECRET-Q-77 에러가 계속 나요"}]}
+                """);
+
+        assertThat(eventNames(body)).endsWith("agent", "done");
+        assertThat(body).contains("\"suggestHelp\":true", "\"route\":\"code_debug\"", "\"answerHidden\":true",
+                "\"helpDraft\":\"[AI 조교 요약] 수업 주제: 파이썬 · 질문 종류: 코드 오류 · 받은 힌트: 3단계까지");
+        assertThat(body.substring(body.indexOf("\"helpDraft\""))).doesNotContain("SECRET-Q-77");
     }
 
     @Test

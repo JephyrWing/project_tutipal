@@ -5,6 +5,7 @@ import { streamChat } from '../api/tutor'
 import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
 import SubjectPicker from '../components/SubjectPicker'
+import { helpDraftOf } from '../utils/helpDraft'
 import { useRetryLock } from '../utils/useRetryLock'
 
 /** 예전 주소(?topic=coding)도 열리게 id → 과목 이름 */
@@ -41,8 +42,12 @@ export default function ChatPage() {
   )
 }
 
-/** LLM 이 바로 답하고, 답변이 글자 단위로 흘러나온다. 세션 챗봇(목업 13 챗봇 탭)도 같이 쓴다 */
-export function ChatPanel({ topic, onTopicChange, sessionId, initialAsk, onAsked }) {
+/**
+ * LLM 이 바로 답하고, 답변이 글자 단위로 흘러나온다. 세션 챗봇(목업 13 챗봇 탭)도 같이 쓴다.
+ * onRequestHelp(초안): 수업 학생 화면만 넘긴다. Agent 가 도움 요청을 추천한 답변 아래에 버튼을 보여 주고,
+ * 누르면 초안을 넘긴다 (PT-113). 개인 학습은 넘기지 않으므로 버튼이 없다. 초안은 다음 질문 기록에도 실리지 않는다.
+ */
+export function ChatPanel({ topic, onTopicChange, sessionId, initialAsk, onAsked, onRequestHelp }) {
   const [bubbles, setBubbles] = useState([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
@@ -107,6 +112,15 @@ export function ChatPanel({ topic, onTopicChange, sessionId, initialAsk, onAsked
         setBubbles((prev) => {
           const next = [...prev]
           next[next.length - 1] = { ...next[next.length - 1], sources }
+          return next
+        })
+      }, (event) => {
+        if (abortRef.current !== controller || controller.signal.aborted) return
+        const helpDraft = helpDraftOf(event)
+        if (!helpDraft) return
+        setBubbles((prev) => {
+          const next = [...prev]
+          next[next.length - 1] = { ...next[next.length - 1], helpDraft }
           return next
         })
       })
@@ -191,6 +205,13 @@ export function ChatPanel({ topic, onTopicChange, sessionId, initialAsk, onAsked
               <div className={`bubble bubble-ai${b.error ? ' bubble-error' : ''}`}>
                 {b.content || <span className="typing">답변을 생각하는 중…</span>}
                 {b.sources && <span className="sources">📎 참고한 수업 자료: {b.sources.join(', ')}</span>}
+                {onRequestHelp && b.helpDraft && !(streaming && b === last) && (
+                  <div>
+                    <button type="button" className="btn btn-sm" onClick={() => onRequestHelp(b.helpDraft)}>
+                      ✋ 선생님께 도움 요청
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           ),

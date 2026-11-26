@@ -3,6 +3,7 @@ package com.my.tutipal_back.learning.tutor.service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 import org.springframework.http.HttpStatus;
 
@@ -47,6 +48,15 @@ final class AgentRequests {
     private static final int MAX_SOURCE_LENGTH = 120;
     private static final int MAX_CONTENT_LENGTH = 1500;
     private static final JsonMapper JSON = JsonMapper.builder().build();
+    /** 도움 요청 API(POST /api/sessions/{id}/help)의 메시지 상한과 같다. */
+    static final int MAX_HELP_MESSAGE = 300;
+    private static final int MAX_DRAFT_TOPIC = 30;
+    private static final Pattern CONTROL_OR_SPACE = Pattern.compile("[\\p{Cc}\\p{Cf}\\p{Zl}\\p{Zp}\\s]+");
+    private static final Map<String, String> ROUTE_LABELS = Map.of(
+            "concept", "개념 이해",
+            "answer_request", "문제 풀이 요청",
+            "answer_check", "내 답 확인",
+            "code_debug", "코드 오류");
 
     private AgentRequests() {
     }
@@ -127,7 +137,29 @@ final class AgentRequests {
         return JSON.writeValueAsBytes(state).length;
     }
 
+    /**
+     * PT-113 도움 요청 메시지 초안. suggestHelp 턴에서만 만든다. 입력이 (주제, 질문 종류, 힌트 단계) 뿐이라
+     * 질문 · 답변 원문이나 정답 · 해설이 들어갈 길이 없다. 학생 화면이 메시지 칸에 채우고, 학생이 직접 보낸다.
+     */
+    static String helpDraft(String topic, String route, Integer hintLevel) {
+        List<String> parts = new ArrayList<>();
+        String cleanTopic = topic == null ? "" : CONTROL_OR_SPACE.matcher(topic).replaceAll(" ").strip();
+        if (!cleanTopic.isEmpty()) {
+            parts.add("수업 주제: " + cutCodePoints(cleanTopic, MAX_DRAFT_TOPIC));
+        }
+        parts.add("질문 종류: " + ROUTE_LABELS.getOrDefault(route == null ? "" : route, "질문"));
+        if (hintLevel != null && hintLevel >= 1 && hintLevel <= 3) {
+            parts.add("받은 힌트: " + hintLevel + "단계까지");
+        }
+        parts.add("code_debug".equals(route) ? "코드 오류가 계속 해결되지 않아요." : "힌트를 받고도 혼자 해결하지 못했어요.");
+        return cutCodePoints("[AI 조교 요약] " + String.join(" · ", parts), MAX_HELP_MESSAGE);
+    }
+
     private static String cut(String text, int max) {
         return text.length() > max ? text.substring(0, max) : text;
+    }
+
+    private static String cutCodePoints(String text, int max) {
+        return text.codePointCount(0, text.length()) > max ? text.substring(0, text.offsetByCodePoints(0, max)) : text;
     }
 }

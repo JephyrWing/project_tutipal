@@ -418,8 +418,11 @@ public class TutorService {
                 onDelta.accept(AgentRequests.HELP_SUGGESTION);
             }
             AgentDtos.VariantQuestion shown = succeeded() ? VariantPresenter.visible(variant.variant(), hideAnswers) : null;
+            String helpDraft = suggestHelp
+                    ? AgentRequests.helpDraft(current.policy().topic(), meta.route(), meta.hintLevel())
+                    : null;
             return new AgentDtos.AgentEvent(Objects.requireNonNullElse(meta.route(), "concept"), suggestHelp, shown,
-                    hideAnswers, retryable);
+                    hideAnswers, retryable, helpDraft);
         }
     }
 

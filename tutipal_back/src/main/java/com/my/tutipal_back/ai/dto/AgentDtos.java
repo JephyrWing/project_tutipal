@@ -97,7 +97,8 @@ public final class AgentDtos {
     }
 
     /** SSE agent 이벤트 (계약 7.7). variant 는 정책 적용본 또는 null. */
+    /** helpDraft: suggestHelp 턴에서만 Spring 이 만든 도움 요청 메시지 초안 (PT-113), 그 밖은 null. */
     public record AgentEvent(String route, boolean suggestHelp, VariantQuestion variant, boolean answerHidden,
-                             boolean retryable) {
+                             boolean retryable, String helpDraft) {
     }
 }

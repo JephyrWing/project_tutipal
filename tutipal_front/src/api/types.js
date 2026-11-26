@@ -32,6 +32,17 @@
  */
 
 /**
+ * com.my.tutipal_back.ai.dto.AgentDtos.AgentEvent — 튜터 SSE 의 agent 이벤트 (Agent 경로에서 done 직전 1회)
+ * @typedef {Object} TutorAgentEvent
+ * @property {string} route 질문 종류 (concept · answer_request · answer_check · code_debug · variant)
+ * @property {boolean} suggestHelp 도움 요청을 추천한 턴인지
+ * @property {Object | null} variant 정답 공개 정책을 적용한 변형 문항
+ * @property {boolean} answerHidden 정답·해설을 정책으로 숨겼는지
+ * @property {boolean} retryable 변형 실패 뒤 다시 요청할 수 있는지
+ * @property {string | null} helpDraft 도움 요청 메시지 초안 (PT-113, suggestHelp 턴에서만, 300자 이하, 질문 원문 없음)
+ */
+
+/**
  * com.my.tutipal_back.common.exception.GlobalExceptionHandler 의 응답
  * @typedef {Object} ApiError
  * @property {number} status

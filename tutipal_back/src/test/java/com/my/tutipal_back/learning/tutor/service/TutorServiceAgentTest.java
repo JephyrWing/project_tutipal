@@ -491,6 +491,36 @@ class TutorServiceAgentTest {
 
         assertThat(String.join("", deltas)).doesNotContain(AgentRequests.HELP_SUGGESTION);
         assertThat(agentEvents.getFirst().suggestHelp()).isFalse();
+        assertThat(agentEvents.getFirst().helpDraft()).isNull();
+    }
+
+    // ------------------------------------------------------------------ PT-113 help draft
+
+    @Test
+    void helpSuggestionTurnCarriesHelpDraftInAgentEvent() {
+        when(ai.agentStream(any(), any()))
+                .thenAnswer(completes(meta("answer_request", true, null, false), "ANSWER-TEXT-9"));
+
+        run(student(QUESTION));
+
+        assertThat(deltas).last().isEqualTo(AgentRequests.HELP_SUGGESTION);
+        assertThat(agentEvents).singleElement().satisfies(e -> assertThat(e.helpDraft())
+                .isEqualTo(AgentRequests.helpDraft("파이썬", "answer_request", 1))
+                .contains("수업 주제: 파이썬", "질문 종류: 문제 풀이 요청")
+                .doesNotContain("SECRET-QUESTION-5521", "ANSWER-TEXT-9"));
+    }
+
+    @Test
+    void personalTurnNeverHasHelpDraftEvenIfMetaSuggestsHelp() {
+        when(ai.agentStream(any(), any())).thenAnswer(completes(meta("answer_request", true, null, false), "답"));
+
+        run(personal("모르겠어요"));
+
+        assertThat(String.join("", deltas)).doesNotContain(AgentRequests.HELP_SUGGESTION);
+        assertThat(agentEvents).singleElement().satisfies(e -> {
+            assertThat(e.suggestHelp()).isFalse();
+            assertThat(e.helpDraft()).isNull();
+        });
     }
 
     // ------------------------------------------------------------------ AC-12 / AC-18 / AC-19 variant
