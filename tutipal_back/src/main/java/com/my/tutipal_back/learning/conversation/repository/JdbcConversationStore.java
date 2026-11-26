@@ -277,26 +277,40 @@ public class JdbcConversationStore implements ConversationStore {
     }
 
     /**
+     * Retention A runs against the session row too: {@code FOR SHARE OF s SKIP LOCKED} conflicts with the row lock
+     * of a teacher's retention change (or the session end), which is an UPDATE of study_sessions.
+     * <ul>
+     *   <li>change still open: the session row is locked, so its rows are skipped in this batch (next hourly run);</li>
+     *   <li>change committed after this statement's snapshot: locking the row re-evaluates the WHERE clause on the
+     *       latest version (READ COMMITTED), so the new ended_at + ai_retention_days decides;</li>
+     *   <li>this statement locks first: the change waits until the DELETE (autocommit, one statement) finishes.</li>
+     * </ul>
+     * Every lock here is SKIP LOCKED, so this statement never waits and cannot take part in a deadlock.
+     */
+    static final String LOCK_ROWS_AND_SESSION = " FOR UPDATE OF %s SKIP LOCKED FOR SHARE OF s SKIP LOCKED";
+
+    /**
      * Retention A. Rows locked by a turn or a save toggle are skipped (SKIP LOCKED); the outer DELETE re-checks
      * saved_at so a conversation saved meanwhile is kept. Soft-deleted conversations are included (retention removes
-     * whatever expired); a saved one that the user deleted is left to the deleted purge.
+     * whatever expired); a saved one that the user deleted is left to the deleted purge. The session row is share
+     * locked and re-checked ({@link #LOCK_ROWS_AND_SESSION}).
      */
     @Override
     public int deleteExpiredClassConversations(Instant now, int limit) {
         return jdbc.update("DELETE FROM ai_conversations WHERE saved_at IS NULL AND id IN (SELECT c.id"
                         + " FROM ai_conversations c JOIN study_sessions s ON s.id = c.session_id"
                         + " WHERE c.saved_at IS NULL AND" + SESSION_EXPIRED
-                        + " ORDER BY c.id LIMIT ? FOR UPDATE OF c SKIP LOCKED)",
+                        + " ORDER BY c.id LIMIT ?" + String.format(LOCK_ROWS_AND_SESSION, "c") + ")",
                 time(now), time(now), limit);
     }
 
-    /** Retention A: session-scoped memories (saved conversations' too, see the interface). */
+    /** Retention A: session-scoped memories (saved conversations' too, see the interface); same session lock. */
     @Override
     public int deleteExpiredClassMemories(Instant now, int limit) {
         return jdbc.update("DELETE FROM ai_memories WHERE id IN (SELECT m.id"
                         + " FROM ai_memories m JOIN study_sessions s ON s.id = m.session_id"
                         + " WHERE" + SESSION_EXPIRED
-                        + " ORDER BY m.id LIMIT ? FOR UPDATE OF m SKIP LOCKED)",
+                        + " ORDER BY m.id LIMIT ?" + String.format(LOCK_ROWS_AND_SESSION, "m") + ")",
                 time(now), time(now), limit);
     }
 

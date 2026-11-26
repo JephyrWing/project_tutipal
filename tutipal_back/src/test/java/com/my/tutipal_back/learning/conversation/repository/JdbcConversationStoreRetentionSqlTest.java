@@ -70,7 +70,7 @@ class JdbcConversationStoreRetentionSqlTest {
             assertThat(s).contains("c.saved_at is null");
             assertThat(s).contains("s.ended_at is not null");
             assertThat(s).contains("s.ended_at + coalesce(s.ai_retention_days, 90) * interval '1 day' < ?");
-            assertThat(s).contains("for update of c skip locked");
+            assertThat(s).endsWith("order by c.id limit ? for update of c skip locked for share of s skip locked)");
         });
         assertThat(args()).filteredOn(a -> a instanceof OffsetDateTime)
                 .containsExactly(NOW.atOffset(ZoneOffset.UTC), NOW.atOffset(ZoneOffset.UTC));
@@ -87,7 +87,7 @@ class JdbcConversationStoreRetentionSqlTest {
             assertThat(s).contains("join study_sessions s on s.id = m.session_id");
             assertThat(s).contains("s.ended_at is not null");
             assertThat(s).contains("coalesce(s.ai_retention_days, 90)");
-            assertThat(s).contains("for update of m skip locked");
+            assertThat(s).endsWith("order by m.id limit ? for update of m skip locked for share of s skip locked)");
             assertThat(s).doesNotContain("saved_at");
         });
     }
@@ -111,6 +111,27 @@ class JdbcConversationStoreRetentionSqlTest {
         assertThat(sent(s -> s.setSaved(7L, null))).singleElement().satisfies(s -> assertThat(s)
                 .startsWith("update ai_conversations set saved_at = null where id = ? and deleted_at is null")
                 .contains("returning"));
+    }
+
+    /**
+     * Codex P1: a teacher's retention change (UPDATE study_sessions) and the class retention are serialized through
+     * the session row. FOR SHARE (not FOR KEY SHARE, which a non-key UPDATE does not block) on s; every lock is
+     * SKIP LOCKED, so the cleanup never waits on a session being changed and cannot deadlock with it.
+     */
+    @Test
+    void classRetentionShareLocksTheSessionRowWithoutWaiting() {
+        List<String> sql = sent(s -> {
+            s.deleteExpiredClassConversations(NOW, 500);
+            s.deleteExpiredClassMemories(NOW, 500);
+        });
+
+        assertThat(sql).hasSize(2).allSatisfy(s -> {
+            assertThat(s).contains("for share of s skip locked").doesNotContain("for key share")
+                    .doesNotContain("nowait");
+            int locks = s.split("for (update|share) of ", -1).length - 1;
+            int skips = s.split("skip locked", -1).length - 1;
+            assertThat(locks).isEqualTo(2).isEqualTo(skips);
+        });
     }
 
     @Test

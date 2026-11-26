@@ -266,4 +266,70 @@ class ConversationRetentionPostgresTest {
         assertThat(retention.purgeIdlePersonal()).isEqualTo(1);
         assertThat(List.of(exists(locked), exists(free))).containsOnly(false);
     }
+
+    /**
+     * Codex P1: while a teacher's retention change on the session is open, class retention skips that session (its
+     * conversations and memories) instead of deleting by the old period; once the longer period is committed the
+     * rows are no longer expired. Another expired session is still cleaned in the same run.
+     */
+    @Test
+    void classRetentionSkipsASessionWhoseRetentionChangeIsOpen() throws Exception {
+        long extended = conversation(EXPIRED, daysAgo(9));
+        store.insertMemory(STUDENT, EXPIRED, extended, "기간을 늘리는 수업의 기억", daysAgo(9));
+        long other = conversation(ZERO, NOW.minusSeconds(120));
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Future<?> teacher = pool.submit(() -> tx.executeWithoutResult(status -> {
+            jdbc.update("UPDATE study_sessions SET ai_retention_days = 90 WHERE id = ?", EXPIRED);
+            held.countDown();
+            try {
+                release.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }));
+        assertThat(held.await(10, TimeUnit.SECONDS)).isTrue();
+        try {
+            assertThat(retention.purgeExpiredClass()).as("only the other session's conversation").isEqualTo(1);
+        } finally {
+            release.countDown();
+            teacher.get(10, TimeUnit.SECONDS);
+        }
+        assertThat(exists(extended)).isTrue();
+        assertThat(exists(other)).isFalse();
+        assertThat(count("SELECT count(*) FROM ai_memories WHERE session_id = ?", EXPIRED)).isEqualTo(1);
+
+        assertThat(retention.purgeExpiredClass()).as("8 days after the end is within the new 90 days").isZero();
+        assertThat(exists(extended)).isTrue();
+    }
+
+    /** If the cleanup locks the session first, the teacher's change waits for it instead of interleaving. */
+    @Test
+    void retentionChangeWaitsForARunningClassCleanup() throws Exception {
+        long expired = conversation(EXPIRED, daysAgo(9));
+        CountDownLatch cleaned = new CountDownLatch(1);
+        CountDownLatch commit = new CountDownLatch(1);
+        Future<Integer> cleanup = pool.submit(() -> tx.execute(status -> {
+            int deleted = store.deleteExpiredClassConversations(NOW, 500);
+            cleaned.countDown();
+            try {
+                commit.await(10, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            return deleted;
+        }));
+        assertThat(cleaned.await(10, TimeUnit.SECONDS)).isTrue();
+        Future<Integer> teacher = pool.submit(() ->
+                jdbc.update("UPDATE study_sessions SET ai_retention_days = 90 WHERE id = ?", EXPIRED));
+        try {
+            Thread.sleep(500);
+            assertThat(teacher.isDone()).as("blocked by the cleanup's FOR SHARE on the session row").isFalse();
+        } finally {
+            commit.countDown();
+        }
+        assertThat(cleanup.get(10, TimeUnit.SECONDS)).isEqualTo(1);
+        assertThat(teacher.get(10, TimeUnit.SECONDS)).isEqualTo(1);
+        assertThat(exists(expired)).isFalse();
+    }
 }
