@@ -174,6 +174,9 @@ class ConceptInsightsPostgresTest {
         jdbc.update("DELETE FROM chat_questions");
         jdbc.update("DELETE FROM quiz_concepts");
         jdbc.update("DELETE FROM session_concepts");
+        // Withdrawal now anonymizes instead of deleting (PT-13 2026-11-26), so the withdrawal test's student 402 would
+        // stay a participant of the shared ACTIVE session and leak into the mastery snapshot of later tests.
+        jdbc.update("DELETE FROM session_participants WHERE session_id = ? AND user_id = 402", ACTIVE);
         participant(ACTIVE, PARK, "STUDENT");
         questions = new ChatQuestionStore(jdbc);
         concepts = new ConceptStore(jdbc);
