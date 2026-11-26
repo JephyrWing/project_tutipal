@@ -6,13 +6,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from app.controllers.agent_controller import router as agent_router
+from app.controllers.focus_controller import router as focus_router
 from app.controllers.health_controller import router as health_router
 from app.controllers.inference_controller import router as inference_router
 from app.controllers.insights_controller import router as insights_router
 from app.controllers.rerank_controller import router as rerank_router
 from app.core.body_limit import InferenceBodyLimit
 from app.core.settings import require_tracing_disabled
-from app.services import rerank_service
+from app.services import focus_service, rerank_service
 
 
 @asynccontextmanager
@@ -21,9 +22,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     require_tracing_disabled()
     # PT-86: 재순위화 모델을 시작할 때 한 번 읽는다. 없거나 꺼져 있어도 앱은 뜬다 (/v1/rerank만 503).
     await rerank_service.startup()
+    # PT-90: 집중도 모델(LightGBM 텍스트)을 해시 확인 뒤 한 번 읽는다. 없거나 검사에 실패해도 앱은 뜬다 (/v1/focus/predict만 503).
+    await focus_service.startup()
     try:
         yield
     finally:
+        focus_service.shutdown()
         rerank_service.shutdown()
 
 
@@ -41,6 +45,7 @@ app.include_router(health_router)
 app.include_router(inference_router)
 app.include_router(rerank_router)
 app.include_router(agent_router)
+app.include_router(focus_router)
 app.include_router(insights_router)
 
 

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Repository;
  *   <li>다른 세션: 이 사람의 답안·게시글(달린 댓글 포함)·댓글·도움 요청·자료·참가 기록</li>
  *   <li>복습 기록(review_items)은 users 삭제 때 ON DELETE CASCADE</li>
  *   <li>AI 대화(ai_conversations · 메시지 · 요약 · ai_memories, PT-106)는 users · study_sessions 삭제 때 ON DELETE CASCADE</li>
+ *   <li>집중도 기록(focus_consents · focus_samples · focus_states, PT-90, 동의 철회와 같은 순서)는 맨 앞에서 지운다 (FK CASCADE 도 있음)</li>
  *   <li>PT-87 학생 질문 원문(chat_questions): 이 사람의 질문과 이 사람이 연 세션의 질문 전부를 명시적으로 지운다.
  *       개념(session_concepts · quiz_concepts)은 세션 · 퀴즈 삭제 때 ON DELETE CASCADE</li>
  * </ul>
@@ -23,8 +24,14 @@ public class AccountCleanup {
 
     private static final String OWNED = "(SELECT id FROM study_sessions WHERE owner_id = :u)";
 
-    /** 외래키 순서. 자식 → 부모. */
-    private static final List<String> DELETES = List.of(
+    /** 외래키 순서. 자식 → 부모. 집중도 기록(PT-90)은 FK CASCADE 도 있지만 먼저 명시적으로 지운다.
+     *  focus 3줄은 맨 앞(동의 철회와 같은 순서), 그 다음 PT-87 chat_questions. 테스트가 순서를 읽으므로 package-private. */
+    static final List<String> DELETES = List.of(
+            // same order as consent withdrawal (JdbcFocusStore.deleteUserData): consent row first, so both paths lock
+            // in one order (no deadlock) and a running focus write holding it FOR SHARE finishes before its rows go
+            "DELETE FROM focus_consents WHERE user_id = :u",
+            "DELETE FROM focus_samples WHERE user_id = :u OR session_id IN " + OWNED,
+            "DELETE FROM focus_states WHERE user_id = :u OR session_id IN " + OWNED,
             "DELETE FROM chat_questions WHERE user_id = :u OR session_id IN " + OWNED,
             "DELETE FROM comments WHERE author_id = :u",
             "DELETE FROM posts WHERE author_id = :u OR session_id IN " + OWNED,   // 남이 단 댓글은 ON DELETE CASCADE

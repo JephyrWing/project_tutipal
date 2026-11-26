@@ -10,7 +10,7 @@ import com.my.tutipal_back.common.support.AfterCommit;
  * (권한 검사를 REST 한 곳에서만 하려고).
  * <ul>
  *   <li>/topic/sessions/{id}/events: 세션 참가자 전체 (quiz, quizClosed, settings, ended)</li>
- *   <li>/topic/sessions/{id}/teacher: 그 세션 선생님만 (joined, left, presence, quizStats, help)</li>
+ *   <li>/topic/sessions/{id}/teacher: 그 세션 선생님만 (joined, left, presence, quizStats, help, focus)</li>
  *   <li>/user/queue/events: 한 사람에게 (quizResult, helpAccepted/Declined/Ended, removed)</li>
  * </ul>
  */

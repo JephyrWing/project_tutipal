@@ -1,0 +1,1095 @@
+{
+ "description": "PT-90 golden features: build_vector(rows, hour, weekday) must match the original focus_features.build_features within 1e-9, with NaN (null) in the same positions.",
+ "generated_by": "python -I gen_focus_golden.py C:/CODE-SPACE/focus-streamlit/focus_features.py tutipal_ai/tests/fixtures/focus_features_golden.json (script kept outside the repo, PT-90 job tmp folder)",
+ "generator_python": "3.12.7",
+ "generator_pandas": "2.2.2",
+ "original_sha256": "b7965b202a4b76ad67b64ecde21e4690edcf52b20b0503ca364809f0f47a0851",
+ "time_zone": "Asia/Seoul",
+ "idle_rule": "rows[].idle_sec is the collected value 0..60 (what Spring sends). rows[].idle_sec_running is what the original build_features() received: idle_sec if < 60, else the running value of the row one minute older (minutes_ago + 1) plus 60, or 60 when that row is missing.",
+ "window_rule": "A row with minutes_ago m sits at T - m minutes; the original computes features for T and excludes T itself. hour = local(T).hour + local(T).minute / 60, weekday Monday = 0.",
+ "feature_columns": [
+  "ratio_ide_5m",
+  "ratio_browser_5m",
+  "ratio_terminal_5m",
+  "ratio_game_5m",
+  "ratio_chat_5m",
+  "ratio_other_5m",
+  "ratio_ide_15m",
+  "ratio_browser_15m",
+  "ratio_terminal_15m",
+  "ratio_game_15m",
+  "ratio_chat_15m",
+  "ratio_other_15m",
+  "switch_mean_5m",
+  "idle_mean_5m",
+  "active_ratio_5m",
+  "switch_mean_15m",
+  "idle_mean_15m",
+  "active_ratio_15m",
+  "prev_idle_sec",
+  "prev_ide",
+  "prev_browser",
+  "prev_terminal",
+  "prev_game",
+  "prev_chat",
+  "prev_other",
+  "hour_sin",
+  "hour_cos",
+  "weekday"
+ ],
+ "cases": [
+  {
+   "name": "continuous_15",
+   "target_utc": "2026-11-26T03:16:00Z",
+   "hour": 12.266666666666667,
+   "weekday": 3,
+   "rows": [
+    {
+     "minutes_ago": 15,
+     "category": "game",
+     "idle_sec": 60,
+     "switch_count": 1,
+     "idle_sec_running": 60.0
+    },
+    {
+     "minutes_ago": 14,
+     "category": "terminal",
+     "idle_sec": 60,
+     "switch_count": 7,
+     "idle_sec_running": 120.0
+    },
+    {
+     "minutes_ago": 13,
+     "category": "browser",
+     "idle_sec": 12,
+     "switch_count": 0,
+     "idle_sec_running": 12.0
+    },
+    {
+     "minutes_ago": 12,
+     "category": "ide",
+     "idle_sec": 3,
+     "switch_count": 6,
+     "idle_sec_running": 3.0
+    },
+    {
+     "minutes_ago": 11,
+     "category": "other",
+     "idle_sec": 45,
+     "switch_count": 12,
+     "idle_sec_running": 45.0
+    },
+    {
+     "minutes_ago": 10,
+     "category": "chat",
+     "idle_sec": 0,
+     "switch_count": 5,
+     "idle_sec_running": 0.0
+    },
+    {
+     "minutes_ago": 9,
+     "category": "game",
+     "idle_sec": 60,
+     "switch_count": 11,
+     "idle_sec_running": 60.0
+    },
+    {
+     "minutes_ago": 8,
+     "category": "terminal",
+     "idle_sec": 60,
+     "switch_count": 4,
+     "idle_sec_running": 120.0
+    },
+    {
+     "minutes_ago": 7,
+     "category": "browser",
+     "idle_sec": 12,
+     "switch_count": 10,
+     "idle_sec_running": 12.0
+    },
+    {
+     "minutes_ago": 6,
+     "category": "ide",
+     "idle_sec": 3,
+     "switch_count": 3,
+     "idle_sec_running": 3.0
+    },
+    {
+     "minutes_ago": 5,
+     "category": "other",
+     "idle_sec": 45,
+     "switch_count": 9,
+     "idle_sec_running": 45.0
+    },
+    {
+     "minutes_ago": 4,
+     "category": "chat",
+     "idle_sec": 0,
+     "switch_count": 2,
+     "idle_sec_running": 0.0
+    },
+    {
+     "minutes_ago": 3,
+     "category": "game",
+     "idle_sec": 60,
+     "switch_count": 8,
+     "idle_sec_running": 60.0
+    },
+    {
+     "minutes_ago": 2,
+     "category": "terminal",
+     "idle_sec": 60,
+     "switch_count": 1,
+     "idle_sec_running": 120.0
+    },
+    {
+     "minutes_ago": 1,
+     "category": "browser",
+     "idle_sec": 12,
+     "switch_count": 7,
+     "idle_sec_running": 12.0
+    }
+   ],
+   "expected": [
+    0.0,
+    0.2,
+    0.2,
+    0.2,
+    0.2,
+    0.2,
+    0.13333333333333333,
+    0.2,
+    0.2,
+    0.2,
+    0.13333333333333333,
+    0.13333333333333333,
+    5.4,
+    47.4,
+    0.6,
+    5.733333333333333,
+    44.8,
+    0.6,
+    12.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -0.06975647374412572,
+    -0.9975640502598242,
+    3.0
+   ]
+  },
+  {
+   "name": "one_missing_minute",
+   "target_utc": "2026-11-26T14:59:00Z",
+   "hour": 23.983333333333334,
+   "weekday": 3,
+   "rows": [
+    {
+     "minutes_ago": 15,
+     "category": "ide",
+     "idle_sec": 15,
+     "switch_count": 3,
+     "idle_sec_running": 15.0
+    },
+    {
+     "minutes_ago": 14,
+     "category": "chat",
+     "idle_sec": 14,
+     "switch_count": 2,
+     "idle_sec_running": 14.0
+    },
+    {
+     "minutes_ago": 13,
+     "category": "browser",
+     "idle_sec": 13,
+     "switch_count": 1,
+     "idle_sec_running": 13.0
+    },
+    {
+     "minutes_ago": 12,
+     "category": "ide",
+     "idle_sec": 12,
+     "switch_count": 0,
+     "idle_sec_running": 12.0
+    },
+    {
+     "minutes_ago": 11,
+     "category": "chat",
+     "idle_sec": 11,
+     "switch_count": 3,
+     "idle_sec_running": 11.0
+    },
+    {
+     "minutes_ago": 10,
+     "category": "browser",
+     "idle_sec": 10,
+     "switch_count": 2,
+     "idle_sec_running": 10.0
+    },
+    {
+     "minutes_ago": 9,
+     "category": "ide",
+     "idle_sec": 9,
+     "switch_count": 1,
+     "idle_sec_running": 9.0
+    },
+    {
+     "minutes_ago": 8,
+     "category": "chat",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 69.0
+    },
+    {
+     "minutes_ago": 6,
+     "category": "ide",
+     "idle_sec": 60,
+     "switch_count": 2,
+     "idle_sec_running": 60.0
+    },
+    {
+     "minutes_ago": 5,
+     "category": "chat",
+     "idle_sec": 60,
+     "switch_count": 1,
+     "idle_sec_running": 120.0
+    },
+    {
+     "minutes_ago": 4,
+     "category": "browser",
+     "idle_sec": 4,
+     "switch_count": 0,
+     "idle_sec_running": 4.0
+    },
+    {
+     "minutes_ago": 3,
+     "category": "ide",
+     "idle_sec": 3,
+     "switch_count": 3,
+     "idle_sec_running": 3.0
+    },
+    {
+     "minutes_ago": 2,
+     "category": "chat",
+     "idle_sec": 2,
+     "switch_count": 2,
+     "idle_sec_running": 2.0
+    },
+    {
+     "minutes_ago": 1,
+     "category": "browser",
+     "idle_sec": 1,
+     "switch_count": 1,
+     "idle_sec_running": 1.0
+    }
+   ],
+   "expected": [
+    0.2,
+    0.4,
+    0.0,
+    0.0,
+    0.4,
+    0.0,
+    0.35714285714285715,
+    0.2857142857142857,
+    0.0,
+    0.0,
+    0.35714285714285715,
+    0.0,
+    1.4,
+    26.0,
+    0.8,
+    1.5,
+    24.5,
+    0.7857142857142857,
+    1.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -0.004363309284746544,
+    0.9999904807207345,
+    3.0
+   ]
+  },
+  {
+   "name": "gap_3_minutes_middle",
+   "target_utc": "2026-11-28T23:50:00Z",
+   "hour": 8.833333333333334,
+   "weekday": 6,
+   "rows": [
+    {
+     "minutes_ago": 15,
+     "category": "ide",
+     "idle_sec": 20,
+     "switch_count": 2,
+     "idle_sec_running": 20.0
+    },
+    {
+     "minutes_ago": 14,
+     "category": "ide",
+     "idle_sec": 20,
+     "switch_count": 2,
+     "idle_sec_running": 20.0
+    },
+    {
+     "minutes_ago": 13,
+     "category": "ide",
+     "idle_sec": 20,
+     "switch_count": 2,
+     "idle_sec_running": 20.0
+    },
+    {
+     "minutes_ago": 12,
+     "category": "ide",
+     "idle_sec": 20,
+     "switch_count": 2,
+     "idle_sec_running": 20.0
+    },
+    {
+     "minutes_ago": 11,
+     "category": "ide",
+     "idle_sec": 20,
+     "switch_count": 2,
+     "idle_sec_running": 20.0
+    },
+    {
+     "minutes_ago": 10,
+     "category": "ide",
+     "idle_sec": 60,
+     "switch_count": 2,
+     "idle_sec_running": 80.0
+    },
+    {
+     "minutes_ago": 6,
+     "category": "game",
+     "idle_sec": 60,
+     "switch_count": 2,
+     "idle_sec_running": 60.0
+    },
+    {
+     "minutes_ago": 5,
+     "category": "game",
+     "idle_sec": 60,
+     "switch_count": 2,
+     "idle_sec_running": 120.0
+    },
+    {
+     "minutes_ago": 4,
+     "category": "game",
+     "idle_sec": 20,
+     "switch_count": 2,
+     "idle_sec_running": 20.0
+    },
+    {
+     "minutes_ago": 3,
+     "category": "game",
+     "idle_sec": 20,
+     "switch_count": 2,
+     "idle_sec_running": 20.0
+    },
+    {
+     "minutes_ago": 2,
+     "category": "game",
+     "idle_sec": 20,
+     "switch_count": 2,
+     "idle_sec_running": 20.0
+    },
+    {
+     "minutes_ago": 1,
+     "category": "game",
+     "idle_sec": 20,
+     "switch_count": 2,
+     "idle_sec_running": 20.0
+    }
+   ],
+   "expected": [
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.5,
+    0.0,
+    0.0,
+    0.5,
+    0.0,
+    0.0,
+    2.0,
+    40.0,
+    0.8,
+    2.0,
+    36.666666666666664,
+    0.75,
+    20.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.7372773368101241,
+    -0.6755902076156602,
+    6.0
+   ]
+  },
+  {
+   "name": "gap_3_minutes_recent",
+   "target_utc": "2026-11-29T14:59:00Z",
+   "hour": 23.983333333333334,
+   "weekday": 6,
+   "rows": [
+    {
+     "minutes_ago": 15,
+     "category": "terminal",
+     "idle_sec": 10,
+     "switch_count": 1,
+     "idle_sec_running": 10.0
+    },
+    {
+     "minutes_ago": 14,
+     "category": "browser",
+     "idle_sec": 10,
+     "switch_count": 1,
+     "idle_sec_running": 10.0
+    },
+    {
+     "minutes_ago": 13,
+     "category": "terminal",
+     "idle_sec": 10,
+     "switch_count": 1,
+     "idle_sec_running": 10.0
+    },
+    {
+     "minutes_ago": 12,
+     "category": "browser",
+     "idle_sec": 10,
+     "switch_count": 1,
+     "idle_sec_running": 10.0
+    },
+    {
+     "minutes_ago": 11,
+     "category": "terminal",
+     "idle_sec": 10,
+     "switch_count": 1,
+     "idle_sec_running": 10.0
+    },
+    {
+     "minutes_ago": 10,
+     "category": "browser",
+     "idle_sec": 10,
+     "switch_count": 1,
+     "idle_sec_running": 10.0
+    },
+    {
+     "minutes_ago": 9,
+     "category": "terminal",
+     "idle_sec": 10,
+     "switch_count": 1,
+     "idle_sec_running": 10.0
+    },
+    {
+     "minutes_ago": 8,
+     "category": "browser",
+     "idle_sec": 10,
+     "switch_count": 1,
+     "idle_sec_running": 10.0
+    },
+    {
+     "minutes_ago": 7,
+     "category": "terminal",
+     "idle_sec": 10,
+     "switch_count": 1,
+     "idle_sec_running": 10.0
+    },
+    {
+     "minutes_ago": 6,
+     "category": "browser",
+     "idle_sec": 10,
+     "switch_count": 1,
+     "idle_sec_running": 10.0
+    },
+    {
+     "minutes_ago": 5,
+     "category": "terminal",
+     "idle_sec": 10,
+     "switch_count": 1,
+     "idle_sec_running": 10.0
+    },
+    {
+     "minutes_ago": 4,
+     "category": "browser",
+     "idle_sec": 10,
+     "switch_count": 1,
+     "idle_sec_running": 10.0
+    }
+   ],
+   "expected": [
+    0.0,
+    0.5,
+    0.5,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.5,
+    0.5,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    10.0,
+    1.0,
+    1.0,
+    10.0,
+    1.0,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    -0.004363309284746544,
+    0.9999904807207345,
+    6.0
+   ]
+  },
+  {
+   "name": "latest_minute_missing",
+   "target_utc": "2026-11-26T00:00:00Z",
+   "hour": 9.0,
+   "weekday": 3,
+   "rows": [
+    {
+     "minutes_ago": 15,
+     "category": "chat",
+     "idle_sec": 30,
+     "switch_count": 3,
+     "idle_sec_running": 30.0
+    },
+    {
+     "minutes_ago": 14,
+     "category": "chat",
+     "idle_sec": 30,
+     "switch_count": 3,
+     "idle_sec_running": 30.0
+    },
+    {
+     "minutes_ago": 13,
+     "category": "chat",
+     "idle_sec": 30,
+     "switch_count": 3,
+     "idle_sec_running": 30.0
+    },
+    {
+     "minutes_ago": 12,
+     "category": "chat",
+     "idle_sec": 30,
+     "switch_count": 3,
+     "idle_sec_running": 30.0
+    },
+    {
+     "minutes_ago": 11,
+     "category": "chat",
+     "idle_sec": 30,
+     "switch_count": 3,
+     "idle_sec_running": 30.0
+    },
+    {
+     "minutes_ago": 10,
+     "category": "chat",
+     "idle_sec": 30,
+     "switch_count": 3,
+     "idle_sec_running": 30.0
+    },
+    {
+     "minutes_ago": 9,
+     "category": "chat",
+     "idle_sec": 30,
+     "switch_count": 3,
+     "idle_sec_running": 30.0
+    },
+    {
+     "minutes_ago": 8,
+     "category": "chat",
+     "idle_sec": 30,
+     "switch_count": 3,
+     "idle_sec_running": 30.0
+    },
+    {
+     "minutes_ago": 7,
+     "category": "chat",
+     "idle_sec": 30,
+     "switch_count": 3,
+     "idle_sec_running": 30.0
+    },
+    {
+     "minutes_ago": 6,
+     "category": "chat",
+     "idle_sec": 30,
+     "switch_count": 3,
+     "idle_sec_running": 30.0
+    },
+    {
+     "minutes_ago": 5,
+     "category": "chat",
+     "idle_sec": 30,
+     "switch_count": 3,
+     "idle_sec_running": 30.0
+    },
+    {
+     "minutes_ago": 4,
+     "category": "chat",
+     "idle_sec": 30,
+     "switch_count": 3,
+     "idle_sec_running": 30.0
+    },
+    {
+     "minutes_ago": 3,
+     "category": "chat",
+     "idle_sec": 30,
+     "switch_count": 3,
+     "idle_sec_running": 30.0
+    },
+    {
+     "minutes_ago": 2,
+     "category": "chat",
+     "idle_sec": 30,
+     "switch_count": 3,
+     "idle_sec_running": 30.0
+    }
+   ],
+   "expected": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    3.0,
+    30.0,
+    1.0,
+    3.0,
+    30.0,
+    1.0,
+    30.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.7071067811865476,
+    -0.7071067811865475,
+    3.0
+   ]
+  },
+  {
+   "name": "idle_10_minutes",
+   "target_utc": "2026-11-26T05:30:00Z",
+   "hour": 14.5,
+   "weekday": 3,
+   "rows": [
+    {
+     "minutes_ago": 15,
+     "category": "ide",
+     "idle_sec": 5,
+     "switch_count": 4,
+     "idle_sec_running": 5.0
+    },
+    {
+     "minutes_ago": 14,
+     "category": "ide",
+     "idle_sec": 5,
+     "switch_count": 4,
+     "idle_sec_running": 5.0
+    },
+    {
+     "minutes_ago": 13,
+     "category": "ide",
+     "idle_sec": 5,
+     "switch_count": 4,
+     "idle_sec_running": 5.0
+    },
+    {
+     "minutes_ago": 12,
+     "category": "ide",
+     "idle_sec": 5,
+     "switch_count": 4,
+     "idle_sec_running": 5.0
+    },
+    {
+     "minutes_ago": 11,
+     "category": "ide",
+     "idle_sec": 5,
+     "switch_count": 4,
+     "idle_sec_running": 5.0
+    },
+    {
+     "minutes_ago": 10,
+     "category": "ide",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 65.0
+    },
+    {
+     "minutes_ago": 9,
+     "category": "ide",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 125.0
+    },
+    {
+     "minutes_ago": 8,
+     "category": "ide",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 185.0
+    },
+    {
+     "minutes_ago": 7,
+     "category": "ide",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 245.0
+    },
+    {
+     "minutes_ago": 6,
+     "category": "ide",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 305.0
+    },
+    {
+     "minutes_ago": 5,
+     "category": "ide",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 365.0
+    },
+    {
+     "minutes_ago": 4,
+     "category": "ide",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 425.0
+    },
+    {
+     "minutes_ago": 3,
+     "category": "ide",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 485.0
+    },
+    {
+     "minutes_ago": 2,
+     "category": "ide",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 545.0
+    },
+    {
+     "minutes_ago": 1,
+     "category": "ide",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 605.0
+    }
+   ],
+   "expected": [
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    485.0,
+    0.0,
+    1.3333333333333333,
+    225.0,
+    0.3333333333333333,
+    605.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    -0.6087614290087207,
+    -0.7933533402912352,
+    3.0
+   ]
+  },
+  {
+   "name": "idle_whole_window",
+   "target_utc": "2026-11-26T06:00:00Z",
+   "hour": 15.0,
+   "weekday": 3,
+   "rows": [
+    {
+     "minutes_ago": 15,
+     "category": "other",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 60.0
+    },
+    {
+     "minutes_ago": 14,
+     "category": "other",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 120.0
+    },
+    {
+     "minutes_ago": 13,
+     "category": "other",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 180.0
+    },
+    {
+     "minutes_ago": 12,
+     "category": "other",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 240.0
+    },
+    {
+     "minutes_ago": 11,
+     "category": "other",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 300.0
+    },
+    {
+     "minutes_ago": 10,
+     "category": "other",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 360.0
+    },
+    {
+     "minutes_ago": 9,
+     "category": "other",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 420.0
+    },
+    {
+     "minutes_ago": 8,
+     "category": "other",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 480.0
+    },
+    {
+     "minutes_ago": 7,
+     "category": "other",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 540.0
+    },
+    {
+     "minutes_ago": 6,
+     "category": "other",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 600.0
+    },
+    {
+     "minutes_ago": 5,
+     "category": "other",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 660.0
+    },
+    {
+     "minutes_ago": 4,
+     "category": "other",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 720.0
+    },
+    {
+     "minutes_ago": 3,
+     "category": "other",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 780.0
+    },
+    {
+     "minutes_ago": 2,
+     "category": "other",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 840.0
+    },
+    {
+     "minutes_ago": 1,
+     "category": "other",
+     "idle_sec": 60,
+     "switch_count": 0,
+     "idle_sec_running": 900.0
+    }
+   ],
+   "expected": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    780.0,
+    0.0,
+    0.0,
+    480.0,
+    0.0,
+    900.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    -0.7071067811865471,
+    -0.7071067811865479,
+    3.0
+   ]
+  },
+  {
+   "name": "empty_5_minute_window",
+   "target_utc": "2026-11-26T09:45:00Z",
+   "hour": 18.75,
+   "weekday": 3,
+   "rows": [
+    {
+     "minutes_ago": 15,
+     "category": "browser",
+     "idle_sec": 25,
+     "switch_count": 6,
+     "idle_sec_running": 25.0
+    },
+    {
+     "minutes_ago": 14,
+     "category": "game",
+     "idle_sec": 25,
+     "switch_count": 6,
+     "idle_sec_running": 25.0
+    },
+    {
+     "minutes_ago": 13,
+     "category": "browser",
+     "idle_sec": 25,
+     "switch_count": 6,
+     "idle_sec_running": 25.0
+    },
+    {
+     "minutes_ago": 12,
+     "category": "game",
+     "idle_sec": 25,
+     "switch_count": 6,
+     "idle_sec_running": 25.0
+    },
+    {
+     "minutes_ago": 11,
+     "category": "browser",
+     "idle_sec": 25,
+     "switch_count": 6,
+     "idle_sec_running": 25.0
+    },
+    {
+     "minutes_ago": 10,
+     "category": "game",
+     "idle_sec": 25,
+     "switch_count": 6,
+     "idle_sec_running": 25.0
+    },
+    {
+     "minutes_ago": 9,
+     "category": "browser",
+     "idle_sec": 25,
+     "switch_count": 6,
+     "idle_sec_running": 25.0
+    },
+    {
+     "minutes_ago": 8,
+     "category": "game",
+     "idle_sec": 25,
+     "switch_count": 6,
+     "idle_sec_running": 25.0
+    },
+    {
+     "minutes_ago": 7,
+     "category": "browser",
+     "idle_sec": 25,
+     "switch_count": 6,
+     "idle_sec_running": 25.0
+    },
+    {
+     "minutes_ago": 6,
+     "category": "game",
+     "idle_sec": 25,
+     "switch_count": 6,
+     "idle_sec_running": 25.0
+    }
+   ],
+   "expected": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    0.0,
+    0.5,
+    0.0,
+    0.5,
+    0.0,
+    0.0,
+    null,
+    null,
+    null,
+    6.0,
+    25.0,
+    1.0,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    -0.9807852804032304,
+    0.1950903220161283,
+    3.0
+   ]
+  }
+ ]
+}

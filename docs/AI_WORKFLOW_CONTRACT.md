@@ -476,3 +476,53 @@ Spring 매핑: `ChatRequest.messages`의 마지막 원소(role `user`)가 `quest
 | 과목별 안내 | Agent 경로는 Spring `TopicPrompt`의 과목 지시·수준 문구를 쓰지 않고 `policy.topic`·`difficulty`만 쓴다 | 품질 비교 후 policy 확장 검토 |
 | 의존성 해시 | `requirements.lock.txt`는 버전만 고정하고 해시는 고정하지 않는다(기존부터) | `--require-hashes` 도입 검토 |
 | 규칙 분류 | 질문 분류 정규식은 선형 시간으로 제한했다. `코드` 뒤 붙은 낱말은 10자까지만 본다 | — |
+
+## 8. 집중도 예측 `/v1/focus/predict` (PT-90, 2026-11-26)
+
+학생이 동의하고 수업 화면에서 시작한 동안만 Windows 앱이 1분마다 한 줄(가장 오래 쓴 실행 파일 이름, 입력 없는 초, 창 전환 수)을 Spring에 보낸다. Spring은 저장하고, 실행 파일 이름을 카테고리로 바꾼 뒤 카테고리 피처만 FastAPI LightGBM에 보내 **규칙 일치도 기반 참고 상태(정확도 아님)**를 받는다. FastAPI는 요청 하나 안에서 계산하고 아무것도 저장하지 않는다.
+
+**요청·응답**
+
+```
+POST /v1/focus/predict      헤더 X-Internal-Key (internal_only만 적용, 모델 제공자 검사 없음)
+{"rows": [{"minutes_ago": 1, "category": "ide", "idle_sec": 5, "switch_count": 1}, …], "hour": 12.27, "weekday": 3}
+200 {"status": "ok", "state": "focus", "probabilities": {"break": 0.1, "distracted": 0.2, "focus": 0.7}, "model_version": "focus-lgbm-<sha256 앞 12자>"}
+200 {"status": "insufficient_data"}
+```
+
+| 항목 | 규칙 |
+| --- | --- |
+| `rows` | 0~15개. `minutes_ago` 1~15 정수(1 = 목표 분 바로 앞 분), 중복이면 422(고정 문구). `category` ∈ ide·browser·terminal·game·chat·other, `idle_sec` 0~60, `switch_count` 0~120 정수 |
+| `hour` · `weekday` | 목표 분(가장 최근 행 다음 분)의 `app.focus.zone`(Asia/Seoul) 시각. `hour` = 시 + 분/60, [0, 24). `weekday` 월=0 … 일=6 |
+| 보내지 않는 것 | 실행 파일 이름, userId, sessionId, 원래 시각. 추가 필드는 `extra="forbid"` → 422 |
+| NaN/Infinity | 422. 422 본문에 입력값을 다시 넣지 않는다(`safe_error`) |
+| 본문 크기 | 이 경로만 8KB 초과 413 (다른 `/v1/*`는 기존 4.5MB) |
+| 판정 | 15분 창의 행이 13개 미만이면 모델을 부르지 않고 `insufficient_data`. 13개 이상이면 확률이 가장 큰 클래스 |
+| 503 | 모델 미설정·파일 없음·해시 불일치·사이드카/부스터 피처 순서·클래스 불일치·읽기 실패. 본문은 사유와 무관하게 `{"detail": "focus model unavailable"}` 하나(경로·예외 노출 없음). 다른 엔드포인트는 정상 |
+| 500 | 추론 실패·확률 개수/합/유한성 이상 (본문 고정 문구) |
+| 로그 | status·행 수·소요 ms·예외 종류만. 피처값·확률·경로는 남기지 않는다 |
+
+**피처** (`app/services/focus_features.py`, 28개, 원본 `focus_features.build_features()` 순서): 5분 창(`minutes_ago` 1~5)과 15분 창(1~15)의 카테고리 비율·창 전환 평균·유휴 평균·활동 비율(있는 행의 평균, 창이 비면 NaN), 직전 행(`minutes_ago` ≤ 2 중 가장 최근, 없으면 NaN)의 유휴·카테고리 one-hot, `hour_sin`·`hour_cos`, `weekday`. 원본 모델은 누적 유휴 초로 학습했으므로 FastAPI가 연속 분끼리 누적값을 복원한다: `running[m] = idle[m]`(60 미만) / `running[m+1] + 60`(60이고 앞 분 있음) / `60`(앞 분 없음). 연속 구간은 원본과 같고 창 첫 행만 하한값이다. `tests/fixtures/focus_features_golden.json`(원본 pandas로 1회 생성)과 1e-9 안에서 같다.
+
+**모델 로딩**: `FOCUS_MODEL_PATH`(LightGBM 텍스트 `.txt`)의 바이트를 한 번만 읽어(64MB 상한) SHA-256이 `FOCUS_MODEL_SHA256`(대소문자 무시)과 같을 때만, 해시를 확인한 그 바이트를 UTF-8로 풀어 `lightgbm.Booster(model_str=…)`로만 로드한다(경로를 다시 열지 않아 확인과 로드 사이 틈이 없고, LightGBM 네이티브 오류 출력에도 경로가 나오지 않는다. UTF-8이 아니면 503). 옆 `.json`(`features` 28개·`classes` `["break","distracted","focus"]`)과 `Booster.feature_name()`·클래스 수가 코드 상수와 같아야 한다. pickle/joblib은 쓰지 않는다. 시작할 때 한 번 읽고 실패해도 앱은 뜬다. 모델 파일은 이미지에 넣지 않으며 compose·env 예제의 기본값은 빈 값이다(그때 화면 상태는 "알 수 없음"이 정상). Docker 이미지는 lightgbm용 `libgomp1`을 설치한다. lightgbm 4.7.0(+scipy 1.18.1, narwhals 2.29.0)을 `requirements.lock.txt`에 고정했다.
+
+**Spring** (`com.my.tutipal_back.learning.focus`)
+
+| API | 권한 | 결과 |
+| --- | --- | --- |
+| `POST /api/sessions/{id}/focus` `{rows:[{exeName, idleSec, switchCount}]}` | 진행 중 수업의 STUDENT 본인 + 현재 버전 동의 | 200 `{state, updatedAt}`. 비참여 404, 종료 410, 교사 403, 동의 없음 403("저장 동의가 필요해요"), 50초 안 재제출 429, 형식 오류 400(입력값 미포함) |
+| `GET /api/sessions/{id}/focus` | 그 수업 교사 | 현재 STUDENT 전원 `[{userId, state, updatedAt}]`. 실행 파일 이름·카테고리·원시값 없음 |
+| `GET /api/sessions/{id}/focus/me` | 그 수업 학생 본인 | `{state, updatedAt}` |
+| `GET` · `PUT {version}` · `DELETE /api/focus/consent` | 로그인 사용자 | 동의 조회·저장(다른 버전 409)·철회(204, 그 사용자의 consent를 먼저 지운 뒤 samples·states 즉시 삭제). 화면: 수업 화면 집중도 카드와 수업과 무관한 `설정 > 집중도 체크`(브라우저 포함) |
+
+- 행 `exeName`은 null 또는 `^[a-z0-9._-]{1,64}\.exe$`, 1~15행, 오래된 순. 분은 서버 시각으로 정한다(n행이면 `floor(now) - (n-1-i)`분, 같은 분은 기존 행 유지).
+- 흐름: 권한·동의 → 제출 간격 → 행 저장(짧은 트랜잭션, 세션 행 잠금 후 다시 확인, 동의 행은 `FOR SHARE`로 읽어 철회와 직렬화) → 최근 15분 행으로 FastAPI 호출(트랜잭션 밖, `app.focus.predict-timeout` 2s) → 상태 저장 → `events.toTeacher(sessionId, "focus", studentId)`. FastAPI 실패(상태 코드·시간 초과·연결·형식·8KB 초과 응답)는 UNKNOWN, `insufficient_data`는 PENDING. 모델 실패와 관계없이 제출은 200이다. 단, 모델을 기다리는 동안 학생이 나갔거나(404 "방을 찾을 수 없어요") 수업이 끝났거나(410 "이미 닫힌 방이에요") 동의를 철회했으면(403 "저장 동의가 필요해요") 상태를 저장하지 않고 일반 거절과 같은 오류를 돌려준다(앱은 이 응답에 수집을 멈춘다).
+- 상태: FOCUS · DISTRACTED · BREAK · UNKNOWN · PENDING 저장, 상태 행이 없거나 `app.focus.stale-after`(3분) 지나면 NOT_PARTICIPATING(저장 안 함).
+- 보관: `ended_at`이 30일 지난 수업의 samples·states를 매시간 500행씩 삭제. 같은 배치에서 수업 종료 여부와 상관없이 `minute_at`이 `app.focus.max-sample-age-days`(31일 = 30일 + 수업 1일) 지난 samples와 그만큼 갱신 없는 states도 삭제한다(교사가 닫지 않은 수업은 `ended_at`이 없음). 31일은 PM 확인 대상 가정값. 탈퇴 때 `AccountCleanup`이 세 테이블을 먼저 지우고 FK도 ON DELETE CASCADE.
+- 설정 `app.focus.*`: `consent-version` "2026-11-26", `retention-days` 30, `retention-batch-size` 500, `max-sample-age-days` 31, `submit-min-interval` 50s, `stale-after` 3m, `zone` Asia/Seoul, `predict-timeout` 2s. 잘못된 값이면 시작 실패. `GET`·`PUT /api/focus/consent` 응답에 `retentionDays`·`maxSampleAgeDays`·`staleAfterSeconds`가 함께 오고(학생 본인 배지는 마지막 응답이 `staleAfterSeconds`보다 오래되면 "알 수 없음 · 연결 확인 중") 화면은 이 값으로 동의 문구의 보관 기간을 만든다. 그래서 `retention-days`나 `max-sample-age-days`를 바꾸면 문구가 바뀐 것이므로 `consent-version`도 반드시 올린다(기존 동의는 다시 받음).
+
+**사용 목적 (PM 결정 2026-11-26)**: 교사에게는 앱 이름 없이 상태만 보여 준다. 저장한 실행 파일 이름(basename)과 1분 기록은 수업 중 참고 상태 표시와 WBS 134행 규칙 일치도 평가(학생이 아니라 집중도 판정 기능 자체가 규칙과 얼마나 맞는지 보는 기능 평가)에만 쓰고, 모델 재학습·학생 평가·성적·출결에는 쓰지 않는다. 화면 안내(`FOCUS_NOTICE`)도 "학생을 평가하거나 성적 · 출결을 판단하는 데 쓰지 말아 주세요"로 대상을 학생으로 적는다. 보관은 그대로(수업 종료 30일, 31일 상한, 탈퇴·철회 즉시 삭제). 동의 문구(`focusLabels.consentText`)에 이 목적이 적혀 있으며, 목적이 바뀌면 `consent-version`을 올린다.
+
+**데스크톱 수집 경계**: `docs/DESKTOP_SECURITY_CHECKS.md`의 "집중도 수집" 행.
+
+**알려진 한계**: 카테고리 표는 서버 한 곳(`FocusCategories`, devdesk 학습 표 + 수업 도구)이며 규칙 일치도 정량 평가·보정은 후속이다. 제출 간격 제한은 서버 메모리라 서버가 여러 대면 대마다 따로 센다. 동의 철회와 제출이 겹치면 동의 행 잠금으로 직렬화된다: 저장이 먼저면 철회가 기다렸다가 그 행까지 지우고, 철회가 먼저면 저장이 403 또는 상태 저장 생략이 된다(실제 PostgreSQL 검사: `./gradlew focusDbTest` = `FocusStorePostgresTest`, CI `review-checks.yml`의 review-db job이 일회용 DB로 실행하고 실행 수 0이면 실패). 학습 표의 공백 있는 이름("league of legends", "winamax poker")과 `+`가 들어간 "notepad++"는 실행 파일 규칙에 맞지 않아 표에서 뺐다(그런 프로그램은 null → other).

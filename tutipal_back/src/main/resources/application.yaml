@@ -135,6 +135,26 @@ app:
     questions:
       retention: 30d
       cleanup-interval: 1h
+  # PT-90 학생 집중도 체크 (동의 + 학생이 시작한 동안만 1분 단위 기록). 계약: docs/AI_WORKFLOW_CONTRACT.md 8
+  focus:
+    # 동의 문구 버전. 문구를 바꾸면 올린다 (기존 동의는 다시 받아야 함).
+    # 동의 문구의 보관 기간은 아래 retention-days · max-sample-age-days 값으로 만들어지므로, 그 값을 바꿔도 반드시 올린다
+    # 출시(사용자 동의 수집 시작) 전 변경은 버전을 유지했다 (2026-11-26 목적 변경 포함).
+    # 출시 후에는 문구 · 목적(참고 상태 표시 + 규칙 일치도 기능 평가, 재학습 미사용) · 보관 기간이 바뀔 때마다 반드시 올린다
+    consent-version: "2026-11-26"
+    # 끝난 지 N일 지난 수업의 기록 · 상태를 매시간 배치 삭제
+    retention-days: 30
+    retention-batch-size: 500
+    # 끝났든 안 끝났든 N일 지난 1분 기록 · N일 갱신 없는 상태도 같은 배치에서 삭제 (교사가 닫지 않은 수업 대비, 30일 + 수업 1일)
+    max-sample-age-days: 31
+    # 같은 학생 · 수업의 제출 최소 간격 (어기면 429)
+    submit-min-interval: 50s
+    # 마지막 상태가 이보다 오래되면 "참여 안 함"
+    stale-after: 3m
+    # 모델 피처 hour · weekday 의 시간대
+    zone: Asia/Seoul
+    # FastAPI /v1/focus/predict 전체 대기 (넘으면 "알 수 없음")
+    predict-timeout: 2s
   livekit:
     api-key: ${LIVEKIT_API_KEY:}
     api-secret: ${LIVEKIT_API_SECRET:}

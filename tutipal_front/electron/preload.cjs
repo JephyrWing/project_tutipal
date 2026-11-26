@@ -45,6 +45,17 @@ contextBridge.exposeInMainWorld('desktop', {
     ipcRenderer.on('overlay-draw', listener)
     return () => ipcRenderer.removeListener('overlay-draw', listener)
   },
+  // PT-90 집중도 수집: 화면은 수업 id 로 시작 · 중지 · 상태 조회만 한다. 수집 값은 메인 프로세스가 직접 서버로 보낸다.
+  focusStart: (sessionId) => ipcRenderer.invoke('focus-start', sessionId),
+  focusStop: () => ipcRenderer.invoke('focus-stop'),
+  focusState: () => ipcRenderer.invoke('focus-state'),
+  onFocusState: (cb) => {
+    const listener = (_event, state) => {
+      if (state && typeof state === 'object' && !Array.isArray(state)) cb(state)
+    }
+    ipcRenderer.on('focus-state', listener)
+    return () => ipcRenderer.removeListener('focus-state', listener)
+  },
   onScreenSettingsChanged: (cb) => {
     const listener = () => cb()
     ipcRenderer.on('screen-settings-changed', listener)
