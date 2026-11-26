@@ -109,6 +109,10 @@ app:
       quiz-generate:
         limit: 20
         window: 1h
+      # PT-87 개념 분석(질문 군집화). 캐시 적중 · 데이터 부족 응답은 세지 않는다 (임시값)
+      insights:
+        limit: 10
+        window: 1h
       cleanup-interval: 10m
     # PT-106 저장 AI 대화. retention-days 0 = 자동 삭제 끔 (보관 기간 PT-13 미정: 사용자 삭제 · 탈퇴 때까지 보관)
     conversations:
@@ -126,6 +130,11 @@ app:
         max-concurrent: 1
         # FastAPI 로 보내는 요약 입력 글자 합계 상한 (FastAPI 가 모델 문맥에 맞게 다시 줄인다)
         max-input-chars: 12000
+  # PT-87 학생 질문 원문 임시 보관 (PT-13 보관 기간 미결: 임시 30일). 코드 기본값 없음
+  insights:
+    questions:
+      retention: 30d
+      cleanup-interval: 1h
   # PT-90 학생 집중도 체크 (동의 + 학생이 시작한 동안만 1분 단위 기록). 계약: docs/AI_WORKFLOW_CONTRACT.md 8
   focus:
     # 동의 문구 버전. 문구를 바꾸면 올린다 (기존 동의는 다시 받아야 함).

@@ -22,6 +22,7 @@ import com.my.tutipal_back.learning.tutor.dto.ChatRequest;
 import com.my.tutipal_back.learning.tutor.service.TutorService;
 import com.my.tutipal_back.rag.service.RagSearchService;
 import com.my.tutipal_back.sessions.service.StudySessionService;
+import com.my.tutipal_back.learning.tutor.service.StudentQuestionSink;
 import com.sun.net.httpserver.HttpServer;
 
 import tools.jackson.databind.json.JsonMapper;
@@ -63,7 +64,8 @@ class AiQuotaRealClientTest {
         server.start();
         AiClient ai = new AiClient("http://127.0.0.1:" + server.getAddress().getPort(), "k", JsonMapper.builder().build());
         return new TutorService(ai, mock(StudySessionService.class), mock(RagSearchService.class),
-                new AiSlots(2, Duration.ofSeconds(1)), quota, null, null, false);
+                new AiSlots(2, Duration.ofSeconds(1)), quota, null, null, false,
+                StudentQuestionSink.NONE);
     }
 
     @Test

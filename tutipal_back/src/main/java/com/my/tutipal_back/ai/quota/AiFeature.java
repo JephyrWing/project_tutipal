@@ -9,7 +9,9 @@ public enum AiFeature {
     /** 도우미 챗봇: 사용자 질문 하나 = 1회. */
     CHAT("챗봇 질문"),
     /** 선생님의 "AI로 문제 만들기". */
-    QUIZ_GENERATE("AI 문제 만들기");
+    QUIZ_GENERATE("AI 문제 만들기"),
+    /** PT-87 선생님 "개념 분석" 질문 군집화 (캐시 적중 · 데이터 부족은 세지 않음). */
+    INSIGHTS("개념 분석");
 
     private final String label;
 

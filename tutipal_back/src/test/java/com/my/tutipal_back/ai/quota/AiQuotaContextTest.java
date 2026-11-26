@@ -27,6 +27,7 @@ class AiQuotaContextTest {
         "app.ai.quota.screen-manual.limit=2", "app.ai.quota.screen-manual.window=1h",
         "app.ai.quota.chat.limit=3", "app.ai.quota.chat.window=30m",
         "app.ai.quota.quiz-generate.limit=4", "app.ai.quota.quiz-generate.window=1h",
+        "app.ai.quota.insights.limit=5", "app.ai.quota.insights.window=1h",
         "app.ai.quota.cleanup-interval=10m",
     };
 

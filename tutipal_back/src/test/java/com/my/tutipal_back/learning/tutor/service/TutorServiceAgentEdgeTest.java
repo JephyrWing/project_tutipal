@@ -52,7 +52,8 @@ class TutorServiceAgentEdgeTest {
     private final AiQuota quota = AiQuotaFixtures.quota(5, Duration.ofHours(1),
             new MutableClock(Instant.parse("2026-11-25T00:00:00Z")));
     private final TutorService service = new TutorService(ai, sessions, rag, slots, quota,
-            mock(QuizVariantAccess.class), new AgentContextAssembler(new NoStoredConversationMemory()), true);
+            mock(QuizVariantAccess.class), new AgentContextAssembler(new NoStoredConversationMemory()), true,
+            StudentQuestionSink.NONE);
     private final List<String> deltas = new ArrayList<>();
     private final List<AgentDtos.AgentEvent> agentEvents = new ArrayList<>();
 

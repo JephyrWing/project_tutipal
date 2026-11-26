@@ -37,6 +37,7 @@ import com.my.tutipal_back.common.exception.GlobalExceptionHandler;
 import com.my.tutipal_back.learning.tutor.service.TutorService;
 import com.my.tutipal_back.rag.service.RagSearchService;
 import com.my.tutipal_back.sessions.service.StudySessionService;
+import com.my.tutipal_back.learning.tutor.service.StudentQuestionSink;
 
 /** PT-97 W2: chat over quota is an HTTP 429 problem+json before any SSE stream opens. */
 class TutorChatQuotaWebTest {
@@ -54,7 +55,8 @@ class TutorChatQuotaWebTest {
         var principal = new DefaultOAuth2User(List.of(new SimpleGrantedAuthority("ROLE_USER")), Map.of("id", "2"), "id");
         var login = UsernamePasswordAuthenticationToken.authenticated(principal, null, principal.getAuthorities());
         SecurityContextHolder.getContext().setAuthentication(login);
-        mvc = MockMvcBuilders.standaloneSetup(new TutorController(new TutorService(ai, sessions, rag, slots, quota, null, null, false)))
+        mvc = MockMvcBuilders.standaloneSetup(new TutorController(new TutorService(ai, sessions, rag, slots, quota, null, null, false,
+                StudentQuestionSink.NONE)))
                 .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .build();

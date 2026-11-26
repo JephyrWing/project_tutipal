@@ -87,7 +87,7 @@ class TutorServiceAgentTurnLimitTest {
 
     private TutorService build(boolean agentEnabled) {
         return new TutorService(ai, sessions, rag, slots, quota, mock(QuizVariantAccess.class),
-                new AgentContextAssembler(new NoStoredConversationMemory()), agentEnabled);
+                new AgentContextAssembler(new NoStoredConversationMemory()), agentEnabled, StudentQuestionSink.NONE);
     }
 
     private static ChatRequest personal() {
@@ -216,9 +216,9 @@ class TutorServiceAgentTurnLimitTest {
 
     @Test
     void agentOnWithoutItsCollaboratorsFailsFastInsteadOfSilentlyTurningOff() {
-        assertThatThrownBy(() -> new TutorService(ai, sessions, rag, slots, quota, null, null, true))
+        assertThatThrownBy(() -> new TutorService(ai, sessions, rag, slots, quota, null, null, true, StudentQuestionSink.NONE))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThat(new TutorService(ai, sessions, rag, slots, quota, null, null, false)).isNotNull();
+        assertThat(new TutorService(ai, sessions, rag, slots, quota, null, null, false, StudentQuestionSink.NONE)).isNotNull();
     }
 
     // ------------------------------------------------------------------ S8 failed turns are logged too

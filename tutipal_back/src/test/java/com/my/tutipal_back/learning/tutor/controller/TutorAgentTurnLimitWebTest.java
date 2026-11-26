@@ -41,6 +41,7 @@ import com.my.tutipal_back.learning.tutor.service.OpenedChat;
 import com.my.tutipal_back.learning.tutor.service.TutorService;
 import com.my.tutipal_back.rag.service.RagSearchService;
 import com.my.tutipal_back.sessions.service.StudySessionService;
+import com.my.tutipal_back.learning.tutor.service.StudentQuestionSink;
 
 /** PT-85 Round 1 review S7 over HTTP: a second agent turn of the same user is a plain 429, not an SSE stream. */
 class TutorAgentTurnLimitWebTest {
@@ -64,7 +65,8 @@ class TutorAgentTurnLimitWebTest {
         SecurityContextHolder.getContext().setAuthentication(
                 UsernamePasswordAuthenticationToken.authenticated(principal, null, principal.getAuthorities()));
         tutor = new TutorService(ai, mock(StudySessionService.class), mock(RagSearchService.class), slots, quota,
-                mock(QuizVariantAccess.class), new AgentContextAssembler(new NoStoredConversationMemory()), true);
+                mock(QuizVariantAccess.class), new AgentContextAssembler(new NoStoredConversationMemory()), true,
+                StudentQuestionSink.NONE);
         mvc = MockMvcBuilders.standaloneSetup(new TutorController(tutor))
                 .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
                 .setControllerAdvice(new GlobalExceptionHandler())

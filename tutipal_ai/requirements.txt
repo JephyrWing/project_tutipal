@@ -6,5 +6,7 @@ onnxruntime==1.32.0
 tokenizers==0.23.3
 numpy==2.5.5
 langgraph==1.2.24
-# PT-90 /v1/focus/predict: LightGBM text model (Booster(model_file=)), no pickle/joblib
+# PT-87 question clustering (KMeans + silhouette); numpy is pinned above (shared with PT-86, same 2.5.5)
+scikit-learn==1.9.1
+# PT-90 /v1/focus/predict: LightGBM text model (checked bytes -> Booster(model_str=)), no pickle/joblib
 lightgbm==4.7.0

@@ -9,6 +9,7 @@ from app.controllers.agent_controller import router as agent_router
 from app.controllers.focus_controller import router as focus_router
 from app.controllers.health_controller import router as health_router
 from app.controllers.inference_controller import router as inference_router
+from app.controllers.insights_controller import router as insights_router
 from app.controllers.rerank_controller import router as rerank_router
 from app.core.body_limit import InferenceBodyLimit
 from app.core.settings import require_tracing_disabled
@@ -45,6 +46,7 @@ app.include_router(inference_router)
 app.include_router(rerank_router)
 app.include_router(agent_router)
 app.include_router(focus_router)
+app.include_router(insights_router)
 
 
 # Pydantic messages for these types are built from field limits or our own fixed ValueError texts,
