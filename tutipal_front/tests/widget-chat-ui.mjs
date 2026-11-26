@@ -34,11 +34,12 @@ try{
  page.on('pageerror',e=>errors.push(e.message))
  let fail=false
  const summary='가'.repeat(4001)
+ let currentSummary=summary
  await page.route(url=>url.pathname.startsWith('/api/'),async route=>{
   const pathname=new URL(route.request().url()).pathname
   const json=(body,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)})
   if(pathname==='/api/auth/csrf')return json({headerName:'X-CSRF',token:'synthetic'})
-  if(pathname==='/api/screen'){screen.push(route.request().postDataJSON());return json({summary,detail:'PRIVATE_DETAIL'})}
+  if(pathname==='/api/screen'){screen.push(route.request().postDataJSON());return json({summary:currentSummary,detail:'PRIVATE_DETAIL'})}
   if(pathname==='/api/review/observe')return json({})
   if(pathname==='/api/tutor/chat'){
    chats.push(route.request().postDataJSON());const own=chats.length
@@ -85,15 +86,19 @@ try{
 
  gate=deferred();await ask('old context');await page.getByRole('button',{name:'보내기',exact:true}).click()
  await expect.poll(()=>chats.length).toBe(6)
+ currentSummary='나'.repeat(4001)
  await page.evaluate(()=>{window.context={topic:'자유 주제'};window.fireContext()})
  gate.resolve();gate=null
  await expect(page.getByText('SSE ANSWER 6',{exact:true})).toHaveCount(0)
  await expect(page.getByRole('button',{name:'질문 다시 시도',exact:true})).toHaveCount(0)
- // Cleared context has no usable cached summary; no new capture is forced by asking.
- await ask('text only');await page.getByRole('button',{name:'보내기',exact:true}).click()
+ // Context reset immediately obtains a fresh automatic summary, never the old one.
+ await expect(page.getByText(currentSummary,{exact:true})).toBeVisible()
+ const capturesBeforeQuestion=await page.evaluate(()=>window.captures)
+ await ask('fresh context');await page.getByRole('button',{name:'보내기',exact:true}).click()
  await expect(page.getByText('SSE ANSWER 7',{exact:true})).toBeVisible()
- expect(chats[6].screenSummary).toBeUndefined();expect(chats[6].sessionId).toBeUndefined();checks++;console.log('passed context reset')
+ expect(chats[6].screenSummary).toBe('나'.repeat(4000));expect(chats[6].sessionId).toBeUndefined();expect(await page.evaluate(()=>window.captures)).toBe(capturesBeforeQuestion);checks++;console.log('passed context reset')
 
+ currentSummary=summary
  await page.evaluate(()=>{window.selected={enabled:true,sourceId:'window:C'};window.fireSettings()})
  await expect(page.getByText(summary,{exact:true})).toBeVisible()
  await ask('closed target');await page.evaluate(()=>{window.target='gone'})

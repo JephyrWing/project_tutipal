@@ -125,7 +125,12 @@ export default function WidgetPage() {
       load()
     })
     const reviewUnsubscribe = desktop.onReviewDeletionChanged(value => analysis.current.deletion(value))
-    const contextUnsubscribe = desktop.onWidgetChatContextChanged(() => analysis.current.reset())
+    const contextUnsubscribe = desktop.onWidgetChatContextChanged(() => {
+      analysis.current.reset()
+      // Main navigation after consent can cancel the first capture. Refresh the
+      // new context immediately rather than leaving it idle until the next tick.
+      void analysis.current.look()
+    })
     return () => {
       active = false
       analysis.current.setRunning(false)
