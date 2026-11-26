@@ -50,6 +50,10 @@ V20(PT-86 `chunk_provenance`) · V21(PT-106 `ai_conversations`)은 develop에 �
 - 기록 실패는 채팅을 멈추지 않는다. 로그에는 예외 클래스명만 남긴다 (원문 · DB 메시지 없음).
 - 보관기간: `app.insights.questions.retention` = **임시 30일**. NFR 보관기간은 PT-13에서 미결이므로 결정되면 이 값만 바꾼다. `QuestionRetentionJob`이 `cleanup-interval`(1시간)마다 1000건씩 지운다. 두 키는 application.yaml에만 있다(코드 기본값 없음).
 - 나가기 · 내보내기: `ParticipantRemoved` 이벤트에서 그 학생의 그 수업 행만 같은 트랜잭션으로 삭제.
+  - 질문 기록과 겹칠 때: 리스너는 JPA가 참가자 행 DELETE를 커밋 때 flush하기 **전에** 돈다. 그래서 질문 INSERT는 참가자 행을 `FOR SHARE`로 잠그고, 리스너의 삭제(`deleteBySessionAndUser`)는 먼저 같은 행을 `FOR UPDATE`로 잠근다.
+  - 제거가 먼저 잠갔으면 INSERT는 커밋을 기다렸다가 행이 지워진 것을 보고 0건, INSERT가 먼저면 제거가 INSERT 커밋을 기다린 뒤 새 문장(READ COMMITTED 새 스냅숏)으로 그 행을 지운다.
+  - 수업 행은 잠그지 않는다. 대기 뒤에도 INSERT의 스냅숏은 그대로라 소용이 없고, 제거가 수업 → 참가자 순으로 잠그므로 교착이 생길 수 있다.
+  - 탈퇴는 users · study_sessions 삭제의 CASCADE가 마지막에 남은 행까지 지운다.
 - 탈퇴: `AccountCleanup`이 본인 질문 + 본인이 연 수업의 질문 전부를 명시적으로 지운다. 수업 삭제는 CASCADE.
 - 원문을 읽는 코드는 `ChatQuestionStore` 하나뿐이고, 꺼낸 원문은 `RawQuestion`(toString 가림, JSON 직렬화 시 예외, `revealForEmbedding()`만 공개)에 담긴다. 응답 DTO의 문자열 필드는 label/name/status/algorithm/reason/source로 제한하고 반사 검사 테스트로 지킨다.
 - 외부 전송: 원문은 분석 요청 때만 기존 임베딩 경로(`AiClient.embedWithModel` → FastAPI `/v1/embed`)로 나간다. **`MODEL_PROVIDER=auto`에서 Ollama를 쓸 수 없으면 OpenAI 임베딩으로 전환되어 질문 원문이 외부로 전송될 수 있다** (기존 자료 RAG 임베딩과 같은 경계). 벡터는 저장하지 않는다. FastAPI 군집 요청에는 벡터와 순번만 있다.

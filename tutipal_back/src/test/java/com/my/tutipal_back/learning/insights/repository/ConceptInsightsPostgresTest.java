@@ -9,6 +9,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import org.flywaydb.core.Flyway;
@@ -18,7 +23,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import com.my.tutipal_back.learning.insights.dto.ConceptView;
 import com.my.tutipal_back.learning.insights.dto.QuizConceptView;
@@ -473,5 +480,79 @@ class ConceptInsightsPostgresTest {
 
         assertThat(rows).extracting(r -> r.text().revealForEmbedding())
                 .containsExactly("최근 합성 질문입니다", "경계 시각 합성 질문");
+    }
+
+    // ------------------------------------------------------------------ leave / kick racing with a question INSERT
+    // (Codex merge review). The removal transaction mirrors StudySessionService.remove: the listener's delete runs
+    // first, the participant DELETE comes later (JPA flush at commit).
+
+    private static void await(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private void removePark(TransactionTemplate tx, CountDownLatch beforeCommit, CountDownLatch commit) {
+        tx.executeWithoutResult(status -> {
+            questions.deleteBySessionAndUser(ACTIVE, PARK);
+            jdbc.update("DELETE FROM session_participants WHERE session_id = ? AND user_id = ?", ACTIVE, PARK);
+            beforeCommit.countDown();
+            await(commit);
+        });
+    }
+
+    @Test
+    void insertDuringAnUncommittedRemovalWaitsAndStoresNothing() throws Exception {
+        TransactionTemplate tx = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            CountDownLatch removed = new CountDownLatch(1);
+            CountDownLatch commitRemoval = new CountDownLatch(1);
+            Future<?> removal = pool.submit(() -> removePark(tx, removed, commitRemoval));
+            await(removed);
+
+            Future<Integer> insert = pool.submit(() -> questions.insertIfActiveStudent(ACTIVE, PARK, "경합 중 합성 질문"));
+            Thread.sleep(300);
+            assertThat(insert.isDone()).as("insert waits for the participant row lock").isFalse();
+
+            commitRemoval.countDown();
+            removal.get(10, TimeUnit.SECONDS);
+            assertThat(insert.get(10, TimeUnit.SECONDS)).isZero();
+            assertThat(questionCount(ACTIVE, PARK)).isZero();
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void removalAfterAnUncommittedInsertWaitsAndDeletesTheNewRow() throws Exception {
+        TransactionTemplate tx = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            CountDownLatch inserted = new CountDownLatch(1);
+            CountDownLatch commitInsert = new CountDownLatch(1);
+            Future<Integer> insert = pool.submit(() -> tx.execute(status -> {
+                int rows = questions.insertIfActiveStudent(ACTIVE, PARK, "먼저 들어온 합성 질문");
+                inserted.countDown();
+                await(commitInsert);
+                return rows;
+            }));
+            await(inserted);
+
+            CountDownLatch removed = new CountDownLatch(1);
+            Future<?> removal = pool.submit(() -> removePark(tx, removed, new CountDownLatch(0)));
+            Thread.sleep(300);
+            assertThat(removal.isDone()).as("removal waits for the inserting transaction").isFalse();
+
+            commitInsert.countDown();
+            assertThat(insert.get(10, TimeUnit.SECONDS)).isEqualTo(1);
+            removal.get(10, TimeUnit.SECONDS);
+            assertThat(questionCount(ACTIVE, PARK)).isZero();
+        } finally {
+            pool.shutdownNow();
+        }
     }
 }

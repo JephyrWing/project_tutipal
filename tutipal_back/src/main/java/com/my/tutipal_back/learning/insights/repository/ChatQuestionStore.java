@@ -28,6 +28,13 @@ public class ChatQuestionStore {
      * Stores the question only when the user is a STUDENT participant of a session that is still open
      * (checked in the same statement, so a student who left or a closed session gets 0 rows).
      *
+     * <p>Race with leave / kick: the participant row is locked FOR SHARE, and {@link #deleteBySessionAndUser} (run
+     * by ParticipantRemovedListener inside the removal transaction) locks the same row FOR UPDATE before deleting
+     * questions. Either the removal holds the row first, so this INSERT waits for its commit, finds the row deleted
+     * and inserts 0 rows; or this INSERT holds it first, so the removal waits for this commit and its DELETE (a new
+     * statement, fresh READ COMMITTED snapshot) removes the new row. Only the participant row is locked: removal
+     * takes the session row and then the participant row, so there is no lock-order cycle.
+     *
      * @return rows inserted (0 or 1)
      */
     public int insertIfActiveStudent(long sessionId, long userId, String questionText) {
@@ -37,7 +44,8 @@ public class ChatQuestionStore {
                 WHERE EXISTS (
                     SELECT 1 FROM session_participants p
                     JOIN study_sessions s ON s.id = p.session_id
-                    WHERE p.session_id = ? AND p.user_id = ? AND p.role = 'STUDENT' AND s.ended_at IS NULL)
+                    WHERE p.session_id = ? AND p.user_id = ? AND p.role = 'STUDENT' AND s.ended_at IS NULL
+                    FOR SHARE OF p)
                 """, sessionId, userId, questionText, sessionId, userId);
     }
 
@@ -74,8 +82,17 @@ public class ChatQuestionStore {
                 """, Timestamp.from(cutoff), limit);
     }
 
-    /** A student left or was removed: that student's questions in that session only. */
+    /**
+     * A student left or was removed: that student's questions in that session only.
+     *
+     * <p>First locks the participant row FOR UPDATE. In leave / kick the JPA DELETE of that row is only flushed at
+     * commit, after this listener ran, so without this lock an INSERT could slip in between this DELETE and the
+     * participant DELETE and leave a row behind (see {@link #insertIfActiveStudent}). Called in the caller's
+     * transaction; without one (autocommit) the lock is released at once and only the DELETE matters.
+     */
     public int deleteBySessionAndUser(long sessionId, long userId) {
+        jdbc.query("SELECT 1 FROM session_participants WHERE session_id = ? AND user_id = ? FOR UPDATE",
+                (rs, n) -> rs.getInt(1), sessionId, userId);
         return jdbc.update("DELETE FROM chat_questions WHERE session_id = ? AND user_id = ?", sessionId, userId);
     }
 }
