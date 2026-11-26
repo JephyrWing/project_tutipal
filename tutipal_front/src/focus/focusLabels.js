@@ -16,7 +16,8 @@ export function focusLabel(state) {
   return { ...(Object.hasOwn(LABELS, state) ? LABELS[state] : LABELS.UNKNOWN) }
 }
 
-export const FOCUS_NOTICE = '규칙 일치도 기반 참고 상태(정확도 아님)예요. 평가나 성적 판단에 쓰지 말아 주세요.'
+// PM decision 2026-11-26: the rule-match evaluation checks the feature itself; nobody may use the state to judge a student
+export const FOCUS_NOTICE = '규칙 일치도 기반 참고 상태(정확도 아님)예요. 학생을 평가하거나 성적 · 출결을 판단하는 데 쓰지 말아 주세요.'
 
 const DEFAULT_RETENTION_DAYS = 30
 const DEFAULT_MAX_SAMPLE_AGE_DAYS = 31
@@ -32,7 +33,7 @@ export function consentText({ retentionDays, maxSampleAgeDays } = {}) {
   const maxAge = validDays(maxSampleAgeDays, DEFAULT_MAX_SAMPLE_AGE_DAYS)
   return [
     '목적: 수업 중 선생님과 내가 지금 수업에 집중하고 있는지 참고 상태로 보기 위해서예요.',
-    '저장한 프로그램 이름과 1분 기록은 집중도 판정이 정해 둔 규칙과 얼마나 맞는지 확인하는 평가(규칙 일치도)에도 쓸 수 있어요.',
+    '저장한 프로그램 이름과 1분 기록은 집중도 판정 기능 자체가 정해 둔 규칙과 얼마나 맞는지 확인하는 기능 평가(규칙 일치도)에도 쓸 수 있어요. 나를 평가하는 데는 쓰지 않아요.',
     '모델 재학습에는 쓰지 않고, 성적이나 출결에도 쓰지 않아요.',
     '모으는 항목: 1분마다 가장 오래 쓴 프로그램의 실행 파일 이름(예: chrome.exe), 입력 없는 시간(초), 창 전환 횟수.',
     '창 제목, 화면 내용, 입력한 글자, 파일 경로는 모으지 않아요. 선생님에게는 프로그램 이름이 아니라 상태(집중 · 자리 비움 등)만 보여요.',
