@@ -15,6 +15,9 @@ fi
 # PT-110: FastAPI on this host (old layout). Default: the AI runs on the PC node at FAST_API_BASE_URL.
 if [ "${ENABLE_EC2_AI:-false}" = 'true' ]; then
   profiles="${profiles:+$profiles,}ec2-ai"
+  # Keep the PC-node settings in .env.prod for deployments that use it.
+  export FAST_API_BASE_URL=http://fastapi:8000
+  export CF_ACCESS_CLIENT_ID="" CF_ACCESS_CLIENT_SECRET=""
 fi
 if [ -n "$profiles" ]; then
   export COMPOSE_PROFILES="$profiles"

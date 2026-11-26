@@ -2,7 +2,7 @@ name: Build and deploy TUTIPAL
 
 on:
   push:
-    branches: [main]
+    branches: [develop]
     paths: ["tutipal_back/**", "tutipal_front/**", "tutipal_ai/**", "infra/**", ".github/workflows/**"]
   workflow_dispatch:
 
@@ -20,11 +20,8 @@ jobs:
   build-and-push:
     needs: checks
     # 기본은 CI만 실행. 서버와 Secrets 준비 후 Repository variable ENABLE_CD=true로 활성화한다.
-    if: vars.ENABLE_CD == 'true' && github.ref == 'refs/heads/main'
+    if: vars.ENABLE_CD == 'true' && github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
     strategy:
       matrix:
         include:
@@ -32,13 +29,8 @@ jobs:
             image: tutipal-back
           - context: tutipal_ai
             image: tutipal-fastapi
-          - context: infra/postgres
-            image: tutipal-db
     steps:
       - uses: actions/checkout@v4
-      - name: Resolve GHCR prefix (owner must be lowercase)
-        id: registry
-        run: echo "prefix=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
       - name: Read application version from build.gradle
         id: version
         run: |
@@ -47,22 +39,21 @@ jobs:
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build and push ${{ matrix.image }}
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           push: true
           tags: |
-            ${{ steps.registry.outputs.prefix }}/${{ matrix.image }}:latest
-            ${{ steps.registry.outputs.prefix }}/${{ matrix.image }}:${{ github.sha }}
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}:latest
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}:${{ github.sha }}
           # tutipal-back이 기동 로그에 남기는 값. 다른 이미지에서는 쓰이지 않는다.
           build-args: |
             GIT_SHA=${{ github.sha }}
             APP_VERSION=${{ steps.version.outputs.app }}
-          # source: 패키지를 이 저장소에 연결해 GITHUB_TOKEN으로 pull할 수 있게 한다.
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -72,14 +63,8 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read
     steps:
       - uses: actions/checkout@v4
-      - name: Resolve GHCR prefix (owner must be lowercase)
-        id: registry
-        run: echo "prefix=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
       - name: Upload deployment definitions from the same commit
         uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634 # v0.1.7
         with:
@@ -91,18 +76,16 @@ jobs:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
         env:
-          IMAGE_REGISTRY: ${{ steps.registry.outputs.prefix }}
+          IMAGE_REGISTRY: docker.io/${{ secrets.DOCKERHUB_USERNAME }}
           IMAGE_TAG: ${{ github.sha }}
           ENABLE_CLOUDFLARE: ${{ vars.ENABLE_CLOUDFLARE }}
-          GHCR_USER: ${{ github.actor }}
-          # 작업이 끝나면 만료되는 토큰. deploy.sh가 종료할 때(성공·실패 모두) 로그아웃한다.
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ENABLE_EC2_AI: ${{ vars.ENABLE_EC2_AI }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           command_timeout: 20m
-          envs: IMAGE_REGISTRY,IMAGE_TAG,ENABLE_CLOUDFLARE,GHCR_USER,GHCR_TOKEN
+          envs: IMAGE_REGISTRY,IMAGE_TAG,ENABLE_CLOUDFLARE,ENABLE_EC2_AI
           script: |
             set -eu
             cd ~/app
