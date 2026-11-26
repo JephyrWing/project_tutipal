@@ -1,0 +1,8 @@
+{
+  "note": "RTX 3060 Laptop 6GB에서 추론과 4bit QLoRA 학습이 모두 가능한 크기의 후보. think=false로 생각 모드를 꺼서 같은 조건으로 비교한다.",
+  "models": [
+    {"name": "gemma4:e2b", "label": "Gemma 4 E2B", "think": false},
+    {"name": "qwen3.5:4b", "label": "Qwen3.5 4B", "think": false},
+    {"name": "llama3.2:3b", "label": "Llama 3.2 3B", "think": false}
+  ]
+}
