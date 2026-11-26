@@ -1,16 +1,18 @@
 // Real OS windows + production screen.cjs; no AI, server, real user pixels, or saved images.
-const {app,desktopCapturer,nativeImage}=require('electron')
+const {app,BrowserWindow,desktopCapturer,nativeImage}=require('electron')
 const {spawn}=require('node:child_process')
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),assert=require('node:assert/strict')
 const temp=process.env.PT45_CAPTURE_PROFILE || fs.mkdtempSync(path.join(os.tmpdir(),'pt45-selected-'))
 if(path.dirname(temp)!==os.tmpdir()||!path.basename(temp).startsWith('pt45-selected-'))throw Error('Isolated synthetic profile required')
 app.setPath('userData',temp)
 app.on('window-all-closed',()=>{})
-const children=[];let count=0,enumerations=0
+const children=[];let count=0,enumerations=0,pauseOnRequest=false
 const original=desktopCapturer.getSources.bind(desktopCapturer)
 desktopCapturer.getSources=async options=>{
  assert.deepEqual(options.types,['window']);assert.deepEqual(options.thumbnailSize,{width:0,height:0});enumerations++
- return original(options)
+ const sources=await original(options)
+ if(pauseOnRequest&&BrowserWindow.getAllWindows().length){pauseOnRequest=false;screen.cancelAnalysisCapture()}
+ return sources
 }
 const screen=require('../electron/screen.cjs')
 const sleep=ms=>new Promise(r=>setTimeout(r,ms))
@@ -33,7 +35,7 @@ app.whenReady().then(async()=>{
   const preview=await screen.previewSource(a);assert.equal(screen.loadSettings().enabled,false);let pixel=color(preview.image);assert.ok(pixel.r>160&&pixel.b<90,JSON.stringify(pixel));count++;console.log('PASS explicit preview A only; analysis remains off')
   assert.throws(()=>screen.saveSettings({enabled:true,sourceId:b,previewToken:preview.previewToken}));count++;console.log('PASS preview token cannot start B')
   screen.saveSettings({enabled:true,sourceId:a,previewToken:preview.previewToken});const frame=await screen.capture();assert.equal(frame.status,'ok');assert.equal(frame.sourceId,a);pixel=color(frame.image);assert.ok(pixel.r>160&&pixel.b<90,JSON.stringify(pixel));count++;console.log('PASS started capture A; B excluded')
-  const pending=screen.capture();await sleep(30);screen.cancelAnalysisCapture();assert.equal((await pending).status,'off');count++;console.log('PASS pause cancels pending OS capture')
+  pauseOnRequest=true;const pending=screen.capture();assert.equal((await pending).status,'off');assert.equal(pauseOnRequest,false);count++;console.log('PASS pause cancels pending OS capture')
   screen.saveSettings({...screen.loadSettings(),enabled:false});const stopped=enumerations;assert.equal((await screen.capture()).status,'off');assert.equal(enumerations,stopped);count++;console.log('PASS stop prevents enumeration/capture')
   const second=await screen.previewSource(a);screen.saveSettings({enabled:true,sourceId:a,previewToken:second.previewToken})
   fs.writeFileSync(path.join(children[0].profile,'close'),'close');await until(async()=>!(await screen.listSources()).some(s=>s.id===a))
