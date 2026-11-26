@@ -21,7 +21,7 @@
   padding: 10px 12px;
   border: 1px solid rgba(0, 0, 0, 0.08);
   border-radius: 12px;
-  background: #fff;
+  background: var(--surface);
   text-align: left;
   cursor: pointer;
   font: inherit;
@@ -70,7 +70,7 @@
 
 .conversation-notice {
   margin: 6px 0;
-  color: #9a6700;
+  color: var(--warn-text);
 }
 
 .conversation-side {
