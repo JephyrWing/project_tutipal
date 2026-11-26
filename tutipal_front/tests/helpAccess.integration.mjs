@@ -46,7 +46,7 @@ class Client {
 async function context(shareScreen = true) {
   const teacher = new Client(), student = new Client(), peer = new Client()
   await teacher.login(1); await student.login(2); await peer.login(3)
-  const created = await teacher.request('/api/sessions', 'POST', { title: 'PT65 isolated access', topic: '수학' })
+  const created = await teacher.request('/api/sessions', 'POST', { title: 'PT65 isolated access', topic: '수학', aiRetentionDays: 30 })
   assert.equal(created.status, 201)
   const room = created.body
   for (const client of [student, peer]) assert.equal((await client.request('/api/sessions/join', 'POST', { code: room.inviteCode })).status, 200)

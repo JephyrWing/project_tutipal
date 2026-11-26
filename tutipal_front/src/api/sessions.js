@@ -8,7 +8,11 @@ const json = (body) => ({
 
 /** StudySessionController (/api/sessions) */
 export const sessions = {
-  create: (title, topic) => request('/api/sessions', json({ title, topic })),
+  /** aiRetentionDays: 수업 AI 대화 보관 일수 (수업 종료 뒤 0..90, 필수) */
+  create: (title, topic, aiRetentionDays) => request('/api/sessions', json({ title, topic, aiRetentionDays })),
+  /** 선생님만: 수업 AI 대화 보관 일수 변경 (끝난 수업도 가능) */
+  updateAiRetention: (id, aiRetentionDays) =>
+    request(`/api/sessions/${id}/ai-retention`, { ...json({ aiRetentionDays }), method: 'PUT' }),
   join: (code) => request('/api/sessions/join', json({ code })),
   mine: () => request('/api/sessions'),
   get: (id) => request(`/api/sessions/${id}`),

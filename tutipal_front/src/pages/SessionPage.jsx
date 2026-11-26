@@ -7,6 +7,8 @@ import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
 import { ChatPanel } from './ChatPage'
 import SubjectPicker from '../components/SubjectPicker'
+import AiRetentionSelect from '../components/AiRetentionSelect'
+import { parseAiRetentionDays } from '../utils/aiRetention'
 import { BoardPanel, MaterialsPanel, NoticesPanel } from './BoardPanels'
 import { StudentHelp, StudentLiveTab, TeacherHelpTab, TeacherShareTab } from './LivePanels'
 import { materials, notices } from '../api/board'
@@ -251,7 +253,12 @@ function TeacherView({ session, onChange, reload }) {
         </div>
       )}
       {tab === 'board' && <BoardPanel sessionId={session.id} teacher reloadKey={boardKeys.board} />}
-      {tab === 'settings' && <Settings session={session} onChange={onChange} />}
+      {tab === 'settings' && (
+        <>
+          <Settings session={session} onChange={onChange} />
+          <AiRetentionSetting session={session} onChange={onChange} />
+        </>
+      )}
       {tab === 'insights' && <InsightsTab sessionId={session.id} reloadKey={quizKey} />}
     </div>
   )
@@ -400,6 +407,46 @@ function Settings({ session, onChange }) {
       <div className="row-between">
         <span className="muted" aria-live="polite">{status}</span>
         <button className="btn btn-primary btn-lg" disabled={busy}>학생 챗봇에 적용</button>
+      </div>
+    </form>
+  )
+}
+
+/** PT-13: 수업 AI 대화 보관 기간 (수업 종료 후 0~90일). 선생님 설정 탭에서만 보이고, 서버도 선생님만 허용한다 */
+function AiRetentionSetting({ session, onChange }) {
+  const [value, setValue] = useState(session.aiRetentionDays == null ? '' : String(session.aiRetentionDays))
+  const [status, setStatus] = useState('')
+  const [busy, setBusy] = useState(false)
+  const days = parseAiRetentionDays(value)
+  const unchanged = days === session.aiRetentionDays
+
+  async function onSubmit(e) {
+    e.preventDefault()
+    if (days === null || busy) return
+    setBusy(true)
+    try {
+      onChange(await sessions.updateAiRetention(session.id, days))
+      setStatus('보관 기간을 바꿨어요')
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : '저장하지 못했어요')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form className="card session-body settings" onSubmit={onSubmit}>
+      <div className="field">
+        <strong>AI 대화 보관 기간 (수업 종료 후, 최대 90일)</strong>
+        <AiRetentionSelect value={value} onChange={(v) => { setValue(v); setStatus('') }} required />
+        <span className="muted small">
+          학생이 이 수업에서 AI 조교와 나눈 대화는 수업이 끝나고 이 기간이 지나면 지워져요(학생이 "저장"한 대화는 남음).
+          줄이면 이미 기간이 지난 대화는 1시간 안에 지워져요.
+        </span>
+      </div>
+      <div className="row-between">
+        <span className="muted" aria-live="polite">{status}</span>
+        <button className="btn btn-primary" disabled={busy || days === null || unchanged}>보관 기간 저장</button>
       </div>
     </form>
   )

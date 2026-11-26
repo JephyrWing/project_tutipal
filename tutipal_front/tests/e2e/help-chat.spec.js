@@ -70,7 +70,7 @@ test('PT96 제3자·타수업·미수락 접근 차단과 입력·멱등·동시
   expect(all.items).toHaveLength(5);expect(all.items.map(m=>m.sequence)).toEqual(['1','2','3','4','5'])
   const page=(await api(student,`${path}?afterSequence=1&limit=2`)).body
   expect(page.items.map(m=>m.sequence)).toEqual(['2','3']);expect(page.hasMore).toBe(true)
-  const ownRoom=await api(other,'/api/sessions','POST',{title:'PT96 다른 수업',topic:'수학'})
+  const ownRoom=await api(other,'/api/sessions','POST',{title:'PT96 다른 수업',topic:'수학',aiRetentionDays:30})
   expect(ownRoom.status).toBe(201);expect((await api(other,path)).status).toBe(404)
   const pending=await api(other,`/api/sessions/${room.id}/help`,'POST',{message:'미수락',shareScreen:false})
   expect(pending.status).toBe(201)
