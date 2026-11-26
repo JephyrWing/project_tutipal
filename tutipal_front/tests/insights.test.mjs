@@ -7,7 +7,7 @@ import { createInsightsApi, confusionsView, masteryView } from '../src/api/insig
 // The request function is injected (same style as helpChat.test / createHelpChatTransport), so no network is used.
 
 const okBody = {
-  status: 'OK', reason: null, questionCount: 22, studentCount: 6, algorithm: 'kmeans-silhouette-v1', k: 5,
+  status: 'OK', reason: null, questionCount: 22, studentCount: 6, algorithm: 'kmeans-silhouette-v2', k: 5,
   silhouette: 0.42, cached: false,
   topics: [
     { rank: 2, label: '태그되지 않은 주제 1', conceptId: null, questionCount: 4, studentCount: 4 },

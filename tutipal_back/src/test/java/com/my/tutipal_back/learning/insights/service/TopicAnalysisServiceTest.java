@@ -72,7 +72,7 @@ class TopicAnalysisServiceTest {
     private static final long TEACHER = 1L;
     private static final long SESSION = 10L;
     private static final String MARKER = "SECRET-Q-4242";
-    private static final String ALGORITHM = "kmeans-silhouette-v1";
+    private static final String ALGORITHM = "kmeans-silhouette-v2";
     private static final long VARS = 100L;
     private static final long LOOPS = 200L;
     private static final long FUNCS = 300L;

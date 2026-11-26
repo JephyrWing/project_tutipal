@@ -40,7 +40,7 @@ import com.my.tutipal_back.sessions.service.StudySessionService;
 @Service
 public class TopicAnalysisService {
 
-    static final String ALGORITHM = "kmeans-silhouette-v1";
+    static final String ALGORITHM = "kmeans-silhouette-v2";
     /** Newest questions analyzed per request (4 embedding calls of 64). */
     static final int MAX_QUESTIONS = 256;
     /** Rows read before the short-question filter, so short chatter does not push out real questions. */

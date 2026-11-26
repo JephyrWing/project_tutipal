@@ -22,7 +22,7 @@ class TopicResultCacheTest {
     }
 
     private static ConfusionsResponse result(int questions) {
-        return new ConfusionsResponse("OK", null, questions, 6, "kmeans-silhouette-v1", 3, 0.4, false,
+        return new ConfusionsResponse("OK", null, questions, 6, "kmeans-silhouette-v2", 3, 0.4, false,
                 List.of(new ConfusionsResponse.Topic(1, "변수", 100L, 4, 3)));
     }
 

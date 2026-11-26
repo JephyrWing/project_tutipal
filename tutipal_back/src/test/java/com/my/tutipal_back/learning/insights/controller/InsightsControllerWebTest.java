@@ -63,7 +63,7 @@ class InsightsControllerWebTest {
     }
 
     private static ConfusionsResponse okResponse() {
-        return new ConfusionsResponse("OK", null, 22, 6, "kmeans-silhouette-v1", 5, 0.42, false, List.of(
+        return new ConfusionsResponse("OK", null, 22, 6, "kmeans-silhouette-v2", 5, 0.42, false, List.of(
                 new ConfusionsResponse.Topic(1, "반복문", 200L, 9, 5),
                 new ConfusionsResponse.Topic(2, "태그되지 않은 주제 1", null, 4, 4),
                 new ConfusionsResponse.Topic(3, "변수", 100L, 4, 3)));
@@ -123,7 +123,7 @@ class InsightsControllerWebTest {
                 .andExpect(jsonPath("$.status").value("OK"))
                 .andExpect(jsonPath("$.questionCount").value(22))
                 .andExpect(jsonPath("$.studentCount").value(6))
-                .andExpect(jsonPath("$.algorithm").value("kmeans-silhouette-v1"))
+                .andExpect(jsonPath("$.algorithm").value("kmeans-silhouette-v2"))
                 .andExpect(jsonPath("$.k").value(5))
                 .andExpect(jsonPath("$.silhouette").value(0.42))
                 .andExpect(jsonPath("$.cached").value(false))
@@ -142,7 +142,7 @@ class InsightsControllerWebTest {
     @Test
     void insufficientDataIsA200WithReason() throws Exception {
         when(topics.analyze(ME, SESSION)).thenReturn(new ConfusionsResponse("INSUFFICIENT_DATA", "FEW_QUESTIONS", 9, 3,
-                "kmeans-silhouette-v1", null, null, false, List.of()));
+                "kmeans-silhouette-v2", null, null, false, List.of()));
 
         mvc.perform(post("/api/sessions/10/insights/confusions"))
                 .andExpect(status().isOk())

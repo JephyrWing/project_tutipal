@@ -14,11 +14,15 @@ from threadpoolctl import threadpool_limits
 
 from app.views.insights_view import ClusterItemView, ClusterView, ConceptMatchView
 
-ALGORITHM = "kmeans-silhouette-v1"
+ALGORITHM = "kmeans-silhouette-v2"
 MAX_K = 8
 MIN_QUESTIONS_PER_CLUSTER = 5
-# Uncalibrated: below this best silhouette the grouping is reported as LOW_QUALITY.
+# Uncalibrated: below this silhouette (of the chosen k) the grouping is reported as LOW_QUALITY.
 MIN_SILHOUETTE = 0.1
+# Uncalibrated: a larger adjacent k scoring within this margin of the best silhouette counts as a tie and is preferred
+# (see choose_k). Short Korean questions on related concepts give flat, low silhouettes (k=2 0.0763 vs k=3 0.0697 on the
+# PT-87 synthetic set), and keeping the smaller k merged distinct concepts (purity 64% vs 93%).
+SILHOUETTE_TIE_MARGIN = 0.01
 # Uncalibrated: cosine between a normalized cluster center and a concept vector needed to label the cluster.
 CONCEPT_MATCH_THRESHOLD = 0.55
 N_INIT = 10
@@ -57,6 +61,22 @@ def _concept_match(center: np.ndarray, concepts: np.ndarray) -> ConceptMatchView
     return ConceptMatchView(index=best, similarity=round(similarity, 4))
 
 
+def choose_k(scores: dict[int, float]) -> int | None:
+    """Start at the best-scoring k (smallest on an exact tie) and step up one k at a time while the next k is still
+    within SILHOUETTE_TIE_MARGIN of the best score; stop at the first k that is missing or falls outside.
+
+    Stepping only through adjacent k keeps a flat, noisy score curve from jumping to a far larger k (on the PT-87
+    synthetic set k=5 was also within the margin, which would split topics further). None when there is no candidate.
+    """
+    if not scores:
+        return None
+    best = max(scores.values())
+    k = min(candidate for candidate, score in scores.items() if score == best)
+    while k + 1 in scores and scores[k + 1] >= best - SILHOUETTE_TIE_MARGIN:
+        k += 1
+    return k
+
+
 def cluster_vectors(vectors: Sequence[Sequence[float]], concepts: Sequence[Sequence[float]]) -> ClusterView:
     points = _normalize(np.asarray(vectors, dtype=np.float64))
     concept_matrix = _normalize(np.asarray(concepts, dtype=np.float64).reshape(len(concepts), -1)) \
@@ -64,15 +84,21 @@ def cluster_vectors(vectors: Sequence[Sequence[float]], concepts: Sequence[Seque
     n = points.shape[0]
     distinct = int(np.unique(points, axis=0).shape[0])
 
-    best_k, best_labels, best_score = 1, np.zeros(n, dtype=int), None
+    fitted: dict[int, np.ndarray] = {}
+    scores: dict[int, float] = {}
     with _CLUSTER_LOCK, threadpool_limits(limits=1):
         for k in _candidates(n, distinct):
             labels = _fit(points, k)
             if len(set(labels.tolist())) < 2:
                 continue
-            score = float(silhouette_score(points, labels, metric="euclidean"))
-            if best_score is None or score > best_score:   # a tie keeps the smaller k
-                best_k, best_labels, best_score = k, labels, score
+            fitted[k] = labels
+            scores[k] = float(silhouette_score(points, labels, metric="euclidean"))
+
+    chosen = choose_k(scores)
+    if chosen is None:
+        best_k, best_labels, best_score = 1, np.zeros(n, dtype=int), None
+    else:
+        best_k, best_labels, best_score = chosen, fitted[chosen], scores[chosen]
 
     groups: dict[int, list[int]] = {}
     for index, label in enumerate(best_labels.tolist()):
