@@ -13,7 +13,8 @@ async function item(overrides = {}) {
   Object.assign(child, { exitCode: null, signalCode: null, kill() {
     this.signalCode = 'SIGTERM'; this.emit('exit', null, 'SIGTERM'); return true
   } })
-  return { profile, page: { isClosed: () => false, evaluate: async () => ({ state: 'disconnected' }) },
+  return { profile, page: { isClosed: () => false, evaluate: async () => ({ state: 'disconnected' }),
+    url: () => 'http://127.0.0.1:12345/sessions/1', goto: async () => {} },
     application: { process: () => child, close: async () => { child.exitCode = 0; child.emit('exit', 0) } }, ...overrides }
 }
 test('already-revoked media stops tracks and removes video without reacquiring the SDK disconnect lock', async () => {
@@ -33,7 +34,7 @@ test('connected media disconnects after local tracks and videos are released', a
   finally { delete globalThis.pt65Media }
 })
 test('hung renderer cleanup fails explicitly but both Electron instances and profiles are still cleaned', async () => {
-  const a = await item({ page: { isClosed: () => false, evaluate: pending } }), b = await item()
+  const a = await item(), b = await item(); a.page.evaluate = pending
   await assert.rejects(cleanupElectronItems([a, b], { timeoutMs: 20 }), error => {
     assert.equal(error.results.filter(r => r.outcome === 'failed').length, 1)
     assert.equal(error.results.find(r => r.outcome === 'failed').stage, 'renderer-media')
@@ -59,6 +60,23 @@ test('a resolved close with a still-live process is detected before removing the
     return true
   })
   await assert.rejects(access(a.profile))
+})
+test('a publisher document is reset before graceful Electron close', async () => {
+  const a = await item(), order = []
+  a.page.evaluate = async () => { order.push('media') }
+  a.page.goto = async (url, options) => { order.push('reset'); assert.equal(url, 'http://127.0.0.1:12345/login'); assert.equal(options.waitUntil, 'domcontentloaded') }
+  const close = a.application.close; a.application.close = async () => { order.push('close'); await close() }
+  await cleanupElectronItems([a]); assert.deepEqual(order, ['media', 'reset', 'close'])
+})
+test('a child ignoring SIGTERM is killed by its owned handle, with both timeout failures retained', async () => {
+  const a = await item(); a.application.close = pending
+  const child = a.application.process(), signals = []
+  child.kill = signal => { signals.push(signal ?? 'SIGTERM'); if (signal === 'SIGKILL') { child.signalCode = signal; child.emit('exit', null, signal) } return true }
+  await assert.rejects(cleanupElectronItems([a], { timeoutMs: 20 }), error => {
+    assert.equal(error.results.filter(r => r.outcome === 'failed').length, 2)
+    assert.equal(error.results.find(r => r.stage === 'owned-process-kill').outcome, 'passed'); return true
+  })
+  assert.deepEqual(signals, ['SIGTERM', 'SIGKILL']); await assert.rejects(access(a.profile))
 })
 test('a profile outside the fixture prefix is preserved and reported as a cleanup failure', async () => {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'pt45-preserved-'))

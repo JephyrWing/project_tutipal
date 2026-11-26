@@ -40,7 +40,17 @@ export async function cleanupElectronItems(items, { timeoutMs = 5000, onStage = 
   }
   for (const [index, item] of items.entries()) {
     try {
-      if (item.page && !item.page.isClosed()) await stage(index, 'renderer-media', () => item.page.evaluate(releaseFixtureMedia))
+      if (item.page && !item.page.isClosed()) {
+        await stage(index, 'renderer-media', () => item.page.evaluate(releaseFixtureMedia))
+        // Logout cases already replace the publisher document; help-end cases
+        // retain it. Release its WebRTC/canvas context before graceful shutdown.
+        await stage(index, 'renderer-reset', async () => {
+          const url = new URL(item.page.url())
+          if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') throw new Error('Expected the isolated loopback page')
+          await item.page.goto(new URL('/login', url).href, { waitUntil: 'domcontentloaded', timeout: timeoutMs })
+          return { contextReleased: true }
+        })
+      }
     } finally {
       if (item.application) {
         const child = item.application.process()
@@ -54,6 +64,12 @@ export async function cleanupElectronItems(items, { timeoutMs = 5000, onStage = 
           await stage(index, 'owned-process-exit', () => new Promise((resolve, reject) => {
             child.once('exit', resolve)
             if (!child.kill()) reject(new Error('Could not stop owned Electron process'))
+          }))
+        }
+        if (child.exitCode === null && child.signalCode === null) {
+          await stage(index, 'owned-process-kill', () => new Promise((resolve, reject) => {
+            child.once('exit', resolve)
+            if (!child.kill('SIGKILL')) reject(new Error('Could not kill owned Electron process'))
           }))
         }
         if (child.exitCode === null && child.signalCode === null) continue // never delete a live profile
