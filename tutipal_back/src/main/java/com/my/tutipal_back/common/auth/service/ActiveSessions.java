@@ -41,11 +41,19 @@ public class ActiveSessions implements HttpSessionListener, HttpSessionIdListene
 
     /** 이 사용자로 로그인된 세션을 모두 무효화하고 끊은 수를 돌려준다. 이미 끝난 세션은 건너뛴다. */
     public int invalidateUser(Long userId) {
+        return invalidateUserExcept(userId, null);
+    }
+
+    /**
+     * 한 계정당 기기 1대 (PM 결정 2026-11-26, PT-13): 새로 로그인한 세션(keepSessionId)만 남기고 같은 사용자의 다른 세션을
+     * 무효화한다. 먼저 로그인한 기기의 STOMP·LiveKit 연결은 각 가드의 주기 검사가 닫는다.
+     */
+    public int invalidateUserExcept(Long userId, HttpSession keep) {
         String name = String.valueOf(userId);
         int count = 0;
         for (Map.Entry<String, HttpSession> entry : sessions.entrySet()) {
             try {
-                if (name.equals(userOf(entry.getValue()))) {
+                if (!isSame(entry, keep) && name.equals(userOf(entry.getValue()))) {
                     entry.getValue().invalidate();
                     count++;
                 }
@@ -54,6 +62,17 @@ public class ActiveSessions implements HttpSessionListener, HttpSessionIdListene
             }
         }
         return count;
+    }
+
+    /** 세션 번호가 바뀐 직후(리스너 통지 전)에도 같은 세션으로 보도록 객체와 번호를 함께 본다. */
+    private static boolean isSame(Map.Entry<String, HttpSession> entry, HttpSession keep) {
+        if (keep == null) return false;
+        if (entry.getValue() == keep) return true;
+        try {
+            return entry.getKey().equals(keep.getId());
+        } catch (IllegalStateException invalidated) {
+            return false;
+        }
     }
 
     int size() {

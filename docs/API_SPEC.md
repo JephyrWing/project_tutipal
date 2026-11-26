@@ -35,7 +35,7 @@
 | 규칙 | 내용 (근거: `SecurityConfig`, `OriginCheckFilter`, `application.yaml`) |
 | --- | --- |
 | 로그인 세션 | 서블릿 세션 쿠키 **`TUTIPAL_SESSION`** (HttpOnly, SameSite=Lax, Secure=`SESSION_COOKIE_SECURE` 기본 true). 유휴 `SESSION_IDLE_TIMEOUT` 2h, 절대 `app.session.absolute-timeout` 12h(HTTP 필터·STOMP·LiveKit 공통) |
-| 로그인 경로 | 앱: `GET /auth/app/start` → 소셜 로그인(`/oauth2/authorization/{google\|naver\|kakao}`) → `/auth/app/done?code=` → `tutipal://` 딥링크 → `POST /api/auth/app/exchange {code, verifier}` 로 세션 쿠키 발급(PKCE 방식, 코드 60초 1회용) |
+| 로그인 경로 | 앱: `GET /auth/app/start` → 소셜 로그인(`/oauth2/authorization/{google\|naver\|kakao}`) → `/auth/app/done?code=` → `tutipal://` 딥링크 → `POST /api/auth/app/exchange {code, verifier}` 로 세션 쿠키 발급(PKCE 방식, 코드 60초 1회용). **한 계정당 기기 1대**: 로그인(교환·dev 로그인)이 성공하면 같은 계정의 다른 세션은 무효화되고 그 기기의 STOMP·LiveKit 연결도 닫힌다 |
 | 공개 경로 | **GET만**: `/health`, `/actuator/health/**`, `/api/auth/csrf`, `/api/auth/providers`, `/api/auth/config`, `/auth/app/**`, `/oauth2/**`, `/login/oauth2/**`. HEAD: `/health`, `/actuator/health/**`. POST: `/api/auth/app/exchange` 하나. `/dev/login`은 dev-login 켜졌을 때만 |
 | 로그인 필요 | `/api/**`, `/ws`, `/ws/**`, `/livekit/**` → 비로그인 **401**(리다이렉트 없음, 본문 없음) |
 | 관리자 | `/api/admin/**` → `ROLE_ADMIN`만(일반 사용자 403). **현재 이 경로의 컨트롤러는 없다** (규칙만 존재) |

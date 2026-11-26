@@ -37,6 +37,19 @@ class ActiveSessionsTest {
     }
 
     @Test
+    void keepsOnlyTheNewLoginSessionOfTheUser() {
+        MockHttpSession oldDevice = loggedIn("old", 7);
+        MockHttpSession newDevice = loggedIn("new", 7);
+        MockHttpSession other = loggedIn("other", 8);
+
+        assertThat(sessions.invalidateUserExcept(7L, newDevice)).isEqualTo(1);
+
+        assertThat(oldDevice.isInvalid()).isTrue();
+        assertThat(newDevice.isInvalid()).isFalse();
+        assertThat(other.isInvalid()).isFalse();
+    }
+
+    @Test
     void ignoresAnonymousAndUnauthenticatedSessions() {
         MockHttpSession anonymous = new MockHttpSession(null, "anon");
         sessions.sessionCreated(new HttpSessionEvent(anonymous));
