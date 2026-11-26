@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { formatRetryTime, isQuotaError } from '../api/client'
+import { insights } from '../api/insights.js'
 import { quizzes } from '../api/quizzes'
 import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
 import { useRetryLock } from '../utils/useRetryLock'
+import { ConceptTagInput, QuizConceptChips, QuizConceptEditor } from './InsightsPanels'
 
 const errText = (e, fallback) => (e instanceof Error ? e.message : fallback)
 
@@ -28,7 +30,11 @@ export function TeacherQuizTab({ sessionId, reloadKey }) {
   const [reviewId, setReviewId] = useState(null)
   const [sentId, setSentId] = useState(null)
   const [error, setError] = useState('')
+  /** PT-87 개념 태그: quizId -> 태그, 수업의 개념 이름 (자동 완성). 못 읽어도 문항 목록은 그대로 쓴다. */
+  const [tags, setTags] = useState(null)
+  const [conceptNames, setConceptNames] = useState([])
   const listRequest = useRef(0)
+  const tagRequest = useRef(0)
 
   const load = useCallback(() => {
     const request = ++listRequest.current
@@ -39,11 +45,27 @@ export function TeacherQuizTab({ sessionId, reloadKey }) {
   }, [sessionId])
   useEffect(load, [load, reloadKey])
 
-  function onCreated(quiz) {
+  // 태그 · 개념은 학생 답안으로 바뀌지 않으므로 처음과 태그를 저장한 뒤에만 읽는다 (reloadKey 와 무관).
+  const loadTags = useCallback(() => {
+    const request = ++tagRequest.current
+    insights.quizConcepts(sessionId).then(
+      (byQuiz) => { if (request === tagRequest.current) setTags(byQuiz ?? {}) },
+      () => undefined,
+    )
+    insights.concepts(sessionId).then(
+      (rows) => { if (request === tagRequest.current) setConceptNames(rows.map((c) => c.name)) },
+      () => undefined,
+    )
+  }, [sessionId])
+  useEffect(loadTags, [loadTags])
+
+  function onCreated(quiz, tagError) {
     setList((current) => current.some((item) => item.id === quiz.id) ? current : [...current, quiz])
     setSentId(quiz.id)
     setFormMode(null)
+    setError(tagError ?? '')
     load()
+    loadTags()
   }
 
   const reviewedQuiz = list.find((quiz) => quiz.id === reviewId)
@@ -58,17 +80,19 @@ export function TeacherQuizTab({ sessionId, reloadKey }) {
         {error && <p className="error-text">{error}</p>}
         {list.length === 0 && <p className="muted">아직 보낸 질문이 없어요</p>}
         {[...list].reverse().map((q) => (
-          <QuizRow key={q.id} quiz={q} justSent={q.id === sentId} onOpen={() => setReviewId(q.id)} />
+          <QuizRow key={q.id} quiz={q} tags={tags?.[q.id]} justSent={q.id === sentId} onOpen={() => setReviewId(q.id)} />
         ))}
       </section>
       {formMode && <QuizForm key={formMode} sessionId={sessionId} aiMode={formMode === 'ai'}
-        onCreated={onCreated} onClose={() => setFormMode(null)} />}
+        conceptNames={conceptNames} onCreated={onCreated} onClose={() => setFormMode(null)} />}
       {reviewedQuiz && (
         <TeacherQuizDialog title="학생별 답안 관리" onClose={() => setReviewId(null)}>
           <p className="quiz-question">{reviewedQuiz.question}</p>
           <p className="muted small">
             응답 {reviewedQuiz.answered}/{reviewedQuiz.studentCount} · 정답 {reviewedQuiz.correct} · 채점 대기 {reviewedQuiz.pending}
           </p>
+          {tags && <QuizConceptEditor key={reviewedQuiz.id}
+            quizId={reviewedQuiz.id} tags={tags[reviewedQuiz.id] ?? []} suggestions={conceptNames} onSaved={loadTags} />}
           <AnswerReview key={reviewedQuiz.id} quiz={reviewedQuiz} reloadKey={reloadKey} onChanged={load} />
         </TeacherQuizDialog>
       )}
@@ -100,7 +124,7 @@ function TeacherQuizDialog({ title, onClose, closeDisabled, children }) {
 
 const EMPTY_CHOICES = ['', '', '', '']
 
-function QuizForm({ sessionId, aiMode, onCreated, onClose }) {
+function QuizForm({ sessionId, aiMode, conceptNames, onCreated, onClose }) {
   const [type, setType] = useState('CHOICE')
   const [question, setQuestion] = useState('')
   const [choices, setChoices] = useState(EMPTY_CHOICES)
@@ -108,6 +132,7 @@ function QuizForm({ sessionId, aiMode, onCreated, onClose }) {
   const [modelAnswer, setModelAnswer] = useState('')
   const [timeLimitSec, setTimeLimitSec] = useState(60)
   const [hint, setHint] = useState('')
+  const [conceptTags, setConceptTags] = useState([])
   const [busy, setBusy] = useState('')
   const [status, setStatus] = useState('')
   const [draftState, setDraftState] = useState('empty')
@@ -172,7 +197,15 @@ function QuizForm({ sessionId, aiMode, onCreated, onClose }) {
         modelAnswer: type === 'TEXT' ? modelAnswer : null,
         timeLimitSec,
       })
-      onCreated(created)
+      let tagError = null
+      if (conceptTags.length > 0) {
+        // 문항은 이미 보냈다: 태그 저장만 실패하면 알리고 답안 보기에서 다시 붙이게 한다.
+        tagError = await insights.setQuizConcepts(created.id, conceptTags).then(
+          () => null,
+          (err) => `질문은 보냈지만 개념 태그를 저장하지 못했어요: ${errText(err, '오류')}`,
+        )
+      }
+      onCreated(created, tagError)
     } catch (err) {
       setStatus(errText(err, '보내지 못했어요'))
     } finally {
@@ -214,6 +247,11 @@ function QuizForm({ sessionId, aiMode, onCreated, onClose }) {
               <textarea className="input" value={modelAnswer} onChange={(e) => edit(setModelAnswer, e.target.value)} maxLength={2000} rows={3} required />
             </label>
           )}
+          <div className="quiz-concepts">
+            <span className="muted small">개념 태그 (선택, 최대 3개) — 개념 분석 탭의 숙련도 표에 쓰여요</span>
+            <ConceptTagInput names={conceptTags} onChange={setConceptTags} suggestions={conceptNames}
+              idPrefix="new-quiz" />
+          </div>
           <div className="row-between">
             <label className="muted">
               제한 시간{' '}
@@ -240,14 +278,14 @@ function QuizForm({ sessionId, aiMode, onCreated, onClose }) {
   )
 }
 
-function QuizRow({ quiz, justSent, onOpen }) {
+function QuizRow({ quiz, tags, justSent, onOpen }) {
   const graded = quiz.answered - quiz.pending
   const pct = graded > 0 ? Math.round((quiz.correct / graded) * 100) : 0
   return (
     <div className={`quiz-row quiz-row-head${justSent ? ' quiz-row-sent' : ''}`}>
       <strong className="quiz-no">{quiz.no}번</strong>
       <div className="quiz-title">
-        <div className="quiz-q">{quiz.question}</div>
+        <div className="quiz-q">{quiz.question}<QuizConceptChips tags={tags} /></div>
         {justSent && <span className="badge badge-ok" role="status">방금 보냄</span>}
       </div>
       <span className="bar" aria-label={`정답률 ${pct}%`}>

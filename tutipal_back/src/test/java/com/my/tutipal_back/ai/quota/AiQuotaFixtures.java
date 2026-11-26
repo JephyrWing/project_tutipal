@@ -15,7 +15,7 @@ public final class AiQuotaFixtures {
     /** Every feature gets the same limit/window. */
     public static AiQuota quota(int limit, Duration window, Clock clock) {
         var each = new AiQuotaProperties.Limit(limit, window);
-        return new AiQuota(new AiQuotaProperties(each, each, each, each, Duration.ofMinutes(10)), clock);
+        return new AiQuota(new AiQuotaProperties(each, each, each, each, each, Duration.ofMinutes(10)), clock);
     }
 
     /** True when one more call for (userId, feature) would be accepted now. Leaves the state unchanged. */

@@ -104,7 +104,7 @@ class TutorServiceAgentTest {
 
     private void rebuild(boolean agentEnabled) {
         service = new TutorService(ai, sessions, rag, slots, quota, variants, new AgentContextAssembler(memory),
-                agentEnabled);
+                agentEnabled, StudentQuestionSink.NONE);
     }
 
     private static ChatRequest personal(String question) {

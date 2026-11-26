@@ -11,6 +11,7 @@ import { BoardPanel, MaterialsPanel, NoticesPanel } from './BoardPanels'
 import { StudentHelp, StudentLiveTab, TeacherHelpTab, TeacherShareTab } from './LivePanels'
 import { materials, notices } from '../api/board'
 import { StudentQuizModal, TeacherQuizTab } from './QuizPanels'
+import InsightsTab from './InsightsPanels'
 
 /** 세션 화면: 내 역할에 따라 학생 홈(목업 13) 또는 선생님 모드(목업 20 · 21) */
 export default function SessionPage() {
@@ -36,6 +37,7 @@ export default function SessionPage() {
   }
   if (!session) return <p className="muted">불러오는 중…</p>
   if (session.ended) {
+    if (session.myRole === 'TEACHER') return <EndedTeacherView session={session} />
     return (
       <div className="center-page">
         <div className="card session-card">
@@ -175,6 +177,19 @@ function StudentView({ session, reload }) {
 }
 
 /** 목업 20 선생님 모드: 참가자 · 주제 설정(목업 21) · 출제와 답안 관리 · 세션 종료 */
+/** PT-87: 닫힌 방에서도 선생님은 개념 분석(TOP3 · 숙련도)을 볼 수 있다 (서버도 끝난 수업 조회를 허용). */
+function EndedTeacherView({ session }) {
+  return (
+    <div className="page session-page">
+      <div className="card session-body row-between">
+        <span>「{session.title}」 방은 닫혔어요. 개념 분석은 계속 볼 수 있어요.</span>
+        <Link to="/" className="btn btn-sm">홈으로</Link>
+      </div>
+      <InsightsTab sessionId={session.id} />
+    </div>
+  )
+}
+
 function TeacherView({ session, onChange, reload }) {
   const [tab, setTab] = useState('people')
   const [boardKeys, setBoardKeys] = useState({ notice: 0, board: 0, materials: 0 })
@@ -214,6 +229,7 @@ function TeacherView({ session, onChange, reload }) {
         </button>
         <button role="tab" aria-selected={tab === 'materials'} onClick={() => setTab('materials')}>자료 · 공지</button>
         <button role="tab" aria-selected={tab === 'board'} onClick={() => setTab('board')}>게시판</button>
+        <button role="tab" aria-selected={tab === 'insights'} onClick={() => setTab('insights')}>개념 분석</button>
         <EndButton session={session} onChange={onChange} />
       </nav>
       {tab === 'people' && <Participants sessionId={session.id} reloadKey={peopleKey} />}
@@ -228,6 +244,7 @@ function TeacherView({ session, onChange, reload }) {
       )}
       {tab === 'board' && <BoardPanel sessionId={session.id} teacher reloadKey={boardKeys.board} />}
       {tab === 'settings' && <Settings session={session} onChange={onChange} />}
+      {tab === 'insights' && <InsightsTab sessionId={session.id} reloadKey={quizKey} />}
     </div>
   )
 }
