@@ -101,6 +101,19 @@ def load_rerank_settings() -> RerankSettings:
         _log.warning("rerank disabled: invalid setting (%s)", str(error).split(" must ")[0])
         return RerankSettings(enabled=False, model_dir=model_dir, model_name=model_name)
 
+@dataclass(frozen=True)
+class FocusSettings:
+    """PT-90 /v1/focus/predict. Without a model (or with a failed check) the app starts and only this path is 503."""
+
+    model_path: str = ""
+    model_sha256: str = field(default="", repr=False)
+
+
+def load_focus_settings() -> FocusSettings:
+    """FOCUS_MODEL_PATH: LightGBM text file. FOCUS_MODEL_SHA256: its hex digest (letter case ignored)."""
+    return FocusSettings(model_path=_setting("FOCUS_MODEL_PATH"), model_sha256=_setting("FOCUS_MODEL_SHA256"))
+
+
 # langsmith.utils.tracing_is_enabled reads TRACING_V2, then TRACING, in both the LANGSMITH_ and
 # LANGCHAIN_ namespaces, so all four names must be checked (PT-85 AC-25).
 TRACING_FLAGS = ("LANGSMITH_TRACING", "LANGCHAIN_TRACING_V2", "LANGSMITH_TRACING_V2", "LANGCHAIN_TRACING")

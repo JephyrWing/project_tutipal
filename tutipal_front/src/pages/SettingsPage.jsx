@@ -5,15 +5,17 @@ import { reviewApi } from '../api/review'
 import { useAuth } from '../auth'
 import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
+import { FocusConsentSettings } from './FocusPanels'
 
 const TABS = [
   { id: 'screen', icon: 'screen', label: '화면 분석' },
   { id: 'review', icon: 'book', label: '복습 기록' },
+  { id: 'focus', icon: 'shield', label: '집중도 체크' },
   { id: 'account', icon: 'user', label: '계정' },
 ]
 const PROVIDER = { kakao: '카카오', naver: '네이버', google: '구글', dev: '개발용' }
 
-/** 목업 05 설정: 화면 분석 시작·중지, 복습 기록 전체 삭제, 계정, 로그아웃, 회원 탈퇴 */
+/** 목업 05 설정: 화면 분석 시작·중지, 복습 기록 전체 삭제, 집중도 동의 철회(PT-90), 계정, 로그아웃, 회원 탈퇴 */
 export default function SettingsPage() {
   const [tab, setTab] = useState('screen')
   return (
@@ -29,6 +31,7 @@ export default function SettingsPage() {
         <div className="card settings-body">
           {tab === 'screen' && <ScreenTab />}
           {tab === 'review' && <ReviewTab />}
+          {tab === 'focus' && <FocusTab />}
           {tab === 'account' && <AccountTab />}
         </div>
       </section>
@@ -113,6 +116,16 @@ function ReviewTab() {
       </div>
       {error && <div role="alert"><p className="error-text">{error}</p><button className="btn" onClick={() => setRevision((v) => v + 1)}>다시 불러오기</button></div>}
       <DeleteAll onDone={() => setRevision((v) => v + 1)} />
+    </>
+  )
+}
+
+// PT-90: 집중도 저장 동의 확인 · 철회 (수업과 무관하게, 브라우저에서도)
+function FocusTab() {
+  return (
+    <>
+      <Head mood="listen" title="집중도 체크" text="수업 중 내가 시작한 동안만 모아요. 동의를 철회하면 저장된 기록이 바로 지워져요." />
+      <FocusConsentSettings />
     </>
   )
 }

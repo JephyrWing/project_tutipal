@@ -18,6 +18,8 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 # PT-85: LangSmith/LangChain tracing would export request bodies; the app refuses to start if any of these is true.
 ENV LANGSMITH_TRACING=false LANGCHAIN_TRACING_V2=false LANGSMITH_TRACING_V2=false LANGCHAIN_TRACING=false
+# PT-90: lightgbm needs the OpenMP runtime (libgomp1); the focus model file itself is not in the image.
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/*
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 COPY requirements.txt requirements.lock.txt ./

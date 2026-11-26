@@ -6,3 +6,5 @@ onnxruntime==1.32.0
 tokenizers==0.23.3
 numpy==2.5.5
 langgraph==1.2.24
+# PT-90 /v1/focus/predict: LightGBM text model (Booster(model_file=)), no pickle/joblib
+lightgbm==4.7.0

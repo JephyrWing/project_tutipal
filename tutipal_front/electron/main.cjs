@@ -1,6 +1,6 @@
 const path = require('node:path')
 const {
-  app, BrowserWindow, ipcMain, Menu, nativeImage, screen, session, shell, Tray,
+  app, BrowserWindow, ipcMain, Menu, nativeImage, powerMonitor, screen, session, shell, Tray,
 } = require('electron')
 const { finishBrowserLogin, startBrowserLogin } = require('./applogin.cjs')
 const { capture, listSources, loadSettings, saveSettings } = require('./screen.cjs')
@@ -8,6 +8,9 @@ const { chooseShareSource, forwardDraw, installDisplayMediaHandler, showOverlay,
   helpShareSources, prepareHelpShare, setHelpShareVideoSize } = require('./share.cjs')
 const { startBridge } = require('./bridge.cjs')
 const { loadServerUrl } = require('./serverConfig.cjs')
+const { createFocusCollector } = require('./focusCollector.cjs')
+const { canProbe, startFocusProbe } = require('./focusProbe.cjs')
+const { createFocusTransport } = require('./focusTransport.cjs')
 
 /**
  * Spring 업무 서버 주소. React 화면은 설치 패키지의 dist에 내장한다.
@@ -25,6 +28,9 @@ let mainWindow = null
 let widgetWindow = null
 let tray = null
 let pendingDeepLink = process.argv.find((value) => value.startsWith(`${PROTOCOL}://`))
+// PT-90 집중도 수집 (학생이 수업 화면에서 시작한 동안만). focusOwner = 시작한 화면
+let focus = null
+let focusOwner = null
 
 function isOurPage(url) {
   try {
@@ -131,6 +137,65 @@ function toggleWidget() {
 /** 화면이 보낸 요청은 우리 서버 페이지에서 온 것만 받는다 */
 function fromOurPage(event) {
   return isOurPage(event.senderFrame?.url ?? '')
+}
+
+/**
+ * PT-90 집중도 수집. 수집 값(exe 이름 · 유휴 초 · 창 전환 수)은 화면을 거치지 않고 메인 프로세스가 로그인 쿠키로
+ * Spring 에 직접 보낸다. 시작한 화면이 닫히거나 · 죽거나 · 다시 읽히면, 로그인 쿠키가 바뀌면, 절전 · 화면 잠금 ·
+ * 앱 종료 때 멈추고 모아 둔 값은 버린다 (3시간 상한과 서버 401/403/404/410 은 collector 가 처리).
+ */
+function setupFocusCollection() {
+  const transport = createFocusTransport({ fetch: (url, init) => session.defaultSession.fetch(url, init), backend: BACKEND })
+  focus = createFocusCollector({
+    startProbe: onExe => (canProbe() ? startFocusProbe(onExe, { onExit: () => focus.stop('probe') }) : null),
+    idleSeconds: () => powerMonitor.getSystemIdleTime(),
+    send: (sessionId, body, options) => transport.send(sessionId, body, options),
+    now: Date.now,
+    setInterval: (fn, ms) => setInterval(fn, ms),
+    clearInterval: id => clearInterval(id),
+    platform: process.platform,
+  })
+  const watched = new WeakSet()
+
+  ipcMain.handle('focus-start', (event, sessionId) => {
+    if (!fromOurPage(event) || !Number.isSafeInteger(sessionId) || sessionId <= 0) return focus.state()
+    watchOwner(event.sender)
+    const before = focus.state()
+    focus.start(sessionId)
+    // 같은 수업을 이미 수집 중이면 시작한 화면(owner)은 그대로 둔다: 다른 창이 owner 를 가져가면
+    // 원래 화면이 닫히거나 이동해도 멈추지 않는다
+    const continued = before.status === 'collecting' && before.sessionId === sessionId
+    if (focus.state().status === 'collecting' && !continued) focusOwner = event.sender
+    return focus.state()
+  })
+  ipcMain.handle('focus-stop', (event) => {
+    if (!fromOurPage(event)) return null
+    focus.stop('user')
+    return focus.state()
+  })
+  ipcMain.handle('focus-state', (event) => (fromOurPage(event) ? focus.state() : null))
+
+  function watchOwner(contents) {
+    if (watched.has(contents)) return
+    watched.add(contents)
+    const stopIfOwner = reason => () => { if (focusOwner === contents) focus.stop(reason) }
+    contents.once('destroyed', stopIfOwner('destroyed'))
+    contents.on('render-process-gone', stopIfOwner('render-process-gone'))
+    // 새로 고침 · 다른 주소로 이동 = 수업 화면이 사라짐 (SPA 안의 이동은 화면이 focusStop 을 보낸다)
+    contents.on('did-navigate', stopIfOwner('left'))
+  }
+  focus.onState(state => {
+    if (state.status !== 'collecting') focusOwner = null
+    for (const win of [mainWindow, widgetWindow]) {
+      if (win && !win.isDestroyed() && isOurPage(win.webContents.getURL())) win.webContents.send('focus-state', state)
+    }
+  })
+  session.defaultSession.cookies.on('changed', (_event, cookie) => {
+    if (cookie.name === 'TUTIPAL_SESSION') focus.stop('cookie')
+  })
+  powerMonitor.on('suspend', () => focus.stop('suspend'))
+  powerMonitor.on('lock-screen', () => focus.stop('lock-screen'))
+  app.on('before-quit', () => focus.stop('quit'))
 }
 
 /** tutipal://auth?code= 로 돌아왔을 때: 세션 쿠키로 교환하고 두 창을 새로 읽음 */
@@ -288,6 +353,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.on('overlay-draw', (event, message) => {
       if (fromOurPage(event)) forwardDraw(message)
     })
+    setupFocusCollection()
 
     mainWindow = createMainWindow()
     widgetWindow = createWidgetWindow()

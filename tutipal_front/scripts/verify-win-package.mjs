@@ -23,7 +23,8 @@ try {
     name, expected: enabled ? 49 : 48, actual: wire[FuseV1Options[name]],
     passed: wire[FuseV1Options[name]] === (enabled ? 49 : 48),
   }))
-  for (const relative of ['resources/app.asar', 'resources/app.asar.unpacked/electron/native/bin/window-target.exe']) {
+  for (const relative of ['resources/app.asar', 'resources/app.asar.unpacked/electron/native/bin/window-target.exe',
+    'resources/app.asar.unpacked/electron/native/bin/focus-probe.exe']) {
     const info = await stat(path.join(root, relative)).catch(() => null)
     checks.push({ name: relative, passed: !!info?.isFile() && info.size > 0 })
   }

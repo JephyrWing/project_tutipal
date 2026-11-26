@@ -11,6 +11,7 @@ import { BoardPanel, MaterialsPanel, NoticesPanel } from './BoardPanels'
 import { StudentHelp, StudentLiveTab, TeacherHelpTab, TeacherShareTab } from './LivePanels'
 import { materials, notices } from '../api/board'
 import { StudentQuizModal, TeacherQuizTab } from './QuizPanels'
+import { FocusBadge, FocusNotice, StudentFocusCard, useFocusStates } from './FocusPanels'
 
 /** 세션 화면: 내 역할에 따라 학생 홈(목업 13) 또는 선생님 모드(목업 20 · 21) */
 export default function SessionPage() {
@@ -143,6 +144,7 @@ function StudentView({ session, reload }) {
     <div className="page session-page">
       <SessionHead session={session} badge="학생" live={live}
         actions={<><StudentHelp sessionId={session.id} reloadKey={helpKey} /><LeaveButton sessionId={session.id} /></>} />
+      <StudentFocusCard sessionId={session.id} />
       {showQuiz && (
         <StudentQuizModal
           key={quiz.id}
@@ -182,7 +184,9 @@ function TeacherView({ session, onChange, reload }) {
   const [quizKey, setQuizKey] = useState(0)
   const [helpKey, setHelpKey] = useState(0)
   const [newHelp, setNewHelp] = useState(false)
+  const [focusKey, setFocusKey] = useState(0)
   const live = useSessionEvents(session.id, true, (e) => {
+    if (e.type === 'focus') setFocusKey((k) => k + 1)
     if (e.type === 'joined' || e.type === 'left') reload()   // 참가자 수
     if (e.type === 'joined' || e.type === 'left' || e.type === 'presence') setPeopleKey((k) => k + 1)
     if (e.type === 'quizStats' || e.type === 'quiz' || e.type === 'quizClosed') setQuizKey((k) => k + 1)
@@ -216,7 +220,7 @@ function TeacherView({ session, onChange, reload }) {
         <button role="tab" aria-selected={tab === 'board'} onClick={() => setTab('board')}>게시판</button>
         <EndButton session={session} onChange={onChange} />
       </nav>
-      {tab === 'people' && <Participants sessionId={session.id} reloadKey={peopleKey} />}
+      {tab === 'people' && <Participants sessionId={session.id} reloadKey={peopleKey} focusKey={focusKey} />}
       {tab === 'quiz' && <TeacherQuizTab sessionId={session.id} reloadKey={quizKey} />}
       {tab === 'share' && <TeacherShareTab sessionId={session.id} />}
       {tab === 'help' && <TeacherHelpTab sessionId={session.id} reloadKey={helpKey} />}
@@ -232,8 +236,9 @@ function TeacherView({ session, onChange, reload }) {
   )
 }
 
-function Participants({ sessionId, reloadKey }) {
+function Participants({ sessionId, reloadKey, focusKey }) {
   const [list, setList] = useState(null)
+  const focus = useFocusStates(sessionId, focusKey)
   const [error, setError] = useState('')
   // 참여 · 접속 변화는 실시간 알림(reloadKey)으로 다시 읽음
   const load = useCallback(() => {
@@ -253,19 +258,21 @@ function Participants({ sessionId, reloadKey }) {
       </div>
       {error && <p className="error-text">{error}</p>}
       <table className="table">
-        <thead><tr><th>이름</th><th>접속</th><th>역할</th><th>참여 시각</th><th aria-label="관리" /></tr></thead>
+        <thead><tr><th>이름</th><th>접속</th><th>역할</th><th>집중도</th><th>참여 시각</th><th aria-label="관리" /></tr></thead>
         <tbody>
           {list?.map((p) => (
             <tr key={p.userId}>
               <td><span className="avatar avatar-sm"><Icon name="user" size={16} /></span> {p.name}</td>
               <td><span className={`dot${p.online ? '' : ' off'}`} aria-label={p.online ? '접속 중' : '접속 안 함'} /></td>
               <td>{p.role === 'TEACHER' ? '선생님' : '학생'}</td>
+              <td>{p.role === 'STUDENT' && <FocusBadge state={focus[p.userId]?.state ?? 'NOT_PARTICIPATING'} />}</td>
               <td className="muted">{new Date(p.joinedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</td>
               <td>{p.role === 'STUDENT' && <KickButton sessionId={sessionId} student={p} onDone={load} onError={setError} />}</td>
             </tr>
           ))}
         </tbody>
       </table>
+      <FocusNotice />
     </section>
   )
 }

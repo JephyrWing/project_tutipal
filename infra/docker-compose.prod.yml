@@ -74,6 +74,9 @@ services:
       RERANK_MAX_LENGTH: ${RERANK_MAX_LENGTH:-256}
       # below Spring timeout (2s): give up waiting behind another rerank instead of piling up
       RERANK_QUEUE_TIMEOUT_MS: ${RERANK_QUEUE_TIMEOUT_MS:-1000}
+      # PT-90 /v1/focus/predict: LightGBM text model (not in the image). Empty = model off, only that path is 503
+      FOCUS_MODEL_PATH: ${FOCUS_MODEL_PATH:-}
+      FOCUS_MODEL_SHA256: ${FOCUS_MODEL_SHA256:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     expose: ["8000"]
