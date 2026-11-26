@@ -6,11 +6,12 @@ import { setConversationSaved } from '../src/api/conversations.js'
 import {
   AI_RETENTION_MAX_DAYS,
   AI_RETENTION_QUICK_PICKS,
-  PERSONAL_RETENTION_DAYS,
+  FALLBACK_PERSONAL_RETENTION_DAYS,
   aiRetentionError,
   aiRetentionLabel,
   applySavedState,
   parseAiRetentionDays,
+  personalRetentionDaysOf,
   retentionNotice,
 } from '../src/utils/aiRetention.js'
 
@@ -25,7 +26,7 @@ afterEach(() => { globalThis.fetch = realFetch })
 
 test('retention limits match the server (0..90, personal 30) and every quick pick is valid', () => {
   assert.equal(AI_RETENTION_MAX_DAYS, 90)
-  assert.equal(PERSONAL_RETENTION_DAYS, 30)
+  assert.equal(FALLBACK_PERSONAL_RETENTION_DAYS, 30)
   assert.ok(AI_RETENTION_QUICK_PICKS.includes(0))
   assert.ok(AI_RETENTION_QUICK_PICKS.includes(90))
   for (const days of AI_RETENTION_QUICK_PICKS) assert.equal(parseAiRetentionDays(String(days)), days)
@@ -69,6 +70,25 @@ test('retentionNotice explains class (N days after the end) and personal (30 day
   assert.match(retentionNotice({ sessionId: '10', aiRetentionDays: null }), /최대 90일/)
   for (const text of [retentionNotice({}), retentionNotice({ sessionId: '10', aiRetentionDays: 7 })]) {
     assert.match(text, /저장/)
+  }
+})
+
+// Codex P2 (round 2): the personal period comes from the server (list / detail personalRetentionDays).
+test('retentionNotice uses the server personal retention and falls back to 30 only when it is missing', () => {
+  assert.match(retentionNotice({ personalRetentionDays: 14 }), /마지막 대화 후 14일/)
+  assert.match(retentionNotice({ personalRetentionDays: 45 }), /마지막 대화 후 45일/)
+  for (const missing of [undefined, null, 0, -3, 2.5, '14']) {
+    assert.match(retentionNotice({ personalRetentionDays: missing }), /마지막 대화 후 30일/, String(missing))
+  }
+  // the class notice does not use it
+  assert.doesNotMatch(retentionNotice({ sessionId: '10', aiRetentionDays: 7, personalRetentionDays: 14 }), /14일/)
+})
+
+test('personalRetentionDaysOf reads a positive integer from a list or detail response', () => {
+  assert.equal(personalRetentionDaysOf({ items: [], personalRetentionDays: 14 }), 14)
+  assert.equal(personalRetentionDaysOf({ id: '7', personalRetentionDays: 1 }), 1)
+  for (const bad of [null, undefined, {}, { personalRetentionDays: 0 }, { personalRetentionDays: '30' }]) {
+    assert.equal(personalRetentionDaysOf(bad), null)
   }
 })
 

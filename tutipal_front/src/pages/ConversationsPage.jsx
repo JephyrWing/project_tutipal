@@ -13,7 +13,7 @@ import {
   setConversationSaved,
 } from '../api/conversations'
 import { sessions } from '../api/sessions'
-import { applySavedState, retentionNotice } from '../utils/aiRetention'
+import { applySavedState, personalRetentionDaysOf, retentionNotice } from '../utils/aiRetention'
 import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
 import SubjectPicker from '../components/SubjectPicker'
@@ -91,6 +91,8 @@ function ConversationList() {
   const [createError, setCreateError] = useState('')
   const [loadingMore, setLoadingMore] = useState(false)
   const retentionDays = useSessionRetention(sessionId)
+  /** Server's personal retention (list response); null until loaded → the notice falls back to 30. */
+  const [personalDays, setPersonalDays] = useState(null)
   const alive = useRef(true)
   /** Changes with ?sessionId: a next page requested for the previous scope is dropped. */
   const scopeRef = useRef(sessionId)
@@ -107,7 +109,10 @@ function ConversationList() {
     const controller = new AbortController()
     setState((s) => listLoading(s))
     listConversations({ sessionId }, controller.signal).then(
-      (page) => setState((s) => listLoaded(s, page)),
+      (page) => {
+        setState((s) => listLoaded(s, page))
+        setPersonalDays((d) => personalRetentionDaysOf(page) ?? d)
+      },
       (e) => { if (!controller.signal.aborted) setState((s) => listFailed(s, e)) },
     )
     return () => controller.abort()
@@ -157,7 +162,7 @@ function ConversationList() {
                 {sessionId ? '이 수업에서 AI 조교와 나눈 대화예요.' : '개인 학습에서 AI 조교와 나눈 대화예요.'}
                 {' '}이어서 질문하면 앞 대화 내용을 기억하고 답해요.
               </p>
-              <p className="muted small">{retentionNotice({ sessionId, aiRetentionDays: retentionDays })}</p>
+              <p className="muted small">{retentionNotice({ sessionId, aiRetentionDays: retentionDays, personalRetentionDays: personalDays })}</p>
             </div>
           </div>
         </header>
@@ -458,7 +463,11 @@ function ConversationDetail({ id }) {
           {conversation?.saved
             ? `저장한 대화예요. 직접 지우기 전까지 보관 기간이 지나도 남아요.${
               conversation.sessionId ? ' 이 수업의 기억은 수업 보관 기간이 지나면 지워져요.' : ''}`
-            : retentionNotice({ sessionId: conversation?.sessionId, aiRetentionDays: retentionDays })}
+            : retentionNotice({
+              sessionId: conversation?.sessionId,
+              aiRetentionDays: retentionDays,
+              personalRetentionDays: personalRetentionDaysOf(conversation),
+            })}
         </p>
 
         <div className="chat-list" aria-live="polite">

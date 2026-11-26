@@ -63,7 +63,11 @@ public final class ConversationDtos {
     }
 
     /** nextCursor: opaque, null on the last page. */
-    public record Page(List<ListItem> items, String nextCursor, boolean hasMore) {
+    /**
+     * personalRetentionDays: app.ai.conversations.personal-retention-days as the server runs it (unsaved personal
+     * conversations are deleted that many days after the last activity), so the screen's notice matches.
+     */
+    public record Page(List<ListItem> items, String nextCursor, boolean hasMore, int personalRetentionDays) {
     }
 
     public record SummaryView(String text, Instant updatedAt) {
@@ -72,9 +76,10 @@ public final class ConversationDtos {
     public record MemoryView(String id, String text, Instant createdAt) {
     }
 
+    /** personalRetentionDays: the server's personal retention setting (same meaning as in {@link Page}). */
     public record Detail(String id, String topic, String title, String sessionId, int messageCount, Instant createdAt,
                          Instant lastMessageAt, SummaryView summary, List<MemoryView> memories, boolean saved,
-                         Instant savedAt) {
+                         Instant savedAt, int personalRetentionDays) {
     }
 
     public record MessageView(String id, String role, String content, Instant createdAt) {

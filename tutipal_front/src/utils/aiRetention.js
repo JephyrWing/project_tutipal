@@ -1,14 +1,21 @@
 /**
  * PT-106 / PT-13 AI 대화 보관 기간 (PM 결정 2026-11-26, docs/AI_CONVERSATIONS.md "보관 기간").
  * - 수업 대화: 선생님이 수업마다 정한 기간(수업 종료 뒤 0~90일)이 지나면 삭제. 0 = 종료 직후 삭제.
- * - 개인 대화: 마지막 대화 뒤 30일이 지나면 삭제.
+ * - 개인 대화: 마지막 대화 뒤 N일이 지나면 삭제. N 은 서버 설정(app.ai.conversations.personal-retention-days,
+ *   기본 30)이며 대화 목록 · 상세 응답의 personalRetentionDays 로 받는다.
  * - "저장"한 대화는 사용자가 지울 때까지 남는다.
  */
 
 /** CreateSessionRequest.aiRetentionDays @Max 와 같게 */
 export const AI_RETENTION_MAX_DAYS = 90
-/** app.ai.conversations.personal-retention-days 기본값과 같게 (서버 설정을 바꾸면 같이 바꾼다) */
-export const PERSONAL_RETENTION_DAYS = 30
+/** 응답에 personalRetentionDays 가 없을 때만 쓰는 대체값 (서버 기본값과 같음) */
+export const FALLBACK_PERSONAL_RETENTION_DAYS = 30
+
+/** 대화 목록 · 상세 응답의 personalRetentionDays (1 이상 정수), 없거나 이상하면 null */
+export function personalRetentionDaysOf(response) {
+  const days = response?.personalRetentionDays
+  return Number.isInteger(days) && days >= 1 ? days : null
+}
 /**
  * 방 만들기 · 설정의 빠른 선택 값. 선생님은 0..90 사이 아무 정수나 직접 넣을 수 있고, 기본값은 없다
  * (반드시 정한다).
@@ -39,11 +46,12 @@ export function aiRetentionLabel(days) {
 
 /**
  * 대화 목록 · 상세 아래에 보여 줄 안내. sessionId 가 있으면 수업 대화, aiRetentionDays 는 그 수업 설정
- * (모르면 null → 최대 90일 문구).
+ * (모르면 null → 최대 90일 문구). personalRetentionDays 는 서버가 보낸 개인 보관 일수 (없으면 30).
  */
-export function retentionNotice({ sessionId, aiRetentionDays } = {}) {
+export function retentionNotice({ sessionId, aiRetentionDays, personalRetentionDays } = {}) {
   if (!sessionId) {
-    return `개인 대화는 마지막 대화 후 ${PERSONAL_RETENTION_DAYS}일이 지나면 자동으로 지워져요. 남기고 싶은 대화는 "저장"해 두세요.`
+    const days = personalRetentionDaysOf({ personalRetentionDays }) ?? FALLBACK_PERSONAL_RETENTION_DAYS
+    return `개인 대화는 마지막 대화 후 ${days}일이 지나면 자동으로 지워져요. 남기고 싶은 대화는 "저장"해 두세요.`
   }
   const when = aiRetentionDays === null || aiRetentionDays === undefined
     ? `선생님이 정한 기간(최대 ${AI_RETENTION_MAX_DAYS}일)이 지나면`

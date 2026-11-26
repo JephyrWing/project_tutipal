@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.my.tutipal_back.ai.dto.AgentDtos;
 import com.my.tutipal_back.common.exception.ApiException;
+import com.my.tutipal_back.learning.conversation.ConversationProperties;
 import com.my.tutipal_back.learning.conversation.dto.ConversationDtos;
 import com.my.tutipal_back.learning.conversation.repository.ConversationStore;
 import com.my.tutipal_back.learning.tutor.dto.ChatRequest;
@@ -62,16 +63,31 @@ public class ConversationService {
     private final ConversationStore store;
     private final StudySessionService sessions;
     private final Clock clock;
+    /** Sent to the screen so its retention notice matches what ConversationRetention really deletes. */
+    private final int personalRetentionDays;
 
     @Autowired
+    public ConversationService(ConversationStore store, StudySessionService sessions,
+                               ConversationProperties properties) {
+        this(store, sessions, Clock.systemUTC(), properties);
+    }
+
+    /** Default properties (tests). */
     public ConversationService(ConversationStore store, StudySessionService sessions) {
         this(store, sessions, Clock.systemUTC());
     }
 
+    /** Default properties (tests). */
     public ConversationService(ConversationStore store, StudySessionService sessions, Clock clock) {
+        this(store, sessions, clock, ConversationProperties.defaults());
+    }
+
+    public ConversationService(ConversationStore store, StudySessionService sessions, Clock clock,
+                               ConversationProperties properties) {
         this.store = store;
         this.sessions = sessions;
         this.clock = clock;
+        this.personalRetentionDays = properties.personalRetentionDays();
     }
 
     // ------------------------------------------------------------------ CRUD
@@ -107,7 +123,8 @@ public class ConversationService {
         boolean hasMore = rows.size() > size;
         List<ConversationStore.Conversation> page = hasMore ? rows.subList(0, size) : rows;
         String next = hasMore ? encodeCursor(page.getLast()) : null;
-        return new ConversationDtos.Page(page.stream().map(ConversationService::item).toList(), next, hasMore);
+        return new ConversationDtos.Page(page.stream().map(ConversationService::item).toList(), next, hasMore,
+                personalRetentionDays);
     }
 
     @Transactional(readOnly = true)
@@ -383,13 +400,14 @@ public class ConversationService {
                 c.messageCount(), c.lastMessageAt(), c.saved(), c.savedAt());
     }
 
-    private static ConversationDtos.Detail detail(ConversationStore.Conversation c, ConversationStore.Summary summary,
-                                                  List<ConversationStore.Memory> memories) {
+    private ConversationDtos.Detail detail(ConversationStore.Conversation c, ConversationStore.Summary summary,
+                                           List<ConversationStore.Memory> memories) {
         ConversationDtos.SummaryView view = summary == null ? null
                 : new ConversationDtos.SummaryView(summary.text(), summary.createdAt());
         return new ConversationDtos.Detail(String.valueOf(c.id()), c.topic(), c.title(), id(c.sessionId()),
                 c.messageCount(), c.createdAt(), c.lastMessageAt(), view,
-                memories.stream().map(ConversationService::memory).toList(), c.saved(), c.savedAt());
+                memories.stream().map(ConversationService::memory).toList(), c.saved(), c.savedAt(),
+                personalRetentionDays);
     }
 
     private static ConversationDtos.MemoryView memory(ConversationStore.Memory m) {
