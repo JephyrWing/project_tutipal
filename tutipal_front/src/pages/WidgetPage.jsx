@@ -40,7 +40,7 @@ export default function WidgetPage() {
     capture: () => desktop.captureScreen(),
     describe: async (image, question, signal) => (await screenApi.describe(image, question, signal)).text,
     checkTarget: (sourceId) => desktop.getScreenTargetStatus(sourceId),
-    onInvalidate: () => { setText(''); setSuggestion(null); setAsking(false); setQuestion(''); setMood('happy') },
+    onInvalidate: () => { void desktop?.cancelScreenCapture?.(); setText(''); setSuggestion(null); setAsking(false); setQuestion(''); setMood('happy') },
     observe: (summary, seconds) => reviewApi.observe(summary, seconds),
     onAnswer: (answer, asked) => { setText(answer); setMood(asked ? 'talk' : 'happy') },
     onSuggestion: setSuggestion,

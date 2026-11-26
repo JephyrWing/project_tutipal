@@ -6,6 +6,7 @@ on:
     paths:
       - 'tutipal_front/src/pages/LivePanels.jsx'
       - 'tutipal_front/src/pages/WidgetPage.jsx'
+      - 'tutipal_front/src/pages/ScreenConsentPage.jsx'
       - 'tutipal_front/src/utils/screenAnalysis.js'
       - 'tutipal_front/src/utils/*Session.js'
       - 'tutipal_front/src/utils/roomConnection.js'
@@ -13,6 +14,8 @@ on:
       - 'tutipal_front/src/utils/shareSourceCatalog.js'
       - 'tutipal_front/tests/*.test.mjs'
       - 'tutipal_front/tests/native-window-target.cjs'
+      - 'tutipal_front/tests/*analysis*.cjs'
+      - 'tutipal_front/tests/*analysis*.mjs'
       - 'tutipal_front/tests/help-share-ui.mjs'
       - 'tutipal_front/electron/**'
       - 'tutipal_front/src/components/HelpSharePicker*'
@@ -52,3 +55,12 @@ jobs:
       - name: Verify synthetic share picker UI
         working-directory: tutipal_front
         run: npm run test:share-ui
+      - name: Verify selected-window analysis capture
+        working-directory: tutipal_front
+        run: node tests/run-native-analysis.mjs
+      - name: Build analysis consent UI
+        working-directory: tutipal_front
+        run: npm run build
+      - name: Verify actual analysis consent UI with mock API
+        working-directory: tutipal_front
+        run: node tests/analysis-consent-ui.mjs

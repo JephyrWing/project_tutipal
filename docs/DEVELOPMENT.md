@@ -197,4 +197,21 @@ Windows 설치 파일은 미서명이며 설치 마법사를 PC에 적용하지 
 
 기존 개발 경로는 `POST /api/tutor/chat`의 Spring SSE와 `POST /api/screen`의 요약·화면 질문이다. Electron에서 자동 요약을 켜면 40초 간격으로 선택한 화면의 변경을 확인한다. 위 10장의 로컬 채팅·임베딩 확인은 당시 구현에 해당한다.
 
+### PT-45 선택 창 캡처 보완 · 2026-11-26
+
+창 목록은 창 이름/ID만 조회하며 썸네일·모니터 이미지를 읽지 않는다. 사용자가 `선택 창 미리보기`를 누르면 해당 창 한 장만 표시하고, 이 단계에서는 AI·복습 API에 보내지 않는다. 성공한 미리보기의 같은 창과 일회 토큰으로만 `분석 시작`을 허용한다. 목록 새로고침·선택 변경·이탈은 미리보기 권한을 취소한다. 앱 재실행 뒤에는 자동 분석을 재개하지 않고 다시 미리보기·시작한다.
+
+선택 창의 픽셀은 별도 비영속 Electron session의 단일 display-media 소스로 취득한다. 도움 화면공유의 기본 session handler는 변경하지 않는다. 샌드박스·격리·webSecurity를 유지하며 한 프레임 후 track과 캡처 창을 정리한다. 중지/일시정지 때 진행 중 캡처를 취소하고 이전 요청의 결과를 폐기한다. 창 종료 후 동명 창이나 모니터로 대체하지 않는다. 원본 이미지 파일·로그를 만들지 않는다.
+
+추가 설치 없이 `tutipal_front`에서 다음 검사를 실행한다.
+
+```powershell
+node --test tests/screenTarget.test.mjs tests/screenAnalysis.test.mjs
+node tests/run-native-analysis.mjs
+npm run build
+node tests/analysis-consent-ui.mjs
+```
+
+실제 창 검사는 별도 프로필의 무해한 창 두 개를 사용하며 전체 소스 열거가 항상 0x0 썸네일임을 검사한다. UI 검사는 실제 Main/Preload/React 및 선택 창을 사용하지만 인증·화면 분석 API 응답은 모의다. OCR·실모델·교육 품질·실서비스 종단 검증과 PT-45 전체 인수는 별도다. 실행 SHA·결과·PR 및 미통합 상태는 PT-45와 PT-17의 최신 Jira 증거를 따른다.
+
 수업 학생과 개인 학습의 Agent 채팅, 두 모드에서 사용하는 화면 분석 상세 모달과 직접 질문 연결은 [설계서 11~12장](TUTIPAL_DESIGN.md#11-ai와-학습-지원-기능)과 [AI 워크플로 계약](AI_WORKFLOW_CONTRACT.md)의 구현 대상이다. Agent 분기와 자료 권한은 Spring에서 확인하고, FastAPI는 전달받은 입력으로 LangGraph와 도구를 실행한다. 새 흐름 구현 후에는 역할 분기, 수업 범위, 화면 동의와 분석 중지, 질문 없는 자동 요약, 직접 질문 SSE를 각각 확인한다.
