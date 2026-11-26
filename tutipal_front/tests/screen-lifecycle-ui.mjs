@@ -15,7 +15,7 @@ import React from 'react';import {createRoot} from 'react-dom/client';import {Me
 import Widget from '/src/pages/WidgetPage.jsx';
 window.calls=[];window.records=[];window.loads=[];window.holdSettings=false;window.target='ok';window.captures=0;
 window.selected={enabled:true,sourceId:'window:A',sourceName:'Synthetic A'};
-window.desktop={captureScreen:async()=>{window.captures++;return{status:window.target,image:'synthetic',changed:true}},
+window.desktop={getWidgetChatContext:async()=>({topic:'수학'}),onWidgetChatContextChanged:()=>()=>{},captureScreen:async()=>{window.captures++;return{status:window.target,image:'synthetic',changed:true}},
  getScreenTargetStatus:async()=>({status:window.target}),
  getScreenSettings:()=>window.holdSettings?new Promise(resolve=>window.loads.push(resolve)):Promise.resolve({...window.selected}),
  getReviewDeletionState:async()=>false,onReviewDeletionChanged:()=>()=>{},

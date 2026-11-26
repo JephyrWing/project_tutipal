@@ -11,6 +11,7 @@ const { loadServerUrl } = require('./serverConfig.cjs')
 const { createFocusCollector } = require('./focusCollector.cjs')
 const { canProbe, startFocusProbe } = require('./focusProbe.cjs')
 const { createFocusTransport } = require('./focusTransport.cjs')
+const { widgetChatContext } = require('./widgetChatContext.cjs')
 
 /**
  * Spring 업무 서버 주소. React 화면은 설치 패키지의 dist에 내장한다.
@@ -85,6 +86,9 @@ function createMainWindow() {
   })
   bridge.own(win.webContents)
   harden(win.webContents)
+  const notifyChatContext = () => widgetWindow?.webContents.send('widget-chat-context-changed')
+  win.webContents.on('did-navigate', notifyChatContext)
+  win.webContents.on('did-navigate-in-page', notifyChatContext)
   void win.loadURL(BASE.href)
   win.on('closed', () => {
     mainWindow = null
@@ -259,6 +263,10 @@ if (!app.requestSingleInstanceLock()) {
       if (!fromOurPage(event)) return
       const t = typeof topic === 'string' && TOPICS.has(topic) ? topic : ''
       showMain(t ? `/chat?topic=${t}` : '/chat')
+    })
+    ipcMain.handle('widget-chat-context', event => {
+      if (!fromOurPage(event)) throw new Error('허용되지 않은 요청이에요.')
+      return widgetChatContext(mainWindow?.webContents.getURL() || BASE.href, BASE)
     })
     ipcMain.on('toggle-widget', (event) => {
       if (fromOurPage(event)) toggleWidget()
