@@ -13,6 +13,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import com.my.tutipal_back.common.exception.ApiException;
 import com.my.tutipal_back.users.dto.SocialProfile;
 import com.my.tutipal_back.users.entity.User;
+import com.my.tutipal_back.users.repository.AccountLocks;
 import com.my.tutipal_back.users.repository.UserRepository;
 
 import static org.assertj.core.api.Assertions.*;
@@ -20,13 +21,15 @@ import static org.mockito.Mockito.*;
 
 class UserServiceNameTest {
     private UserRepository repository;
+    private AccountLocks locks;
     private UserService service;
     private User user;
 
     @BeforeEach
     void setup() {
         repository = mock(UserRepository.class);
-        service = new UserService(repository);
+        locks = mock(AccountLocks.class);
+        service = new UserService(repository, locks);
         user = new User("google", "social-1", "가입 이름");
         ReflectionTestUtils.setField(user, "id", 12L);
     }

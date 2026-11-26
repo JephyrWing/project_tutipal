@@ -28,6 +28,7 @@ import com.my.tutipal_back.common.auth.service.AppLoginSuccessHandler;
 import com.my.tutipal_back.common.config.SecurityConfig;
 import com.my.tutipal_back.common.exception.GlobalExceptionHandler;
 import com.my.tutipal_back.users.entity.User;
+import com.my.tutipal_back.users.repository.AccountLocks;
 import com.my.tutipal_back.users.repository.UserRepository;
 import com.my.tutipal_back.users.service.*;
 
@@ -45,6 +46,7 @@ class UserNameWebTest {
     @Import({SecurityConfig.class, CsrfController.class, UserController.class, UserService.class, GlobalExceptionHandler.class})
     static class Config {
         @Bean UserRepository users() { return mock(UserRepository.class); }
+        @Bean AccountLocks accountLocks() { return mock(AccountLocks.class); }
         @Bean WithdrawalService withdrawal() { return mock(WithdrawalService.class); }
         @Bean SocialOAuth2UserService oauth() { return mock(SocialOAuth2UserService.class); }
         @Bean AppLoginSuccessHandler loginSuccess() { return mock(AppLoginSuccessHandler.class); }

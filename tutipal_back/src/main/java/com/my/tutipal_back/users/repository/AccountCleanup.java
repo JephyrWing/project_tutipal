@@ -47,7 +47,10 @@ public class AccountCleanup {
                 .param("u", userId).query(Long.class).list();
     }
 
-    /** Same session-first order as chat and help state changes (lock before closing sessions and help requests). */
+    /**
+     * Locks the user's class rows in id order, the same class-before-help order as chat and help state changes.
+     * WithdrawalService calls it right after the users row gate ({@link AccountLocks}).
+     */
     public void lockHelpSessions(Long userId) {
         jdbc.sql("SELECT id FROM study_sessions WHERE owner_id = :u OR id IN "
                 + "(SELECT session_id FROM session_participants WHERE user_id = :u) ORDER BY id FOR UPDATE")

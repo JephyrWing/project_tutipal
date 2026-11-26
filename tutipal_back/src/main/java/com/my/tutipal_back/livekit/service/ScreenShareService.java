@@ -67,6 +67,7 @@ public class ScreenShareService {
     /** 목업 17: 학생만, 열린 요청은 하나만. */
     @Transactional
     public HelpResponse request(Long userId, Long sessionId, CreateHelpRequest req) {
+        users.lockActiveAccount(userId);   // before the class row lock (same order as withdrawal)
         sessions.lockForHelp(sessionId);
         if (sessions.requireActiveRole(userId, sessionId) != SessionRole.STUDENT) {
             throw new ApiException(HttpStatus.FORBIDDEN, "학생만 도움을 요청할 수 있어요");

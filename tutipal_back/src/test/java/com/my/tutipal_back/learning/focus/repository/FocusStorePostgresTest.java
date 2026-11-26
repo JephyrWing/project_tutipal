@@ -42,6 +42,7 @@ import com.my.tutipal_back.learning.focus.service.FocusRetention;
 import com.my.tutipal_back.sessions.entity.SessionRole;
 import com.my.tutipal_back.sessions.service.StudySessionService;
 import com.my.tutipal_back.users.repository.AccountCleanup;
+import com.my.tutipal_back.users.repository.AccountLocks;
 
 /**
  * PT-90: dedicated Gradle task focusDbTest only (excluded from test). Disposable loopback PostgreSQL, synthetic data,
@@ -359,6 +360,94 @@ class FocusStorePostgresTest {
                     .containsOnly("withdrawn");
             assertThat(cleanup.anonymize(TEACHER)).isZero();   // second withdrawal changes nothing
         }
+    }
+
+    // ------------------------------------------------------------------ account gate (Codex P1, PT-55)
+
+    /** Runs body in a transaction on the pool, signals once body ran, and commits only after release. */
+    private static Future<?> heldTransaction(Runnable body, CountDownLatch ran, CountDownLatch release) {
+        return pool.submit(() -> tx.executeWithoutResult(s -> {
+            body.run();
+            ran.countDown();
+            try {
+                if (!release.await(20, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("test release missing");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
+        }));
+    }
+
+    @Test
+    void creatingPathWaitsForARunningWithdrawalAndThenSeesTheAccountWithdrawn() throws Exception {
+        AccountLocks locks = new AccountLocks(JdbcClient.create(jdbc));
+        AccountCleanup cleanup = new AccountCleanup(JdbcClient.create(jdbc));
+        CountDownLatch ran = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Future<?> withdrawal = heldTransaction(() -> {
+            assertThat(locks.lockForWithdrawal(STUDENT)).isTrue();
+            cleanup.lockHelpSessions(STUDENT);
+            assertThat(cleanup.anonymize(STUDENT)).isEqualTo(1);
+        }, ran, release);
+        assertThat(ran.await(10, TimeUnit.SECONDS)).isTrue();
+
+        Future<Boolean> create = pool.submit(() -> tx.execute(s -> locks.lockActive(STUDENT)));
+        Thread.sleep(700);
+        assertThat(create.isDone()).as("create / join / help request waits for the withdrawal").isFalse();
+        release.countDown();
+        withdrawal.get(20, TimeUnit.SECONDS);
+
+        assertThat(create.get(20, TimeUnit.SECONDS)).as("then sees provider='withdrawn' and is refused").isFalse();
+    }
+
+    @Test
+    void withdrawalWaitsForARunningCreateAndThenFindsItsClassToClose() throws Exception {
+        AccountLocks locks = new AccountLocks(JdbcClient.create(jdbc));
+        AccountCleanup cleanup = new AccountCleanup(JdbcClient.create(jdbc));
+        long created = 90009L;
+        CountDownLatch ran = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Future<?> create = heldTransaction(() -> {
+            assertThat(locks.lockActive(TEACHER)).isTrue();
+            jdbc.update("INSERT INTO study_sessions(id,created_at,updated_at,title,topic,invite_code,owner_id)"
+                    + " VALUES (?,now(),now(),'gate','java','F90009',?)", created, TEACHER);
+        }, ran, release);
+        assertThat(ran.await(10, TimeUnit.SECONDS)).isTrue();
+
+        Future<List<Long>> withdrawal = pool.submit(() -> tx.execute(s -> {
+            assertThat(locks.lockForWithdrawal(TEACHER)).isTrue();
+            cleanup.lockHelpSessions(TEACHER);
+            List<Long> open = cleanup.openOwnedSessionIds(TEACHER);
+            assertThat(cleanup.anonymize(TEACHER)).isEqualTo(1);
+            return open;
+        }));
+        Thread.sleep(700);
+        assertThat(withdrawal.isDone()).as("withdrawal waits for the running create").isFalse();
+        release.countDown();
+        create.get(20, TimeUnit.SECONDS);
+
+        assertThat(withdrawal.get(20, TimeUnit.SECONDS)).contains(SESSION, created);
+    }
+
+    @Test
+    void withdrawalGateDoesNotBlockForeignKeyInserts() throws Exception {
+        AccountLocks locks = new AccountLocks(JdbcClient.create(jdbc));
+        CountDownLatch ran = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Future<?> gate = heldTransaction(() -> assertThat(locks.lockForWithdrawal(STUDENT)).isTrue(), ran, release);
+        assertThat(ran.await(10, TimeUnit.SECONDS)).isTrue();
+        try {
+            // FK check takes FOR KEY SHARE on users, which FOR NO KEY UPDATE allows: no new wait on class-row-first paths
+            pool.submit(() -> tx.executeWithoutResult(s -> store.insertSamples(SESSION, STUDENT, List.of(sample(MINUTE)))))
+                    .get(5, TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            gate.get(20, TimeUnit.SECONDS);
+        }
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM focus_samples WHERE user_id = ?", Long.class, STUDENT))
+                .isEqualTo(1L);
     }
 
     // ------------------------------------------------------------------ retention

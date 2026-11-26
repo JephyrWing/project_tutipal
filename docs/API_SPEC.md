@@ -132,7 +132,7 @@
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/users/me` | 로그인 | — | 200 `UserResponse{id, name, provider, role(ADMIN\|USER)}` | 404 |
 | PATCH | `/api/users/me/name` | 로그인 | `UpdateNameRequest{name}` (`@Valid` 없음, 서비스가 검사) | 200 `UserResponse` | 400 제어문자·1~50자 위반 |
-| DELETE | `/api/users/me` | 로그인 | — | 204. 계정 익명화(provider=`withdrawn`, 이름 `탈퇴한 사용자`, 이메일·소셜 ID 제거), 기록은 모두 보존. 내가 연 진행 중 수업은 종료(`ended`), 내 열린 도움 요청은 DONE(`helpEnded`). 커밋 뒤 그 사용자의 모든 로그인 세션 종료 (PM 2026-11-26, PT-13) | 404 (없거나 이미 탈퇴한 사용자) |
+| DELETE | `/api/users/me` | 로그인 | — | 204. 계정 익명화(provider=`withdrawn`, 이름 `탈퇴한 사용자`, 이메일·소셜 ID 제거), 기록은 모두 보존. 내가 연 진행 중 수업은 종료(`ended`), 내 열린 도움 요청은 DONE(`helpEnded`). 커밋 뒤 그 사용자의 모든 로그인 세션 종료 (PM 2026-11-26, PT-13). 사용자 행을 먼저 잠가 수업 만들기·참가·도움 요청과 직렬화 | 401 같은 클라이언트의 두 번째 요청(첫 탈퇴 커밋 뒤 세션이 끊김), 404 동시에 보낸 요청이 경합해 이미 탈퇴한 계정을 만난 경우 |
 
 ### 2.4 수업 (`/api/sessions`)
 
@@ -140,8 +140,8 @@
 
 | 메서드 | 경로 | 권한 | 요청 | 응답 | 주요 오류 |
 | --- | --- | --- | --- | --- | --- |
-| POST | `/api/sessions` | 로그인(만든 사람 = 교사) | `CreateSessionRequest{title ≤50, topic ≤30}` | 201 `SessionResponse` | 503 초대 코드 생성 실패 |
-| POST | `/api/sessions/join` | 로그인 | `JoinSessionRequest{code ≤20}` | 200 `SessionResponse` | 404 코드 없음, 410 닫힌 방, 429 실패 5회/5분(+`Retry-After`), 409 동시 중복 |
+| POST | `/api/sessions` | 로그인(만든 사람 = 교사) | `CreateSessionRequest{title ≤50, topic ≤30}` | 201 `SessionResponse` | 401 탈퇴한 계정(탈퇴와 겹친 요청), 503 초대 코드 생성 실패 |
+| POST | `/api/sessions/join` | 로그인 | `JoinSessionRequest{code ≤20}` | 200 `SessionResponse` | 401 탈퇴한 계정(탈퇴와 겹친 요청), 404 코드 없음, 410 닫힌 방, 429 실패 5회/5분(+`Retry-After`), 409 동시 중복 |
 | GET | `/api/sessions` | 로그인 | — | 200 `SessionResponse[]` (끝나지 않은 내 수업, 즐겨찾기 먼저) | — |
 | GET | `/api/sessions/{id}` | 참가자 | — | 200 `SessionResponse` | 404 |
 | GET | `/api/sessions/{id}/participants` | 교사 | — | 200 `ParticipantResponse[]{userId, name, role, joinedAt, online}` | 403·404 |
@@ -218,7 +218,7 @@
 | 메서드 | 경로 | 권한 | 요청 | 응답 | 주요 오류 |
 | --- | --- | --- | --- | --- | --- |
 | POST | `/api/sessions/{sessionId}/screenshare/token` | 참가자+활성 (교사=발행+보기, 학생=보기) | — | 200 `JoinInfo` | 503 LiveKit 준비 안 됨, 429 키 1만 개 |
-| POST | `/api/sessions/{sessionId}/help` | 학생+활성 | `CreateHelpRequest{message ≤300, shareScreen}` | 201 `HelpResponse` | 403 교사, 409 열린 요청 있음 |
+| POST | `/api/sessions/{sessionId}/help` | 학생+활성 | `CreateHelpRequest{message ≤300, shareScreen}` | 201 `HelpResponse` | 401 탈퇴한 계정(탈퇴와 겹친 요청), 403 교사, 409 열린 요청 있음 |
 | GET | `/api/sessions/{sessionId}/help` | 참가자+활성 (교사=전체 열린 요청, 학생=내 것) | — | 200 `HelpResponse[]` | — |
 | POST | `/api/help/{helpId}/accept` | 교사 | — | 200 `HelpResponse` | 409 이미 처리·동시 4명 한도 |
 | POST | `/api/help/{helpId}/later` | 교사 | — | 204 (DECLINED) | 409 진행 중은 end로 |

@@ -20,6 +20,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import com.my.tutipal_back.common.exception.ApiException;
 import com.my.tutipal_back.users.dto.SocialProfile;
 import com.my.tutipal_back.users.entity.User;
+import com.my.tutipal_back.users.repository.AccountLocks;
 import com.my.tutipal_back.users.repository.UserRepository;
 
 /**
@@ -30,13 +31,15 @@ import com.my.tutipal_back.users.repository.UserRepository;
 class UserServiceWithdrawnTest {
 
     private UserRepository repository;
+    private AccountLocks locks;
     private UserService service;
     private User withdrawn;
 
     @BeforeEach
     void setup() {
         repository = mock(UserRepository.class);
-        service = new UserService(repository);
+        locks = mock(AccountLocks.class);
+        service = new UserService(repository, locks);
         // the row as AccountCleanup.ANONYMIZE leaves it (was google / social-1 / 가입 이름)
         withdrawn = new User(User.WITHDRAWN_PROVIDER, "12", User.WITHDRAWN_NAME);
         ReflectionTestUtils.setField(withdrawn, "id", 12L);
@@ -98,5 +101,23 @@ class UserServiceWithdrawnTest {
         when(repository.findAllById(List.of(12L, 14L))).thenReturn(List.of(withdrawn, active));
 
         assertThat(service.namesOf(List.of(12L, 14L))).containsEntry(12L, "탈퇴한 사용자").containsEntry(14L, "김학생");
+    }
+
+    @Test
+    void creatingPathsAreRefusedWith401ForAWithdrawnAccount() {
+        when(locks.lockActive(12L)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.lockActiveAccount(12L))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
+    }
+
+    @Test
+    void activeAccountPassesTheGate() {
+        when(locks.lockActive(14L)).thenReturn(true);
+
+        service.lockActiveAccount(14L);
+
+        verify(locks).lockActive(14L);
     }
 }
