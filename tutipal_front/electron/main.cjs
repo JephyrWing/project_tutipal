@@ -3,7 +3,7 @@ const {
   app, BrowserWindow, ipcMain, Menu, nativeImage, powerMonitor, screen, session, shell, Tray,
 } = require('electron')
 const { finishBrowserLogin, startBrowserLogin } = require('./applogin.cjs')
-const { capture, listSources, loadSettings, saveSettings } = require('./screen.cjs')
+const { capture, listSources, loadSettings, saveSettings, targetStatus } = require('./screen.cjs')
 const { chooseShareSource, forwardDraw, installDisplayMediaHandler, showOverlay,
   helpShareSources, prepareHelpShare, setHelpShareVideoSize } = require('./share.cjs')
 const { startBridge } = require('./bridge.cjs')
@@ -281,6 +281,7 @@ if (!app.requestSingleInstanceLock()) {
       return saved
     })
     ipcMain.handle('screen-capture', (event) => (fromOurPage(event) ? capture() : { status: 'off' }))
+    ipcMain.handle('screen-target-status', (event, sourceId) => (fromOurPage(event) ? targetStatus(typeof sourceId === 'string' ? sourceId : undefined) : { status: 'off' }))
     // Only trusted pages can suspend collection around record deletion.
     const reviewDeletions = new Map()
     const reviewDeletionSenders = new Set()

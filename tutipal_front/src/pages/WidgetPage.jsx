@@ -38,12 +38,15 @@ export default function WidgetPage() {
   }
   if (!analysis.current) analysis.current = createScreenAnalysis({
     capture: () => desktop.captureScreen(),
-    describe: async (image, question) => (await screenApi.describe(image, question)).text,
+    describe: async (image, question, signal) => (await screenApi.describe(image, question, signal)).text,
+    checkTarget: (sourceId) => desktop.getScreenTargetStatus(sourceId),
+    onInvalidate: () => { setText(''); setSuggestion(null); setAsking(false); setQuestion(''); setMood('happy') },
     observe: (summary, seconds) => reviewApi.observe(summary, seconds),
     onAnswer: (answer, asked) => { setText(answer); setMood(asked ? 'talk' : 'happy') },
     onSuggestion: setSuggestion,
     onGone: (closed) => {
       setGone(closed)
+      if (!closed) setSettings(null)
       if (closed) { setMood('curious'); setText('보던 창이 닫혔어요. 볼 창을 다시 골라 주세요.') }
     },
     // 멈춘 동안 다음 주기(창을 다시 고른 뒤 · 질문 답을 보여 준 뒤 포함)마다 안내를 다시 띄운다
@@ -77,14 +80,19 @@ export default function WidgetPage() {
   useEffect(() => {
     if (!desktop) return
     let active = true
-    const load = () => desktop.getScreenSettings().then((value) => {
-      if (active) setSettings(value)
-    }, () => undefined)
+    let loadRevision = 0
+    const load = () => {
+      const ownRevision = ++loadRevision
+      return desktop.getScreenSettings().then((value) => {
+        if (active && ownRevision === loadRevision) setSettings(value)
+      }, () => { if (active && ownRevision === loadRevision) setSettings(null) })
+    }
     load()
     desktop.getReviewDeletionState().then(value => { if (active) analysis.current.deletion(value) })
     const unsubscribe = desktop.onScreenSettingsChanged(() => {
       analysis.current.setRunning(false)
       analysis.current.reset()
+      setSettings(null)
       setGone(false)
       load()
     })

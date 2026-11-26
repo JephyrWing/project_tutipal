@@ -46,9 +46,9 @@ for (const stop of ['pause', 'reset', 'delete']) test(`${stop} rejects late anal
   assert.equal(seen.suggestions.at(-1), null)
 })
 test('deletion overlapping observation discards late suggestion and next summary write', async () => {
-  const pending = deferred(); let writes = 0
-  const { engine, seen } = setup({ observe: async () => { writes++; return pending.promise } })
-  const look = engine.look(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+  const pending = deferred(), started = deferred(); let writes = 0
+  const { engine, seen } = setup({ observe: async () => { writes++; started.resolve(); return pending.promise } })
+  const look = engine.look(); await started.promise
   assert.equal(writes, 1)
   engine.deletion(true); await engine.look(); pending.resolve({ suggestion: { id: 99 } }); await look
   assert.equal(writes, 1); assert.equal(seen.suggestions.at(-1), null)
@@ -141,4 +141,79 @@ test('each automatic tick skipped by the quota pause reports onPaused so the not
   await engine.look(); assert.equal(paused, 0)
   clock = 5000; await engine.look('질문'); assert.equal(paused, 0)
   clock = 45_000; await engine.look(); assert.equal(paused, 1)
+})
+
+test('invalidation clears a displayed answer and aborts the request signal', async () => {
+  const pending = deferred(); let signal; let displayed = ''; let invalidations = 0
+  const { engine, seen } = setup({
+    onAnswer: value => { displayed = value },
+    onInvalidate: () => { displayed = ''; invalidations++ },
+    describe: async (_, __, value) => { signal = value; return pending.promise },
+  })
+  displayed = 'previous summary'
+  const work = engine.look(); await Promise.resolve(); await Promise.resolve()
+  engine.setRunning(false)
+  assert.equal(displayed, ''); assert.equal(signal.aborted, true); assert.equal(invalidations, 2)
+  pending.resolve('late'); await work
+  assert.equal(displayed, ''); assert.equal(seen.records.length, 0)
+})
+
+test('new revision starts immediately and old finally cannot unlock it', async () => {
+  const old = deferred(), fresh = deferred(); let calls = 0
+  const { engine, seen } = setup({ describe: () => ++calls === 1 ? old.promise : fresh.promise })
+  const first = engine.look(); await Promise.resolve()
+  engine.reset()
+  const second = engine.look(); await Promise.resolve()
+  assert.equal(calls, 2)
+  old.resolve('stale'); await first
+  await engine.look('duplicate'); assert.equal(calls, 2)
+  fresh.resolve('fresh'); await second
+  assert.deepEqual(seen.answers, ['fresh'])
+  assert.ok(!seen.records.some(([s]) => s === 'stale'))
+})
+
+test('late capture from a replaced window never starts inference', async () => {
+  const old = deferred(); let calls = 0
+  const { engine, seen } = setup({ capture: () => ++calls === 1 ? old.promise : Promise.resolve({status:'ok',image:'new',changed:true}) })
+  const first = engine.look(); engine.reset(); await engine.look()
+  old.resolve({status:'ok',image:'old',changed:true}); await first
+  assert.equal(seen.descriptions, 1); assert.equal(seen.answers.length, 1)
+})
+
+test('closure during inference rejects result before display or recording', async () => {
+  let status = 'ok'
+  const { engine, seen } = setup({ checkTarget: async () => ({status}), describe: async () => { status = 'gone'; return 'closed summary' } })
+  await engine.look(); await engine.look()
+  assert.deepEqual(seen.gone, [true]); assert.deepEqual(seen.answers, []); assert.deepEqual(seen.records, [])
+})
+
+test('automatic tick detects closure even if model has not returned', async () => {
+  const pending = deferred(); let status = 'ok'; let signal
+  const { engine, seen } = setup({ checkTarget: async () => ({status}), describe: (_, __, s) => { signal=s; return pending.promise } })
+  const first = engine.look(); await Promise.resolve()
+  status='gone'; await engine.look()
+  assert.deepEqual(seen.gone,[true]); assert.equal(signal.aborted,true)
+  pending.resolve('late'); await first; assert.deepEqual(seen.answers,[])
+})
+
+test('late target check from a previous revision cannot stop the new target', async () => {
+  const pending = deferred(); let checks = 0
+  const { engine, seen } = setup({ checkTarget: () => ++checks === 1 ? pending.promise : Promise.resolve({status:'ok'}) })
+  const first = engine.look(); await Promise.resolve(); await Promise.resolve()
+  engine.reset(); await engine.look()
+  pending.resolve({status:'gone'}); await first
+  assert.deepEqual(seen.gone,[]); assert.deepEqual(seen.answers,['합성 요약'])
+})
+
+test('target check failure never publishes or records an unchecked answer', async () => {
+  const {engine,seen}=setup({checkTarget:async()=>{throw Error('target unavailable')}})
+  await engine.look(); assert.equal(seen.answers.length,0); assert.equal(seen.records.length,0); assert.equal(seen.errors.length,1)
+})
+
+test('late rejected model cannot replace the new answer with an error', async () => {
+  let reject; const old = new Promise((_,r)=>{reject=r}); let calls=0
+  const {engine,seen}=setup({describe:()=>++calls===1?old:Promise.resolve('new')})
+  const first=engine.look(); await Promise.resolve(); engine.reset(); await engine.look()
+  reject(Error('late failure')); await first
+  assert.deepEqual(seen.answers,['new']); assert.deepEqual(seen.errors,[])
 })

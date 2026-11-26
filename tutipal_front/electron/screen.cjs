@@ -60,7 +60,20 @@ async function capture() {
   const hash = createHash('sha1').update(jpeg).digest('hex')
   const changed = hash !== lastHash
   lastHash = hash
-  return { status: 'ok', image: jpeg.toString('base64'), changed }
+  return { status: 'ok', image: jpeg.toString('base64'), changed, sourceId: settings.sourceId }
 }
 
-module.exports = { loadSettings, saveSettings, listSources, capture }
+/** Check only the selected source's existence; no thumbnail or image is returned. */
+async function targetStatus(expectedSourceId) {
+  const settings = loadSettings()
+  if (!settings.enabled) return { status: 'off' }
+  if (expectedSourceId && settings.sourceId !== expectedSourceId) return { status: 'changed' }
+  const sources = await desktopCapturer.getSources({ types: ['window', 'screen'], thumbnailSize: { width: 0, height: 0 } })
+  const latest = loadSettings()
+  if (!latest.enabled) return { status: 'off' }
+  // The renderer invalidates on settings changes; never confirm a different selection here.
+  if (latest.sourceId !== settings.sourceId) return { status: 'changed' }
+  return { status: sources.some(s => s.id === settings.sourceId) ? 'ok' : 'gone' }
+}
+
+module.exports = { loadSettings, saveSettings, listSources, capture, targetStatus }
