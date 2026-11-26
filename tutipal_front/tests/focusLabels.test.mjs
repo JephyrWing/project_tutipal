@@ -46,6 +46,12 @@ test('the consent text covers purpose, collected items, 30-day retention and wit
   assert.match(CONSENT_TEXT, /창 전환/)
 })
 
-test('the consent text does not list grading or model retraining as a purpose', () => {
-  assert.doesNotMatch(CONSENT_TEXT, /(평가|성적|재학습|모델 학습)(에|을|를)?\s*(사용|활용|반영)(해요|합니다|됩니다|돼요)/)
+// PM decision 2026-11-26: stored rows may be used for the rule-match evaluation (WBS 134), never for retraining
+test('the consent text includes the rule-match evaluation purpose and says no retraining, grading or attendance', () => {
+  assert.ok(CONSENT_TEXT.includes('규칙 일치도'))
+  assert.match(CONSENT_TEXT, /재학습에는 쓰지 않/)
+  assert.match(CONSENT_TEXT, /성적이나 출결에도 쓰지 않/)
+  assert.ok(CONSENT_TEXT.includes('30일'))
+  assert.ok(CONSENT_TEXT.includes('철회'))
+  assert.doesNotMatch(CONSENT_TEXT, /(재학습|모델 학습|성적|출결)(에|을|를)?\s*(사용|활용|반영)(해요|합니다|됩니다|돼요)/)
 })

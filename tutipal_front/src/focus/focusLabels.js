@@ -31,7 +31,9 @@ export function consentText({ retentionDays, maxSampleAgeDays } = {}) {
   const retention = validDays(retentionDays, DEFAULT_RETENTION_DAYS)
   const maxAge = validDays(maxSampleAgeDays, DEFAULT_MAX_SAMPLE_AGE_DAYS)
   return [
-    '목적: 수업 중 선생님과 내가 지금 수업에 집중하고 있는지 참고 상태로 보기 위해서예요. 성적 평가나 모델 재학습에는 쓰지 않아요.',
+    '목적: 수업 중 선생님과 내가 지금 수업에 집중하고 있는지 참고 상태로 보기 위해서예요.',
+    '저장한 프로그램 이름과 1분 기록은 집중도 판정이 정해 둔 규칙과 얼마나 맞는지 확인하는 평가(규칙 일치도)에도 쓸 수 있어요.',
+    '모델 재학습에는 쓰지 않고, 성적이나 출결에도 쓰지 않아요.',
     '모으는 항목: 1분마다 가장 오래 쓴 프로그램의 실행 파일 이름(예: chrome.exe), 입력 없는 시간(초), 창 전환 횟수.',
     '창 제목, 화면 내용, 입력한 글자, 파일 경로는 모으지 않아요. 선생님에게는 프로그램 이름이 아니라 상태(집중 · 자리 비움 등)만 보여요.',
     '수집은 내가 이 수업 화면에서 시작한 동안만 하고, 중지 · 방 나가기 · 수업 종료 · 앱 종료 때 멈춰요.',

@@ -6,7 +6,11 @@ import java.util.Optional;
 
 import com.my.tutipal_back.learning.focus.FocusState;
 
-/** PT-90 storage of focus samples (one per minute), the latest state per student and consents. */
+/**
+ * PT-90 storage of focus samples (one per minute), the latest state per student and consents. Stored exe names and
+ * minutes are used only for the in-class reference state and the rule-match evaluation (WBS 134), never for model
+ * retraining (PM decision 2026-11-26); teachers only ever see states.
+ */
 public interface FocusStore {
 
     record Sample(Instant minuteAt, String exeName, String category, int idleSec, int switchCount) {

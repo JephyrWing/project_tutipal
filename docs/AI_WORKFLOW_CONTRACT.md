@@ -520,6 +520,8 @@ POST /v1/focus/predict      헤더 X-Internal-Key (internal_only만 적용, 모�
 - 보관: `ended_at`이 30일 지난 수업의 samples·states를 매시간 500행씩 삭제. 같은 배치에서 수업 종료 여부와 상관없이 `minute_at`이 `app.focus.max-sample-age-days`(31일 = 30일 + 수업 1일) 지난 samples와 그만큼 갱신 없는 states도 삭제한다(교사가 닫지 않은 수업은 `ended_at`이 없음). 31일은 PM 확인 대상 가정값. 탈퇴 때 `AccountCleanup`이 세 테이블을 먼저 지우고 FK도 ON DELETE CASCADE.
 - 설정 `app.focus.*`: `consent-version` "2026-11-26", `retention-days` 30, `retention-batch-size` 500, `max-sample-age-days` 31, `submit-min-interval` 50s, `stale-after` 3m, `zone` Asia/Seoul, `predict-timeout` 2s. 잘못된 값이면 시작 실패. `GET`·`PUT /api/focus/consent` 응답에 `retentionDays`·`maxSampleAgeDays`·`staleAfterSeconds`가 함께 오고(학생 본인 배지는 마지막 응답이 `staleAfterSeconds`보다 오래되면 "알 수 없음 · 연결 확인 중") 화면은 이 값으로 동의 문구의 보관 기간을 만든다. 그래서 `retention-days`나 `max-sample-age-days`를 바꾸면 문구가 바뀐 것이므로 `consent-version`도 반드시 올린다(기존 동의는 다시 받음).
 
+**사용 목적 (PM 결정 2026-11-26)**: 교사에게는 앱 이름 없이 상태만 보여 준다. 저장한 실행 파일 이름(basename)과 1분 기록은 수업 중 참고 상태 표시와 WBS 134행 규칙 일치도 평가(집중도 판정이 규칙과 얼마나 맞는지)에만 쓰고, 모델 재학습·성적·출결에는 쓰지 않는다. 보관은 그대로(수업 종료 30일, 31일 상한, 탈퇴·철회 즉시 삭제). 동의 문구(`focusLabels.consentText`)에 이 목적이 적혀 있으며, 목적이 바뀌면 `consent-version`을 올린다.
+
 **데스크톱 수집 경계**: `docs/DESKTOP_SECURITY_CHECKS.md`의 "집중도 수집" 행.
 
 **알려진 한계**: 카테고리 표는 서버 한 곳(`FocusCategories`, devdesk 학습 표 + 수업 도구)이며 규칙 일치도 정량 평가·보정은 후속이다. 제출 간격 제한은 서버 메모리라 서버가 여러 대면 대마다 따로 센다. 동의 철회와 제출이 겹치면 동의 행 잠금으로 직렬화된다: 저장이 먼저면 철회가 기다렸다가 그 행까지 지우고, 철회가 먼저면 저장이 403 또는 상태 저장 생략이 된다(실제 PostgreSQL 검사: `./gradlew focusDbTest` = `FocusStorePostgresTest`, CI `review-checks.yml`의 review-db job이 일회용 DB로 실행하고 실행 수 0이면 실패). 학습 표의 공백 있는 이름("league of legends", "winamax poker")과 `+`가 들어간 "notepad++"는 실행 파일 규칙에 맞지 않아 표에서 뺐다(그런 프로그램은 null → other).
