@@ -13,6 +13,8 @@ import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import com.my.tutipal_back.sessions.entity.StudySession;
+
 /**
  * PT-106 ConversationStore on PostgreSQL. The caller owns the transaction; writes lock the conversation row first.
  *
@@ -28,7 +30,7 @@ public class JdbcConversationStore implements ConversationStore {
             + " AND live.deleted_at IS NULL)";
 
     private static final String CONVERSATION_COLUMNS =
-            "id, user_id, session_id, topic, title, message_count, created_at, last_message_at";
+            "id, user_id, session_id, topic, title, message_count, created_at, last_message_at, saved_at";
     private static final String MESSAGE_COLUMNS = "id, conversation_id, role, content, created_at";
     private static final String SUMMARY_COLUMNS =
             "id, conversation_id, text, from_message_id, to_message_id, created_at, superseded_at, invalidated_at";
@@ -38,6 +40,14 @@ public class JdbcConversationStore implements ConversationStore {
     /** A live memory of a live conversation (recall, detail and the 20 cap). */
     private static final String LIVE_MEMORY = " ai_memories.deleted_at IS NULL AND"
             + String.format(LIVE_PARENT, "ai_memories");
+
+    /**
+     * A class conversation's session ended more than its retention ago. A session without ai_retention_days (rows
+     * inserted outside the API; V24 backfilled existing ones) counts as the maximum. {@code ended_at < ?} is implied
+     * by the second condition (days >= 0) and lets the ended_at index narrow the scan.
+     */
+    static final String SESSION_EXPIRED = " s.ended_at IS NOT NULL AND s.ended_at < ? AND s.ended_at"
+            + " + COALESCE(s.ai_retention_days, " + StudySession.MAX_AI_RETENTION_DAYS + ") * INTERVAL '1 day' < ?";
 
     private final JdbcTemplate jdbc;
 
@@ -254,20 +264,56 @@ public class JdbcConversationStore implements ConversationStore {
                 conversationId) > 0;
     }
 
+    @Override
+    public Optional<Conversation> setSaved(long conversationId, Instant savedAt) {
+        if (savedAt == null) {
+            return first(jdbc.query("UPDATE ai_conversations SET saved_at = NULL WHERE id = ? AND deleted_at IS NULL"
+                    + " RETURNING " + CONVERSATION_COLUMNS, JdbcConversationStore::conversation, conversationId));
+        }
+        // saving again keeps the first saved time
+        return first(jdbc.query("UPDATE ai_conversations SET saved_at = COALESCE(saved_at, ?) WHERE id = ?"
+                        + " AND deleted_at IS NULL RETURNING " + CONVERSATION_COLUMNS,
+                JdbcConversationStore::conversation, time(savedAt), conversationId));
+    }
+
     /**
-     * Rows locked by a turn being saved are skipped (SKIP LOCKED), and the outer DELETE re-checks the cutoff so a
-     * conversation whose last_message_at moved past it meanwhile is kept. Soft-deleted conversations are included:
-     * retention removes whatever is older than the cutoff.
+     * Retention A. Rows locked by a turn or a save toggle are skipped (SKIP LOCKED); the outer DELETE re-checks
+     * saved_at so a conversation saved meanwhile is kept. Soft-deleted conversations are included (retention removes
+     * whatever expired); a saved one that the user deleted is left to the deleted purge.
      */
     @Override
-    public int deleteInactiveBefore(Instant cutoff, int limit) {
-        return jdbc.update("DELETE FROM ai_conversations WHERE last_message_at < ? AND id IN (SELECT id"
-                        + " FROM ai_conversations WHERE last_message_at < ? ORDER BY last_message_at, id LIMIT ?"
-                        + " FOR UPDATE SKIP LOCKED)",
+    public int deleteExpiredClassConversations(Instant now, int limit) {
+        return jdbc.update("DELETE FROM ai_conversations WHERE saved_at IS NULL AND id IN (SELECT c.id"
+                        + " FROM ai_conversations c JOIN study_sessions s ON s.id = c.session_id"
+                        + " WHERE c.saved_at IS NULL AND" + SESSION_EXPIRED
+                        + " ORDER BY c.id LIMIT ? FOR UPDATE OF c SKIP LOCKED)",
+                time(now), time(now), limit);
+    }
+
+    /** Retention A: session-scoped memories (saved conversations' too, see the interface). */
+    @Override
+    public int deleteExpiredClassMemories(Instant now, int limit) {
+        return jdbc.update("DELETE FROM ai_memories WHERE id IN (SELECT m.id"
+                        + " FROM ai_memories m JOIN study_sessions s ON s.id = m.session_id"
+                        + " WHERE" + SESSION_EXPIRED
+                        + " ORDER BY m.id LIMIT ? FOR UPDATE OF m SKIP LOCKED)",
+                time(now), time(now), limit);
+    }
+
+    /**
+     * Retention B. Locked rows are skipped and the outer DELETE re-checks the cutoff (a turn saved meanwhile moved
+     * last_message_at) and saved_at. Soft-deleted conversations are included.
+     */
+    @Override
+    public int deleteIdlePersonalConversationsBefore(Instant cutoff, int limit) {
+        return jdbc.update("DELETE FROM ai_conversations WHERE session_id IS NULL AND saved_at IS NULL"
+                        + " AND last_message_at < ? AND id IN (SELECT id FROM ai_conversations"
+                        + " WHERE session_id IS NULL AND saved_at IS NULL AND last_message_at < ?"
+                        + " ORDER BY last_message_at, id LIMIT ? FOR UPDATE SKIP LOCKED)",
                 time(cutoff), time(cutoff), limit);
     }
 
-    /** Same shape as deleteInactiveBefore: locked rows are skipped and the outer DELETE re-checks deleted_at. */
+    /** Locked rows are skipped and the outer DELETE re-checks deleted_at. */
     @Override
     public int purgeDeletedConversationsBefore(Instant cutoff, int limit) {
         return jdbc.update("DELETE FROM ai_conversations WHERE deleted_at < ? AND id IN (SELECT id"
@@ -300,7 +346,7 @@ public class JdbcConversationStore implements ConversationStore {
     private static Conversation conversation(ResultSet rs, int row) throws SQLException {
         return new Conversation(rs.getLong("id"), rs.getLong("user_id"), rs.getObject("session_id", Long.class),
                 rs.getString("topic"), rs.getString("title"), rs.getInt("message_count"), instant(rs, "created_at"),
-                instant(rs, "last_message_at"));
+                instant(rs, "last_message_at"), instant(rs, "saved_at"));
     }
 
     private static Message message(ResultSet rs, int row) throws SQLException {

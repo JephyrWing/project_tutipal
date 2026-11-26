@@ -7,6 +7,7 @@ import java.util.UUID;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
@@ -48,8 +49,17 @@ public final class ConversationDtos {
                                 @Size(max = 1000, message = "기억은 1000자까지 쓸 수 있어요") String text) {
     }
 
+    /** PUT /{id}/saved: true = keep beyond the retention period ("저장"), false = follow it again. */
+    public record SaveRequest(@NotNull(message = "saved 값을 보내 주세요") Boolean saved) {
+    }
+
+    /** Response of the save toggle. savedAt: first time it was saved, null when not saved. */
+    public record SavedState(String id, boolean saved, Instant savedAt) {
+    }
+
+    /** saved / savedAt: the owner's "저장" (kept beyond retention). */
     public record ListItem(String id, String topic, String title, String sessionId, int messageCount,
-                           Instant lastMessageAt) {
+                           Instant lastMessageAt, boolean saved, Instant savedAt) {
     }
 
     /** nextCursor: opaque, null on the last page. */
@@ -63,7 +73,8 @@ public final class ConversationDtos {
     }
 
     public record Detail(String id, String topic, String title, String sessionId, int messageCount, Instant createdAt,
-                         Instant lastMessageAt, SummaryView summary, List<MemoryView> memories) {
+                         Instant lastMessageAt, SummaryView summary, List<MemoryView> memories, boolean saved,
+                         Instant savedAt) {
     }
 
     public record MessageView(String id, String role, String content, Instant createdAt) {

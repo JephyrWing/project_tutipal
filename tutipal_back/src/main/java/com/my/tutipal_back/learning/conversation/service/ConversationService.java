@@ -146,6 +146,22 @@ public class ConversationService {
         store.softDeleteConversation(c.id(), clock.instant());
     }
 
+    /**
+     * PT-13 결정 C: the owner marks ("저장") or unmarks a conversation. A saved conversation is skipped by both
+     * retention periods and kept until the user deletes it; unmarking makes it follow retention again (an already
+     * expired one goes at the next hourly run). Someone else's, missing or deleted conversation is 404. Locks the
+     * live row first, so the retention DELETE (FOR UPDATE SKIP LOCKED + saved_at re-check) and this cannot cross.
+     * Allowed in an ended session too (that is when it matters).
+     */
+    @Transactional
+    public ConversationDtos.SavedState setSaved(long userId, long conversationId, boolean saved) {
+        ConversationStore.Conversation c = store.lockOwned(userId, conversationId)
+                .orElseThrow(ConversationService::notFound);
+        ConversationStore.Conversation updated = store.setSaved(c.id(), saved ? clock.instant() : null)
+                .orElseThrow(ConversationService::notFound);
+        return new ConversationDtos.SavedState(String.valueOf(updated.id()), updated.saved(), updated.savedAt());
+    }
+
     /** At most 20 memories per (user, scope). Text is what the user wrote (the screen pre-fills it). */
     @Transactional
     public ConversationDtos.MemoryView saveMemory(long userId, long conversationId, String text) {
@@ -364,7 +380,7 @@ public class ConversationService {
 
     private static ConversationDtos.ListItem item(ConversationStore.Conversation c) {
         return new ConversationDtos.ListItem(String.valueOf(c.id()), c.topic(), c.title(), id(c.sessionId()),
-                c.messageCount(), c.lastMessageAt());
+                c.messageCount(), c.lastMessageAt(), c.saved(), c.savedAt());
     }
 
     private static ConversationDtos.Detail detail(ConversationStore.Conversation c, ConversationStore.Summary summary,
@@ -373,7 +389,7 @@ public class ConversationService {
                 : new ConversationDtos.SummaryView(summary.text(), summary.createdAt());
         return new ConversationDtos.Detail(String.valueOf(c.id()), c.topic(), c.title(), id(c.sessionId()),
                 c.messageCount(), c.createdAt(), c.lastMessageAt(), view,
-                memories.stream().map(ConversationService::memory).toList());
+                memories.stream().map(ConversationService::memory).toList(), c.saved(), c.savedAt());
     }
 
     private static ConversationDtos.MemoryView memory(ConversationStore.Memory m) {
