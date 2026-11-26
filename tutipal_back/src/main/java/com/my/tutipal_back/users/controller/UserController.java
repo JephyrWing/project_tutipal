@@ -43,13 +43,19 @@ public class UserController {
         return userService.updateName(Long.valueOf(principal.getName()), request.name());
     }
 
-    /** 회원 탈퇴 (FR-MY-02). 기록을 지운 뒤(커밋 완료) 지금 로그인 세션을 끊는다. */
+    /** 회원 탈퇴 (FR-MY-02). 계정을 익명화하고(기록은 보존) 커밋 뒤 이 사용자의 모든 로그인 세션을 끊는다. 이미 탈퇴했으면 404. */
     @DeleteMapping("/me")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void withdraw(@AuthenticationPrincipal OAuth2User principal, HttpServletRequest request) {
         withdrawalService.withdraw(Long.valueOf(principal.getName()));
         HttpSession session = request.getSession(false);
-        if (session != null) session.invalidate();
+        if (session != null) {
+            try {
+                session.invalidate();
+            } catch (IllegalStateException alreadyEndedByWithdrawal) {
+                // 탈퇴 처리(커밋 후)가 이 세션도 이미 끊었다.
+            }
+        }
         SecurityContextHolder.clearContext();
     }
 }

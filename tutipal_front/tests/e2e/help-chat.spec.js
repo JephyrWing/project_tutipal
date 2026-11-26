@@ -99,7 +99,8 @@ test('PT96 내보내기·재참가 후 새 도움·수업 종료 접근 회수',
   expect((await api(student,nextPath)).status).toBe(410);expect((await api(teacher,nextPath)).status).toBe(410)
 })
 
-test('PT96 학생 탈퇴 시 대화도 정리하고 다른 도움은 보존',async({apps})=>{
+// PM 2026-11-26 (PT-13): withdrawal anonymizes the account and keeps records; the open help is closed (410), not deleted
+test('PT96 학생 탈퇴 시 도움은 종료되고 기록과 다른 도움은 보존',async({apps})=>{
   const {teacher,student,other,room,path}=await accepted(apps,'PT96 탈퇴 정리',{third:true})
   expect((await api(student,path,'POST',{clientMessageId:crypto.randomUUID(),text:'학생 탈퇴 전'})).status).toBe(200)
   const another=await api(other,`/api/sessions/${room.id}/help`,'POST',{message:'보존 도움',shareScreen:false})
@@ -107,16 +108,17 @@ test('PT96 학생 탈퇴 시 대화도 정리하고 다른 도움은 보존',asy
   const otherPath=`/api/help/${another.body.id}/messages`
   expect((await api(other,otherPath,'POST',{clientMessageId:crypto.randomUUID(),text:'보존 메시지'})).status).toBe(200)
   expect((await api(student,'/api/users/me','DELETE')).status).toBe(204)
-  expect((await api(teacher,path)).status).toBe(404)
+  expect((await api(teacher,path)).status).toBe(410)
   expect((await api(teacher,otherPath)).body.items.map(m=>m.text)).toEqual(['보존 메시지'])
   expect((await api(teacher,'/api/users/me')).status).toBe(200)
 })
 
-test('PT96 소유 교사 탈퇴의 수업 삭제 시 메시지 FK 정리',async({apps})=>{
+test('PT96 소유 교사 탈퇴 시 수업은 종료되고 기록은 보존',async({apps})=>{
   const {teacher,student,path,room}=await accepted(apps,'PT96 소유 수업 정리')
-  expect((await api(student,path,'POST',{clientMessageId:crypto.randomUUID(),text:'수업 삭제 전'})).status).toBe(200)
+  expect((await api(student,path,'POST',{clientMessageId:crypto.randomUUID(),text:'교사 탈퇴 전'})).status).toBe(200)
   expect((await api(teacher,'/api/users/me','DELETE')).status).toBe(204)
-  expect((await api(student,path)).status).toBe(404)
-  expect((await api(student,`/api/sessions/${room.id}`)).status).toBe(404)
+  expect((await api(student,path)).status).toBe(410)
+  const session=await api(student,`/api/sessions/${room.id}`)
+  expect(session.status).toBe(200);expect(session.body.ended).toBe(true)
   expect((await api(student,'/api/users/me')).status).toBe(200)
 })

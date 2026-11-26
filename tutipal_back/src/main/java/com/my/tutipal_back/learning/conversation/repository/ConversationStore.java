@@ -12,8 +12,9 @@ import java.util.UUID;
  *
  * <p>삭제: 사용자가 지운 대화 · 기억은 deleted_at 만 채운다 (soft delete). 아래 조회는 모두 살아 있는 것만 본다:
  * 지운 대화는 소유자 조회 · 잠금 · 목록에 없고, 그 대화의 메시지 · 요약 · 기억도 조회되지 않는다 (없는 것과 같다).
- * 물리 삭제는 유예 기간 뒤 purgeDeleted* 와 보관 기간 작업(deleteExpired* / deleteIdlePersonal*), 탈퇴 · 수업 삭제
- * (FK CASCADE)뿐이다. 보관 기간 작업은 저장(saved_at)한 대화를 지우지 않는다.
+ * 물리 삭제는 유예 기간 뒤 purgeDeleted* 와 보관 기간 작업(deleteExpired* / deleteIdlePersonal*), 수업 삭제
+ * (FK CASCADE)뿐이다. 회원 탈퇴는 users 행을 익명화만 하므로(PM 2026-11-26) 대화는 남는다.
+ * 보관 기간 작업은 저장(saved_at)한 대화를 지우지 않는다.
  */
 public interface ConversationStore {
 

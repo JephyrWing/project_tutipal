@@ -12,7 +12,8 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * <p>보관 기간 (PT-13 PM 결정 2026-11-26). 수업 대화는 수업마다 선생님이 정한 study_sessions.ai_retention_days
  * (수업 종료 뒤 0..90일)로 지우므로 여기 설정이 없다. personalRetentionDays: 개인 대화(session_id 없음)를 마지막 활동
  * (last_message_at, 메시지가 없으면 만든 시각) 뒤 N일이 지나면 (사용자가 지운 것 포함) 물리 삭제한다. 기본 30, 1 이상.
- * "저장"한 대화(saved_at)는 두 보관 기간 모두에서 빠진다. retentionBatchSize: 한 번에 지우는 행 수
+ * "저장"한 대화(saved_at)는 두 보관 기간 모두에서 빠진다. 회원 탈퇴는 계정만 익명화하고 대화는 남긴다 (PM 2026-11-26).
+ * retentionBatchSize: 한 번에 지우는 행 수
  * (보관 기간 작업과 삭제 유예 작업이 같이 쓴다).
  *
  * <p>deletedPurgeDays: 사용자가 지운 대화 · 기억(deleted_at)을 N일 뒤 물리 삭제한다. 기본 30 (저장한 대화도 같음).
