@@ -72,9 +72,11 @@ public class UserService {
                 || normalized.codePoints().anyMatch(Character::isISOControl)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "이름은 제어문자 없이 1~50자로 입력해 주세요");
         }
-        User user = getUser(userId);
-        user.rename(normalized);
-        return UserResponse.from(user);
+        // name-only UPDATE: never a full-row flush of a stale entity over a committed withdrawal (Codex P1-1)
+        if (accountLocks.renameIfActive(userId, normalized) == 0) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "탈퇴했거나 없는 계정이에요. 다시 로그인해 주세요");
+        }
+        return getMe(userId);
     }
 
     /** 다른 도메인(세션 참가자 목록 등)용: id → 이름. */

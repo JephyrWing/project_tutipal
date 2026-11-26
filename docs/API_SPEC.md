@@ -110,7 +110,7 @@
 | --- | --- | --- | --- | --- | --- |
 | GET | `/auth/app/start` | 공개 | query `provider`(google·naver·kakao, dev-login 시 `dev`), `challenge`(base64url 43자) | 302 → `/oauth2/authorization/{provider}` (dev: `/auth/app/done?code=`) | 400 잘못된 challenge·provider |
 | GET | `/auth/app/done` | 공개 | query `code`(선택) | 200 HTML (딥링크 `tutipal://` 열기) | — |
-| POST | `/api/auth/app/exchange` | 공개, **CSRF 예외**, Origin 검사 | `ExchangeRequest{code ≤64, verifier ≤128}` | 200 `{name}` + `TUTIPAL_SESSION` 쿠키 | 401 코드 만료·불일치, 429 대기 코드 1만 개 |
+| POST | `/api/auth/app/exchange` | 공개, **CSRF 예외**, Origin 검사 | `ExchangeRequest{code ≤64, verifier ≤128}` | 200 `{name}` + `TUTIPAL_SESSION` 쿠키 | 401 코드 만료·불일치 또는 탈퇴한 계정(코드 발급 뒤 탈퇴, 계정별 잠금 안에서 재확인), 429 대기 코드 1만 개 |
 | GET | `/api/auth/csrf` | 공개 | — | 200 `{token, headerName}` + `XSRF-TOKEN` 쿠키 | — |
 | GET | `/api/auth/providers` | 공개 | — | 200 `string[]` (등록된 OAuth 제공자 id) | — |
 | GET | `/api/auth/config` | 공개 | — | 200 `{devLogin: boolean, providers: string[]}` | — |
@@ -131,7 +131,7 @@
 | 메서드 | 경로 | 권한 | 요청 | 응답 | 주요 오류 |
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/users/me` | 로그인 | — | 200 `UserResponse{id, name, provider, role(ADMIN\|USER)}` | 404 |
-| PATCH | `/api/users/me/name` | 로그인 | `UpdateNameRequest{name}` (`@Valid` 없음, 서비스가 검사) | 200 `UserResponse` | 400 제어문자·1~50자 위반 |
+| PATCH | `/api/users/me/name` | 로그인 | `UpdateNameRequest{name}` (`@Valid` 없음, 서비스가 검사) | 200 `UserResponse` (이름 컬럼만 UPDATE) | 400 제어문자·1~50자 위반, 401 탈퇴했거나 없는 계정(탈퇴와 겹친 요청 포함) |
 | DELETE | `/api/users/me` | 로그인 | — | 204. 계정 익명화(provider=`withdrawn`, 이름 `탈퇴한 사용자`, 이메일·소셜 ID 제거), 기록은 모두 보존. 내가 연 진행 중 수업은 종료(`ended`), 내 열린 도움 요청은 DONE(`helpEnded`). 커밋 뒤 그 사용자의 모든 로그인 세션 종료 (PM 2026-11-26, PT-13). 사용자 행을 먼저 잠가 수업 만들기·참가·도움 요청과 직렬화 | 401 같은 클라이언트의 두 번째 요청(첫 탈퇴 커밋 뒤 세션이 끊김), 404 동시에 보낸 요청이 경합해 이미 탈퇴한 계정을 만난 경우 |
 
 ### 2.4 수업 (`/api/sessions`)

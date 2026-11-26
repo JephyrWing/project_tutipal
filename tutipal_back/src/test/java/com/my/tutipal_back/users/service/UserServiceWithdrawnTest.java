@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -87,11 +88,16 @@ class UserServiceWithdrawnTest {
                 .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
+    /** Codex P1-1: the name-only UPDATE skips a withdrawn row (also when the withdrawal committed while it waited). */
     @Test
-    void renamingAWithdrawnUserIs404() {
+    void renamingAWithdrawnUserIs401AndChangesNothing() {
+        when(locks.renameIfActive(12L, "새 이름")).thenReturn(0);
+
         assertThatThrownBy(() -> service.updateName(12L, "새 이름"))
-                .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
         assertThat(withdrawn.getName()).isEqualTo(User.WITHDRAWN_NAME);
+        verify(repository, never()).save(any());
     }
 
     @Test

@@ -431,6 +431,74 @@ class FocusStorePostgresTest {
         assertThat(withdrawal.get(20, TimeUnit.SECONDS)).contains(SESSION, created);
     }
 
+    /** Codex P1-1: a rename racing a withdrawal never brings back the old provider / provider_id / name. */
+    @Test
+    void renameWaitingForAWithdrawalUpdatesNothingAndKeepsTheAnonymizedRow() throws Exception {
+        AccountLocks locks = new AccountLocks(JdbcClient.create(jdbc));
+        AccountCleanup cleanup = new AccountCleanup(JdbcClient.create(jdbc));
+        CountDownLatch ran = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Future<?> withdrawal = heldTransaction(() -> {
+            assertThat(locks.lockForWithdrawal(STUDENT)).isTrue();
+            assertThat(cleanup.anonymize(STUDENT)).isEqualTo(1);
+        }, ran, release);
+        assertThat(ran.await(10, TimeUnit.SECONDS)).isTrue();
+
+        Future<Integer> rename = pool.submit(() -> tx.execute(s -> locks.renameIfActive(STUDENT, "새 이름")));
+        Thread.sleep(700);
+        assertThat(rename.isDone()).as("rename waits for the withdrawal row lock").isFalse();
+        release.countDown();
+        withdrawal.get(20, TimeUnit.SECONDS);
+
+        assertThat(rename.get(20, TimeUnit.SECONDS)).isZero();
+        assertThat(jdbc.queryForObject("SELECT provider || '/' || provider_id || '/' || name FROM users WHERE id = ?",
+                String.class, STUDENT)).isEqualTo("withdrawn/" + STUDENT + "/탈퇴한 사용자");
+        assertThat(locks.isActive(STUDENT)).isFalse();
+    }
+
+    @Test
+    void renameBeforeAWithdrawalIsOverwrittenByTheAnonymization() throws Exception {
+        AccountLocks locks = new AccountLocks(JdbcClient.create(jdbc));
+        AccountCleanup cleanup = new AccountCleanup(JdbcClient.create(jdbc));
+        CountDownLatch ran = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Future<?> rename = heldTransaction(() -> assertThat(locks.renameIfActive(STUDENT, "새 이름")).isEqualTo(1),
+                ran, release);
+        assertThat(ran.await(10, TimeUnit.SECONDS)).isTrue();
+
+        Future<?> withdrawal = pool.submit(() -> tx.executeWithoutResult(s -> {
+            assertThat(locks.lockForWithdrawal(STUDENT)).isTrue();
+            assertThat(cleanup.anonymize(STUDENT)).isEqualTo(1);
+        }));
+        Thread.sleep(700);
+        assertThat(withdrawal.isDone()).as("withdrawal waits for the rename").isFalse();
+        release.countDown();
+        rename.get(20, TimeUnit.SECONDS);
+        withdrawal.get(20, TimeUnit.SECONDS);
+
+        assertThat(jdbc.queryForObject("SELECT name FROM users WHERE id = ?", String.class, STUDENT))
+                .isEqualTo("탈퇴한 사용자");
+    }
+
+    @Test
+    void concurrentRenamesOfTheSameUserDoNotDeadlock() throws Exception {
+        AccountLocks locks = new AccountLocks(JdbcClient.create(jdbc));
+        CyclicBarrier start = new CyclicBarrier(2);
+        List<Future<Integer>> runs = List.of(
+                pool.submit(() -> {
+                    start.await(10, TimeUnit.SECONDS);
+                    return tx.execute(s -> locks.renameIfActive(STUDENT, "이름 A"));
+                }),
+                pool.submit(() -> {
+                    start.await(10, TimeUnit.SECONDS);
+                    return tx.execute(s -> locks.renameIfActive(STUDENT, "이름 B"));
+                }));
+        for (Future<Integer> run : runs) {
+            assertThat(run.get(20, TimeUnit.SECONDS)).isEqualTo(1);
+        }
+        assertThat(locks.isActive(STUDENT)).isTrue();
+    }
+
     @Test
     void withdrawalGateDoesNotBlockForeignKeyInserts() throws Exception {
         AccountLocks locks = new AccountLocks(JdbcClient.create(jdbc));

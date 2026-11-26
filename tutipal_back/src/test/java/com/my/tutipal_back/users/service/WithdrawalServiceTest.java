@@ -4,14 +4,21 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
@@ -33,7 +40,7 @@ class WithdrawalServiceTest {
     private final AccountCleanup cleanup = mock(AccountCleanup.class);
     private final StudySessionService studySessions = mock(StudySessionService.class);
     private final ScreenShareService helps = mock(ScreenShareService.class);
-    private final ActiveSessions sessions = mock(ActiveSessions.class);
+    private final ActiveSessions sessions = spy(new ActiveSessions());   // real per-account lock
     private final WithdrawalService service = new WithdrawalService(locks, cleanup, studySessions, helps, sessions);
 
     private void withdrawAndCommit(Long userId) {
@@ -67,7 +74,39 @@ class WithdrawalServiceTest {
 
         InOrder order = inOrder(cleanup, sessions);
         order.verify(cleanup).anonymize(7L);
+        order.verify(sessions).exclusiveForUser(eq(7L), any());
         order.verify(sessions).invalidateUser(7L);
+    }
+
+    /** Codex P1-2: invalidation after commit takes the same per-account lock as SessionLogin. */
+    @Test
+    void invalidationAfterCommitWaitsForTheUsersRunningLogin() throws Exception {
+        when(locks.lockForWithdrawal(7L)).thenReturn(true);
+        when(cleanup.anonymize(7L)).thenReturn(1);
+        CountDownLatch loginHolding = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> login = pool.submit(() -> sessions.exclusiveForUser(7L, () -> {
+                loginHolding.countDown();
+                try {
+                    release.await(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            assertThat(loginHolding.await(5, TimeUnit.SECONDS)).isTrue();
+            Future<?> withdrawal = pool.submit(() -> withdrawAndCommit(7L));
+            Thread.sleep(200);
+            verify(sessions, never()).invalidateUser(7L);
+            assertThat(withdrawal.isDone()).as("invalidation waits for the login in progress").isFalse();
+            release.countDown();
+            login.get(5, TimeUnit.SECONDS);
+            withdrawal.get(5, TimeUnit.SECONDS);
+        } finally {
+            pool.shutdownNow();
+        }
+        verify(sessions).invalidateUser(7L);
     }
 
     @Test

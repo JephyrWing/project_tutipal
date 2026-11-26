@@ -54,14 +54,20 @@ class UserNameWebTest {
 
     @Autowired WebApplicationContext context;
     @Autowired UserRepository repository;
+    @Autowired AccountLocks locks;
     MockMvc mvc;
     User owner;
 
     @BeforeEach
     void setup() {
-        reset(repository);
+        reset(repository, locks);
         owner = new User("google", "owner", "기존 이름");
         ReflectionTestUtils.setField(owner, "id", 12L);
+        // name-only SQL update (AccountLocks.renameIfActive), applied to the mocked row
+        when(locks.renameIfActive(eq(12L), anyString())).thenAnswer(call -> {
+            ReflectionTestUtils.setField(owner, "name", call.getArgument(1));
+            return 1;
+        });
         when(repository.findById(12L)).thenReturn(Optional.of(owner));
         mvc = MockMvcBuilders.webAppContextSetup(context)
                 .addFilters(context.getBean("springSecurityFilterChain", Filter.class)).build();

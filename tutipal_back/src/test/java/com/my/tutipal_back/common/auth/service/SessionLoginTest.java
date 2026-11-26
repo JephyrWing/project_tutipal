@@ -1,17 +1,23 @@
 package com.my.tutipal_back.common.auth.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import jakarta.servlet.http.HttpSessionEvent;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.mock.web.MockHttpSession;
@@ -22,13 +28,27 @@ import org.springframework.security.core.context.SecurityContextImpl;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.my.tutipal_back.common.exception.ApiException;
 import com.my.tutipal_back.users.entity.User;
+import com.my.tutipal_back.users.repository.AccountLocks;
 
-/** 한 계정당 기기 1대: 새 로그인이 같은 계정의 이전 기기 세션을 끊는다 (PT-13, 2026-11-26). */
+/**
+ * 한 계정당 기기 1대: 새 로그인이 같은 계정의 이전 기기 세션을 끊는다 (PT-13, 2026-11-26).
+ * 회원 탈퇴와의 경합(Codex P1-2, PT-55): 계정별 잠금 안에서 계정이 활성인지 다시 확인한다.
+ */
 class SessionLoginTest {
 
+    /** DB 상태 대신: true = 활성, false = 탈퇴가 커밋됨. */
+    private final AtomicBoolean active = new AtomicBoolean(true);
+    private final AccountLocks accounts = accounts(active);
     private final ActiveSessions activeSessions = new ActiveSessions();
-    private final SessionLogin sessionLogin = new SessionLogin(activeSessions);
+    private final SessionLogin sessionLogin = new SessionLogin(activeSessions, accounts);
+
+    private static AccountLocks accounts(AtomicBoolean active) {
+        AccountLocks accounts = mock(AccountLocks.class);
+        when(accounts.isActive(anyLong())).thenAnswer(call -> active.get());
+        return accounts;
+    }
 
     @AfterEach
     void clear() {
@@ -71,7 +91,7 @@ class SessionLoginTest {
     void concurrentLoginsOfTheSameUserLeaveExactlyOneSession() throws Exception {
         for (int round = 0; round < 50; round++) {
             ActiveSessions registry = new ActiveSessions();
-            SessionLogin login = new SessionLogin(registry);
+            SessionLogin login = new SessionLogin(registry, accounts);
             MockHttpServletRequest first = requestWithRegisteredSession(registry, "a" + round);
             MockHttpServletRequest second = requestWithRegisteredSession(registry, "b" + round);
             MockHttpSession firstSession = (MockHttpSession) first.getSession(false);
@@ -123,5 +143,88 @@ class SessionLoginTest {
         assertThat(current).isSameAs(existing);
         assertThat(current.getId()).isNotEqualTo("same-device");
         assertThat(current.isInvalid()).isFalse();
+    }
+
+    // ------------------------------------------------------------------ withdrawal race (Codex P1-2)
+
+    /** WithdrawalService after commit: invalidate inside the same per-account lock. */
+    private void withdrawalCommittedAndInvalidated(long userId) {
+        active.set(false);
+        activeSessions.exclusiveForUser(userId, () -> activeSessions.invalidateUser(userId));
+    }
+
+    private static MockHttpServletRequest registeredRequest(ActiveSessions registry, String id) {
+        return requestWithRegisteredSession(registry, id);
+    }
+
+    @Test
+    void loginThatSavedItsSessionFirstIsEndedByTheWithdrawalInvalidation() {
+        MockHttpServletRequest request = registeredRequest(activeSessions, "login-first");
+
+        sessionLogin.login(user(7), request, new MockHttpServletResponse());
+        MockHttpSession session = (MockHttpSession) request.getSession(false);
+        assertThat(session.isInvalid()).isFalse();
+        withdrawalCommittedAndInvalidated(7);
+
+        assertThat(session.isInvalid()).isTrue();
+    }
+
+    @Test
+    void loginWaitingBehindTheWithdrawalInvalidationIsRefusedWith401() throws Exception {
+        MockHttpServletRequest request = registeredRequest(activeSessions, "login-second");
+        CountDownLatch holding = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> withdrawal = pool.submit(() -> activeSessions.exclusiveForUser(7L, () -> {
+                active.set(false);   // already committed
+                activeSessions.invalidateUser(7L);
+                holding.countDown();
+                await(release);
+            }));
+            assertThat(holding.await(5, TimeUnit.SECONDS)).isTrue();
+            Future<?> login = pool.submit(() -> sessionLogin.login(user(7), request, new MockHttpServletResponse()));
+            Thread.sleep(200);
+            assertThat(login.isDone()).as("login waits for the per-account lock").isFalse();
+            release.countDown();
+            withdrawal.get(5, TimeUnit.SECONDS);
+
+            assertThatThrownBy(() -> login.get(5, TimeUnit.SECONDS))
+                    .hasCauseInstanceOf(ApiException.class)
+                    .satisfies(e -> assertThat(((ApiException) e.getCause()).getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
+        } finally {
+            pool.shutdownNow();
+        }
+        MockHttpSession session = (MockHttpSession) request.getSession(false);
+        assertThat(session.getAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY))
+                .as("no login saved").isNull();
+    }
+
+    @Test
+    void loginDuringAnUncommittedWithdrawalIsEndedOnceItCommits() {
+        MockHttpServletRequest request = registeredRequest(activeSessions, "login-during");
+
+        // withdrawal transaction still open: the account still reads as active
+        sessionLogin.login(user(7), request, new MockHttpServletResponse());
+        MockHttpSession session = (MockHttpSession) request.getSession(false);
+        assertThat(session.isInvalid()).isFalse();
+        withdrawalCommittedAndInvalidated(7);
+
+        assertThat(session.isInvalid()).isTrue();
+    }
+
+    @Test
+    void withdrawnAccountIsRefusedWithoutEndingOtherSessionsOrKeepingAContext() {
+        MockHttpSession otherDevice = loggedInElsewhere("other-device", 7);
+        active.set(false);
+        MockHttpServletRequest request = new MockHttpServletRequest();
+
+        assertThatThrownBy(() -> sessionLogin.login(user(7), request, new MockHttpServletResponse()))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
+        assertThat(SecurityContextHolder.getContext().getAuthentication()).isNull();
+        assertThat(request.getSession(false).getAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY))
+                .isNull();
+        assertThat(otherDevice.isInvalid()).as("withdrawal itself ends it, not the refused login").isFalse();
     }
 }

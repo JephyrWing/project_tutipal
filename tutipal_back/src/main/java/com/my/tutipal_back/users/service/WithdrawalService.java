@@ -58,10 +58,12 @@ public class WithdrawalService {
         helps.closeOpenHelpsOf(userId);
         // 위 잠금이 동시 탈퇴를 직렬화하므로 0행은 생기지 않아야 한다. 생기면 404 로 롤백 (안전망)
         if (cleanup.anonymize(userId) == 0) throw notFound();
-        AfterCommit.run(() -> {
+        // same per-account lock as SessionLogin: a login that saved its session first is ended here, a later one
+        // re-checks the account inside the lock and is refused (Codex P1-2)
+        AfterCommit.run(() -> sessions.exclusiveForUser(userId, () -> {
             int ended = sessions.invalidateUser(userId);
             if (ended > 0) log.info("탈퇴 사용자 로그인 세션 {}개 종료", ended);
-        });
+        }));
     }
 
     private static ApiException notFound() {

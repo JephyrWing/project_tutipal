@@ -1,5 +1,7 @@
 package com.my.tutipal_back.users.entity;
 
+import org.hibernate.annotations.DynamicUpdate;
+
 import com.my.tutipal_back.common.support.BaseTimeEntity;
 
 import jakarta.persistence.Column;
@@ -12,7 +14,12 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
+/**
+ * 계정. 이름 변경과 탈퇴 익명화는 SQL 로만 바꾼다 (AccountLocks.renameIfActive, AccountCleanup.anonymize).
+ * {@code @DynamicUpdate}: 나중에 엔티티를 고치는 코드가 생겨도 바뀐 컬럼만 써서, 오래된 엔티티가 익명화된 provider 를 되살리지 않게.
+ */
 @Entity
+@DynamicUpdate
 @Table(name = "users", uniqueConstraints = @UniqueConstraint(columnNames = {"provider", "providerId"}))
 public class User extends BaseTimeEntity {
 
@@ -48,11 +55,6 @@ public class User extends BaseTimeEntity {
         this.providerId = providerId;
         this.name = name;
         this.role = Role.USER;      // 선생님/학생은 세션마다 정해짐 (studysession)
-    }
-
-    /** 앱 표시 이름. 소셜 로그인은 최초 가입 이후 이 값을 덮어쓰지 않는다. */
-    public void rename(String name) {
-        this.name = name;
     }
 
     /** 회원 탈퇴로 익명화된 계정. 없는 사용자처럼 다룬다 (PM 2026-11-26, PT-13). */
