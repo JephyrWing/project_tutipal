@@ -24,18 +24,18 @@ import org.springframework.web.util.UriComponentsBuilder;
 @Configuration
 @EnableWebSocket
 public class LiveKitProxy implements WebSocketConfigurer {
-    private record Pair(WebSocketSession client, WebSocketSession upstream, LiveKitAccess.Access access) {}
+    record Pair(WebSocketSession client, WebSocketSession upstream, LiveKitAccess.Access access) {}
     private final LiveKitAccess access;
     private final String internal;
     @Value("${app.allowed-origins:http://127.0.0.1:[*],http://localhost:[*]}") private String[] allowedOrigins;
     private final LiveKitAdmin admin;
-    private record Removal(String room,String identity) {}
+    record Removal(String room,String identity) {}
     private final ConcurrentHashMap<String,Removal> pendingRemovals=new ConcurrentHashMap<>();
     private final java.util.Set<String> removing=ConcurrentHashMap.newKeySet();
     private final java.util.concurrent.ExecutorService removalWorker=Executors.newFixedThreadPool(2,r->{
         Thread t=new Thread(r,"livekit-participant-remove");t.setDaemon(true);return t;
     });
-    private final ConcurrentHashMap<String,Pair> pairs=new ConcurrentHashMap<>();
+    final ConcurrentHashMap<String,Pair> pairs=new ConcurrentHashMap<>();
     private final java.util.concurrent.ScheduledExecutorService monitor=Executors.newSingleThreadScheduledExecutor(r->{
         Thread t=new Thread(r,"livekit-session-check"); t.setDaemon(true); return t;
     });
@@ -99,12 +99,24 @@ public class LiveKitProxy implements WebSocketConfigurer {
         });
         pendingRemovals.forEach(this::queueRemoval);
     }
-    private void revoke(Pair p) {
-        String room=p.access().help() ? "" : "session-"+p.access().target()+"-class";
-        if(p.access().help()) {
-            // 활성 매핑에는 최초 검증에서 확정된 방 이름을 저장한다.
-            room=(String)p.client().getAttributes().get("room");
+    private static String roomOf(Pair p) {
+        // 도움 방은 활성 매핑에 최초 검증에서 확정된 방 이름을 저장한다.
+        return p.access().help() ? (String)p.client().getAttributes().get("room") : "session-"+p.access().target()+"-class";
+    }
+    /**
+     * 같은 방 · 같은 사용자(identity u&lt;userId&gt;)로 아직 유효한 중계가 있으면 true. 한 계정당 기기 1대라 새 기기로 로그인하면
+     * 이전 기기 세션이 끊기는데, 그 정리(RemoveParticipant)가 identity 로만 지우면 이미 들어온 새 기기를 내보낸다. LiveKit 은 같은
+     * identity 로 새 참가자가 들어오면 이전 참가자를 스스로 끊으므로, 이 경우 제거를 건너뛰어도 이전 기기는 남지 않는다.
+     */
+    boolean replacedByLiveConnection(Removal removal) {
+        for (Pair p : pairs.values()) {
+            if (!removal.identity().equals("u"+p.access().userId()) || !removal.room().equals(roomOf(p))) continue;
+            try { access.upstream(p.access()); return true; } catch(RuntimeException invalid) { /* 이 중계도 끝난 세션 */ }
         }
+        return false;
+    }
+    private void revoke(Pair p) {
+        String room=roomOf(p);
         if(room!=null && !room.isEmpty()) {
             String identity="u"+p.access().userId();
             String key=room+"|"+identity;
@@ -117,7 +129,10 @@ public class LiveKitProxy implements WebSocketConfigurer {
         if(!removing.add(key))return;
         try {
             removalWorker.submit(()-> {
-                try { if(admin.remove(removal.room(),removal.identity()))pendingRemovals.remove(key,removal); }
+                try {
+                    if(replacedByLiveConnection(removal)) { pendingRemovals.remove(key,removal); return; }
+                    if(admin.remove(removal.room(),removal.identity()))pendingRemovals.remove(key,removal);
+                }
                 finally { removing.remove(key); }
             });
         } catch(java.util.concurrent.RejectedExecutionException e) { removing.remove(key); }
