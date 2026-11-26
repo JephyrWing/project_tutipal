@@ -1,5 +1,6 @@
 package com.my.tutipal_back.common.auth.service;
 
+import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -21,6 +22,22 @@ import org.springframework.stereotype.Component;
 public class ActiveSessions implements HttpSessionListener, HttpSessionIdListener {
 
     private final Map<String, HttpSession> sessions = new ConcurrentHashMap<>();
+    /** 같은 계정의 로그인 전환을 한 번에 하나씩 (동시 로그인 두 건이 서로를 끊지 않게). 계정 id 로 고른 줄무늬 잠금. */
+    private final Object[] loginLocks = new Object[256];
+
+    public ActiveSessions() {
+        Arrays.setAll(loginLocks, index -> new Object());
+    }
+
+    /**
+     * 계정별로 직렬화해서 실행한다. 로그인은 이 안에서 "인증 저장 → 다른 세션 무효화"를 해야 한다. 동시에 들어온 두 로그인 중
+     * 나중에 잠금을 얻은 쪽이 이기고, 먼저 끝난 쪽 세션은 끊긴다 (둘 다 끊기거나 둘 다 남지 않는다).
+     */
+    public void exclusiveForUser(Long userId, Runnable task) {
+        synchronized (loginLocks[Math.floorMod(userId.hashCode(), loginLocks.length)]) {
+            task.run();
+        }
+    }
 
     @Override
     public void sessionCreated(HttpSessionEvent event) {

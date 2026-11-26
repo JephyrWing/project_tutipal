@@ -36,8 +36,11 @@ public class SessionLogin {
         context.setAuthentication(UsernamePasswordAuthenticationToken.authenticated(
                 principal, null, principal.getAuthorities()));
         SecurityContextHolder.setContext(context);
-        contextRepository.saveContext(context, request, response);
-        // 한 계정당 기기 1대: 새 로그인이 이기고 먼저 로그인한 기기의 세션은 끊는다 (PT-13, 2026-11-26)
-        activeSessions.invalidateUserExcept(user.getId(), request.getSession());
+        // 한 계정당 기기 1대: 새 로그인이 이기고 먼저 로그인한 기기의 세션은 끊는다 (PT-13, 2026-11-26).
+        // 인증 저장과 다른 세션 무효화를 계정별 잠금 안에서 함께 해야 동시 로그인 두 건이 서로를 끊지 않는다.
+        activeSessions.exclusiveForUser(user.getId(), () -> {
+            contextRepository.saveContext(context, request, response);
+            activeSessions.invalidateUserExcept(user.getId(), request.getSession());
+        });
     }
 }

@@ -2,6 +2,12 @@ package com.my.tutipal_back.common.auth.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
 import jakarta.servlet.http.HttpSessionEvent;
 
 import org.junit.jupiter.api.AfterEach;
@@ -59,6 +65,48 @@ class SessionLoginTest {
         Object saved = current.getAttribute(HttpSessionSecurityContextRepository.SPRING_SECURITY_CONTEXT_KEY);
         assertThat(saved).isInstanceOf(SecurityContext.class);
         assertThat(((SecurityContext) saved).getAuthentication().getName()).isEqualTo("7");
+    }
+
+    @Test
+    void concurrentLoginsOfTheSameUserLeaveExactlyOneSession() throws Exception {
+        for (int round = 0; round < 50; round++) {
+            ActiveSessions registry = new ActiveSessions();
+            SessionLogin login = new SessionLogin(registry);
+            MockHttpServletRequest first = requestWithRegisteredSession(registry, "a" + round);
+            MockHttpServletRequest second = requestWithRegisteredSession(registry, "b" + round);
+            MockHttpSession firstSession = (MockHttpSession) first.getSession(false);
+            MockHttpSession secondSession = (MockHttpSession) second.getSession(false);
+            CountDownLatch start = new CountDownLatch(1);
+            ExecutorService pool = Executors.newFixedThreadPool(2);
+            try {
+                Future<?> f1 = pool.submit(() -> { await(start); login.login(user(7), first, new MockHttpServletResponse()); });
+                Future<?> f2 = pool.submit(() -> { await(start); login.login(user(7), second, new MockHttpServletResponse()); });
+                start.countDown();
+                f1.get(5, TimeUnit.SECONDS);
+                f2.get(5, TimeUnit.SECONDS);
+            } finally {
+                pool.shutdownNow();
+            }
+            boolean firstAlive = !firstSession.isInvalid();
+            boolean secondAlive = !secondSession.isInvalid();
+            assertThat(firstAlive ^ secondAlive).as("round %d: exactly one device stays logged in", round).isTrue();
+        }
+    }
+
+    private static MockHttpServletRequest requestWithRegisteredSession(ActiveSessions registry, String id) {
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        MockHttpSession session = new MockHttpSession(null, id);
+        request.setSession(session);
+        registry.sessionCreated(new HttpSessionEvent(session));
+        return request;
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Test
