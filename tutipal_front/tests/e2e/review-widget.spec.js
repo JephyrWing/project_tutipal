@@ -14,6 +14,9 @@ async function widget(app) {
       return globalThis.reviewCapture.gone ? { status: 'gone' }
         : { status: 'ok', changed: false, image: 'synthetic-no-real-screen' }
     })
+    // The lifecycle check must use the same synthetic source, never enumerate the desktop.
+    ipcMain.removeHandler('screen-target-status')
+    ipcMain.handle('screen-target-status', () => ({ status: globalThis.reviewCapture.gone ? 'gone' : 'ok' }))
   })
   return page
 }

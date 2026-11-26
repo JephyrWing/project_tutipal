@@ -4,11 +4,11 @@ import { quotaWaitMs } from './quotaRetry.js'
  * One widget's capture/analysis/recording lifetime. No image is retained here.
  * onPaused() is called whenever an automatic summary is skipped because the quota pause is still running.
  */
-export function createScreenAnalysis({ capture, describe, observe, onAnswer, onSuggestion, onGone, onError, onPaused = () => {}, now = Date.now }) {
+export function createScreenAnalysis({ capture, describe, observe, onAnswer, onSuggestion, onGone, onError, onInvalidate = () => {}, checkTarget = async () => ({ status: 'ok' }), onPaused = () => {}, now = Date.now }) {
   let revision = 0
   let running = false
   let deleting = false
-  let busy = false
+  let flight = null
   let retry = true
   let lastSeen = now()
   // Automatic summaries pause until the server quota frees up (429, timed on this clock). Questions are never paused.
@@ -16,9 +16,24 @@ export function createScreenAnalysis({ capture, describe, observe, onAnswer, onS
 
   function invalidate() {
     revision++
+    flight?.abort()
+    flight = null
     retry = true
     lastSeen = now()
     onSuggestion(null)
+    onInvalidate()
+  }
+
+  async function targetIsCurrent(current, sourceId) {
+    const target = await checkTarget(sourceId)
+    if (!current()) return false
+    if (['off', 'gone', 'changed'].includes(target.status)) {
+      running = false
+      invalidate()
+      onGone(target.status === 'gone')
+      return false
+    }
+    return true
   }
 
   return {
@@ -30,10 +45,18 @@ export function createScreenAnalysis({ capture, describe, observe, onAnswer, onS
     autoPausedUntil() { return now() < autoPausedUntil ? autoPausedUntil : 0 },
     deletion(value) { deleting = value; invalidate() },
     async look(question) {
-      if (!running || deleting || busy) return
-      busy = true
+      if (!running || deleting) return
       const ownRevision = revision
       const current = () => running && !deleting && revision === ownRevision
+      // A slow model must not prevent the next timer tick from detecting a closed target.
+      if (flight) {
+        if (!question) {
+          try { await targetIsCurrent(current) } catch { /* The active request also checks before publishing. */ }
+        }
+        return
+      }
+      const controller = new AbortController()
+      flight = controller
       const record = async (summary) => {
         if (!current()) return
         // Time spent paused by the quota is not counted as observed learning time.
@@ -64,8 +87,8 @@ export function createScreenAnalysis({ capture, describe, observe, onAnswer, onS
           await record(null)
           return
         }
-        const answer = await describe(cap.image, question)
-        if (!current()) return
+        const answer = await describe(cap.image, question, controller.signal)
+        if (!current() || !await targetIsCurrent(current, cap.sourceId)) return
         // Only a successful automatic summary acknowledges the captured screen.
         // A question must not consume the next automatic summary either.
         if (!question) retry = false
@@ -79,7 +102,8 @@ export function createScreenAnalysis({ capture, describe, observe, onAnswer, onS
         if (wait !== null) autoPausedUntil = now() + wait
         onError(error, !!question)
       } finally {
-        busy = false
+        // An invalidated request must never unlock a newer request.
+        if (flight === controller) flight = null
       }
     },
   }

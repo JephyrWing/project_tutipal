@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('desktop', {
   getScreenSettings: () => ipcRenderer.invoke('screen-settings-get'),
   setScreenSettings: (s) => ipcRenderer.invoke('screen-settings-set', s),
   captureScreen: () => ipcRenderer.invoke('screen-capture'),
+  getScreenTargetStatus: (sourceId) => ipcRenderer.invoke('screen-target-status', sourceId),
   getReviewDeletionState: () => ipcRenderer.invoke('review-deletion-state'),
   beginReviewDeletion: () => ipcRenderer.invoke('review-deletion-start'),
   endReviewDeletion: () => ipcRenderer.invoke('review-deletion-end'),
