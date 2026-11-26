@@ -1,28 +1,22 @@
-const { readFileSync } = require('node:fs')
 const path = require('node:path')
 const {
-  app, BrowserWindow, ipcMain, Menu, nativeImage, screen, session, shell, Tray,
+  app, BrowserWindow, ipcMain, Menu, nativeImage, powerMonitor, screen, session, shell, Tray,
 } = require('electron')
 const { finishBrowserLogin, startBrowserLogin } = require('./applogin.cjs')
 const { capture, listSources, loadSettings, saveSettings } = require('./screen.cjs')
-const { chooseShareSource, forwardDraw, installDisplayMediaHandler, showOverlay } = require('./share.cjs')
+const { chooseShareSource, forwardDraw, installDisplayMediaHandler, showOverlay,
+  helpShareSources, prepareHelpShare, setHelpShareVideoSize } = require('./share.cjs')
 const { startBridge } = require('./bridge.cjs')
+const { loadServerUrl } = require('./serverConfig.cjs')
+const { createFocusCollector } = require('./focusCollector.cjs')
+const { canProbe, startFocusProbe } = require('./focusProbe.cjs')
+const { createFocusTransport } = require('./focusTransport.cjs')
 
 /**
  * Spring 업무 서버 주소. React 화면은 설치 패키지의 dist에 내장한다.
- * 개발은 TUTIPAL_SPRING_URL, 설치 앱은 package.json의 tutipal.serverUrl 또는 실행 환경변수를 사용한다.
+ * 운영 릴리스는 빌드에 기록한 주소로 고정한다. 일반 로컬 패키지는 기존 개발 환경변수를 지원한다.
  */
-function serverUrl() {
-  if (process.env.TUTIPAL_SPRING_URL) return process.env.TUTIPAL_SPRING_URL
-  try {
-    const pkg = JSON.parse(readFileSync(path.join(app.getAppPath(), 'package.json'), 'utf8'))
-    if (pkg.tutipal?.serverUrl) return pkg.tutipal.serverUrl
-  } catch {
-    // 기본값
-  }
-  return 'http://127.0.0.1:8080'
-}
-const BACKEND = new URL(serverUrl())
+const BACKEND = new URL(loadServerUrl(app.getAppPath(), app.isPackaged, process.env))
 if (!['http:', 'https:'].includes(BACKEND.protocol) || BACKEND.username || BACKEND.password) throw new Error('Invalid Spring URL')
 let BASE
 let bridge
@@ -34,6 +28,9 @@ let mainWindow = null
 let widgetWindow = null
 let tray = null
 let pendingDeepLink = process.argv.find((value) => value.startsWith(`${PROTOCOL}://`))
+// PT-90 집중도 수집 (학생이 수업 화면에서 시작한 동안만). focusOwner = 시작한 화면
+let focus = null
+let focusOwner = null
 
 function isOurPage(url) {
   try {
@@ -142,6 +139,65 @@ function fromOurPage(event) {
   return isOurPage(event.senderFrame?.url ?? '')
 }
 
+/**
+ * PT-90 집중도 수집. 수집 값(exe 이름 · 유휴 초 · 창 전환 수)은 화면을 거치지 않고 메인 프로세스가 로그인 쿠키로
+ * Spring 에 직접 보낸다. 시작한 화면이 닫히거나 · 죽거나 · 다시 읽히면, 로그인 쿠키가 바뀌면, 절전 · 화면 잠금 ·
+ * 앱 종료 때 멈추고 모아 둔 값은 버린다 (3시간 상한과 서버 401/403/404/410 은 collector 가 처리).
+ */
+function setupFocusCollection() {
+  const transport = createFocusTransport({ fetch: (url, init) => session.defaultSession.fetch(url, init), backend: BACKEND })
+  focus = createFocusCollector({
+    startProbe: onExe => (canProbe() ? startFocusProbe(onExe, { onExit: () => focus.stop('probe') }) : null),
+    idleSeconds: () => powerMonitor.getSystemIdleTime(),
+    send: (sessionId, body, options) => transport.send(sessionId, body, options),
+    now: Date.now,
+    setInterval: (fn, ms) => setInterval(fn, ms),
+    clearInterval: id => clearInterval(id),
+    platform: process.platform,
+  })
+  const watched = new WeakSet()
+
+  ipcMain.handle('focus-start', (event, sessionId) => {
+    if (!fromOurPage(event) || !Number.isSafeInteger(sessionId) || sessionId <= 0) return focus.state()
+    watchOwner(event.sender)
+    const before = focus.state()
+    focus.start(sessionId)
+    // 같은 수업을 이미 수집 중이면 시작한 화면(owner)은 그대로 둔다: 다른 창이 owner 를 가져가면
+    // 원래 화면이 닫히거나 이동해도 멈추지 않는다
+    const continued = before.status === 'collecting' && before.sessionId === sessionId
+    if (focus.state().status === 'collecting' && !continued) focusOwner = event.sender
+    return focus.state()
+  })
+  ipcMain.handle('focus-stop', (event) => {
+    if (!fromOurPage(event)) return null
+    focus.stop('user')
+    return focus.state()
+  })
+  ipcMain.handle('focus-state', (event) => (fromOurPage(event) ? focus.state() : null))
+
+  function watchOwner(contents) {
+    if (watched.has(contents)) return
+    watched.add(contents)
+    const stopIfOwner = reason => () => { if (focusOwner === contents) focus.stop(reason) }
+    contents.once('destroyed', stopIfOwner('destroyed'))
+    contents.on('render-process-gone', stopIfOwner('render-process-gone'))
+    // 새로 고침 · 다른 주소로 이동 = 수업 화면이 사라짐 (SPA 안의 이동은 화면이 focusStop 을 보낸다)
+    contents.on('did-navigate', stopIfOwner('left'))
+  }
+  focus.onState(state => {
+    if (state.status !== 'collecting') focusOwner = null
+    for (const win of [mainWindow, widgetWindow]) {
+      if (win && !win.isDestroyed() && isOurPage(win.webContents.getURL())) win.webContents.send('focus-state', state)
+    }
+  })
+  session.defaultSession.cookies.on('changed', (_event, cookie) => {
+    if (cookie.name === 'TUTIPAL_SESSION') focus.stop('cookie')
+  })
+  powerMonitor.on('suspend', () => focus.stop('suspend'))
+  powerMonitor.on('lock-screen', () => focus.stop('lock-screen'))
+  app.on('before-quit', () => focus.stop('quit'))
+}
+
 /** tutipal://auth?code= 로 돌아왔을 때: 세션 쿠키로 교환하고 두 창을 새로 읽음 */
 async function onDeepLink(url) {
   if (!url?.startsWith(`${PROTOCOL}://`)) return
@@ -225,8 +281,69 @@ if (!app.requestSingleInstanceLock()) {
       return saved
     })
     ipcMain.handle('screen-capture', (event) => (fromOurPage(event) ? capture() : { status: 'off' }))
+    // Only trusted pages can suspend collection around record deletion.
+    const reviewDeletions = new Map()
+    const reviewDeletionSenders = new Set()
+    let reviewDeletionTicket = 0
+    const notifyReviewDeletion = () => widgetWindow?.webContents.send('review-deletion-changed', reviewDeletions.size > 0)
+    const endReviewDeletion = senderId => {
+      const count = reviewDeletions.get(senderId) ?? 0
+      if (count > 1) reviewDeletions.set(senderId, count - 1)
+      else reviewDeletions.delete(senderId)
+      notifyReviewDeletion()
+    }
+    ipcMain.handle('review-deletion-state', event => fromOurPage(event) ? reviewDeletions.size > 0 : false)
+    ipcMain.handle('review-deletion-start', async event => {
+      if (!fromOurPage(event)) throw new Error('복습 기록 요청을 허용하지 않아요')
+      const sender = event.sender
+      reviewDeletions.set(sender.id, (reviewDeletions.get(sender.id) ?? 0) + 1)
+      if (!reviewDeletionSenders.has(sender.id)) {
+        reviewDeletionSenders.add(sender.id)
+        sender.once('destroyed', () => {
+          reviewDeletionSenders.delete(sender.id)
+          reviewDeletions.delete(sender.id)
+          notifyReviewDeletion()
+        })
+      }
+      const target = widgetWindow?.webContents
+      if (!target || target.isDestroyed()) return
+      const ticket = ++reviewDeletionTicket
+      // Do not issue DELETE until the widget has invalidated its old analysis.
+      try {
+        await new Promise((resolve, reject) => {
+          const cleanup = () => {
+            clearTimeout(timer)
+            ipcMain.removeListener('review-deletion-ready', ready)
+            target.removeListener('destroyed', closed)
+          }
+          const ready = (response, value) => {
+            if (response.sender === target && value === ticket && fromOurPage(response)) { cleanup(); resolve() }
+          }
+          const closed = () => { cleanup(); resolve() }
+          const timer = setTimeout(() => { cleanup(); reject(new Error('위젯 준비를 기다리지 못했어요. 다시 삭제해 주세요.')) }, 5000)
+          ipcMain.on('review-deletion-ready', ready)
+          target.once('destroyed', closed)
+          target.send('review-deletion-changed', true, ticket)
+        })
+      } catch (error) {
+        endReviewDeletion(sender.id)
+        throw error
+      }
+    })
+    ipcMain.handle('review-deletion-end', event => {
+      if (!fromOurPage(event)) return
+      endReviewDeletion(event.sender.id)
+    })
     // 4단계 화면공유: 공유할 창 고르기 → getDisplayMedia 허용, 학생 PC 그림 오버레이
     installDisplayMediaHandler(isOurPage)
+    ipcMain.handle('help-share-sources', event => fromOurPage(event) ? helpShareSources() : [])
+    ipcMain.handle('help-share-prepare', (event, sourceId) => {
+      if (!fromOurPage(event)) throw new Error('공유 요청을 허용하지 않아요')
+      return prepareHelpShare(sourceId, event.sender)
+    })
+    ipcMain.on('help-share-size', (event, sourceId, width, height) => {
+      if (fromOurPage(event)) setHelpShareVideoSize(event.sender, sourceId, width, height)
+    })
     ipcMain.on('share-source', (event, id) => {
       if (fromOurPage(event)) chooseShareSource(id)
     })
@@ -236,6 +353,7 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.on('overlay-draw', (event, message) => {
       if (fromOurPage(event)) forwardDraw(message)
     })
+    setupFocusCollection()
 
     mainWindow = createMainWindow()
     widgetWindow = createWidgetWindow()

@@ -1,11 +1,16 @@
 package com.my.tutipal_back.common.realtime;
 
+import java.security.Principal;
+import java.time.Clock;
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import jakarta.annotation.PreDestroy;
 import jakarta.servlet.http.HttpSession;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.server.*;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.stereotype.Component;
@@ -13,15 +18,23 @@ import org.springframework.web.socket.*;
 import org.springframework.web.socket.handler.WebSocketHandlerDecorator;
 import org.springframework.web.socket.handler.WebSocketHandlerDecoratorFactory;
 import org.springframework.web.socket.server.HandshakeInterceptor;
+import com.my.tutipal_back.common.config.SessionTimeouts;
 
-/** 알림·판서 구독도 로그인 세션이 사라지면 최대 5초 안에 닫는다. */
+/** 알림·판서 구독도 로그인 세션이 사라지면(로그아웃·유휴 만료·절대 만료 app.session.absolute-timeout) 최대 5초 안에 닫는다. */
 @Component
 public class SessionWebSocketGuard implements HandshakeInterceptor, WebSocketHandlerDecoratorFactory {
     private final ConcurrentHashMap<String,WebSocketSession> sockets=new ConcurrentHashMap<>();
     private final java.util.concurrent.ScheduledExecutorService monitor=Executors.newSingleThreadScheduledExecutor(r->{
         Thread t=new Thread(r,"stomp-session-check");t.setDaemon(true);return t;
     });
-    public SessionWebSocketGuard() {
+    private final Clock clock;
+    private final Duration absoluteTimeout;
+    @Autowired
+    public SessionWebSocketGuard(@Value("${app.session.absolute-timeout:12h}") Duration absoluteTimeout) {
+        this(Clock.systemUTC(), SessionTimeouts.requireValidAbsolute(absoluteTimeout));
+    }
+    SessionWebSocketGuard(Clock clock, Duration absoluteTimeout) {
+        this.clock=clock;this.absoluteTimeout=absoluteTimeout;
         monitor.scheduleWithFixedDelay(()->sockets.forEach((id,s)-> { if(!valid(s))close(s); }),5,5,TimeUnit.SECONDS);
     }
     @Override public boolean beforeHandshake(ServerHttpRequest req,ServerHttpResponse res,WebSocketHandler handler,Map<String,Object> attrs) {
@@ -45,12 +58,18 @@ public class SessionWebSocketGuard implements HandshakeInterceptor, WebSocketHan
             }
         };
     }
+
+    Principal subscriber(String socketId) {
+        WebSocketSession socket = socketId == null ? null : sockets.get(socketId);
+        return socket != null && valid(socket) ? socket.getPrincipal() : null;
+    }
+
     private boolean valid(WebSocketSession socket) {
         try {
             if(!(socket.getAttributes().get("httpSession") instanceof HttpSession session) || socket.getPrincipal()==null)return false;
             if(!session.getId().equals(socket.getAttributes().get("httpSessionId")))return false;
-            long now=System.currentTimeMillis();
-            if(now-session.getCreationTime()>12*3600_000L || now-session.getLastAccessedTime()>session.getMaxInactiveInterval()*1000L)return false;
+            long now=clock.millis();
+            if(now-session.getCreationTime()>absoluteTimeout.toMillis() || now-session.getLastAccessedTime()>session.getMaxInactiveInterval()*1000L)return false;
             Object context=session.getAttribute("SPRING_SECURITY_CONTEXT");
             return context instanceof SecurityContext c && c.getAuthentication()!=null && c.getAuthentication().isAuthenticated()
                 && c.getAuthentication().getName().equals(socket.getPrincipal().getName());

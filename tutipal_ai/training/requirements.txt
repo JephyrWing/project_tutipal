@@ -1,0 +1,4 @@
+# 평가 도구 전용(추론 서버 requirements와 별개). Python 3.12에서 확인.
+pyarrow==26.0.1
+huggingface_hub==2.4.0
+pytest==9.2.0

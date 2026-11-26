@@ -192,3 +192,9 @@ Windows 설치 파일은 미서명이며 설치 마법사를 PC에 적용하지 
 최초 CI의 ubuntu-latest가 Ubuntu26.04를 선택해 Python3.12.6 설치 단계가 실패했다. Python 버전을 바꾸지 않고 해당 job을 공식 배포본이 있는 ubuntu-24.04로 고정했다.
 
 수정 후 [CI 실행 44055950618](https://github.com/JephyrWing/project_tutipal/actions/runs/44055950618)은 전체 성공했다. Windows Electron NSIS 패키징, Java21 Spring JAR 빌드, Python3.12.6 설치/import/pip check, Compose 설정 검사를 통과했다. Docker Hub 업로드와 SSH 배포 job은 비활성 상태로 건너뛰었다. 실제 환경 파일·비밀값·설치 파일·모델은 원격 저장소에 포함하지 않았다.
+
+## 12. AI 채팅·화면 위젯 개발 기준
+
+기존 개발 경로는 `POST /api/tutor/chat`의 Spring SSE와 `POST /api/screen`의 요약·화면 질문이다. Electron에서 자동 요약을 켜면 40초 간격으로 선택한 화면의 변경을 확인한다. 위 10장의 로컬 채팅·임베딩 확인은 당시 구현에 해당한다.
+
+수업 학생과 개인 학습의 Agent 채팅, 두 모드에서 사용하는 화면 분석 상세 모달과 직접 질문 연결은 [설계서 11~12장](TUTIPAL_DESIGN.md#11-ai와-학습-지원-기능)과 [AI 워크플로 계약](AI_WORKFLOW_CONTRACT.md)의 구현 대상이다. Agent 분기와 자료 권한은 Spring에서 확인하고, FastAPI는 전달받은 입력으로 LangGraph와 도구를 실행한다. 새 흐름 구현 후에는 역할 분기, 수업 범위, 화면 동의와 분석 중지, 질문 없는 자동 요약, 직접 질문 SSE를 각각 확인한다.

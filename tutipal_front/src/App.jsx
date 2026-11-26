@@ -1,8 +1,10 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import LearningResultsPage from './pages/LearningResultsPage'
 import { AuthProvider, RequireAuth } from './auth'
 import AppShell from './components/AppShell'
 import AppLoginDonePage from './pages/AppLoginDonePage'
 import ChatPage from './pages/ChatPage'
+import ConversationsPage from './pages/ConversationsPage'
 import CreateSessionPage from './pages/CreateSessionPage'
 import JoinSessionPage from './pages/JoinSessionPage'
 import SessionPage from './pages/SessionPage'
@@ -27,12 +29,15 @@ export default function App() {
             <Route element={<AppShell />}>
               <Route index element={<HomePage />} />
               <Route path="chat" element={<ChatPage />} />
+              <Route path="conversations" element={<ConversationsPage />} />
+              <Route path="conversations/:id" element={<ConversationsPage />} />
               <Route path="sessions/new" element={<CreateSessionPage />} />
               <Route path="sessions/join" element={<JoinSessionPage />} />
               <Route path="sessions/:id" element={<SessionPage />} />
               <Route path="screen-consent" element={<ScreenConsentPage />} />
               <Route path="review" element={<ReviewPage />} />
               <Route path="settings" element={<SettingsPage />} />
+              <Route path="stats" element={<LearningResultsPage />} />
             </Route>
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

@@ -1,0 +1,7 @@
+.help-share-picker { flex-basis: 100%; width: min(100%, 580px); padding: 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); display: grid; gap: 12px; }
+.help-share-picker .field { margin: 0; }
+.help-share-picker .input { max-width: 100%; }
+.help-share-preview { margin: 0; display: grid; gap: 8px; text-align: center; }
+.help-share-preview img { display: block; width: 100%; max-height: 230px; object-fit: contain; border-radius: 8px; background: var(--fill); }
+.help-share-preview figcaption { font-size: 12px; color: var(--text-2); overflow-wrap: anywhere; }
+.help-local-preview { width: min(100%, 580px); max-height: 230px; background: var(--fill); border-radius: 10px; }

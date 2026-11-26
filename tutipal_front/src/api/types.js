@@ -11,7 +11,6 @@
  * @typedef {Object} UserResponse
  * @property {number} id
  * @property {string} name
- * @property {string | null} email
  * @property {SocialProvider | 'dev'} provider
  * @property {Role} role
  */
@@ -33,10 +32,40 @@
  */
 
 /**
+ * com.my.tutipal_back.ai.dto.AgentDtos.AgentEvent — 튜터 SSE 의 agent 이벤트 (Agent 경로에서 done 직전 1회)
+ * @typedef {Object} TutorAgentEvent
+ * @property {string} route 질문 종류 (concept · answer_request · answer_check · code_debug · variant)
+ * @property {boolean} suggestHelp 도움 요청을 추천한 턴인지
+ * @property {Object | null} variant 정답 공개 정책을 적용한 변형 문항
+ * @property {boolean} answerHidden 정답·해설을 정책으로 숨겼는지
+ * @property {boolean} retryable 변형 실패 뒤 다시 요청할 수 있는지
+ * @property {string | null} helpDraft 도움 요청 메시지 초안 (PT-113, suggestHelp 턴에서만, 300자 이하, 질문 원문 없음)
+ */
+
+/**
  * com.my.tutipal_back.common.exception.GlobalExceptionHandler 의 응답
  * @typedef {Object} ApiError
  * @property {number} status
  * @property {string} message
+ */
+
+/**
+ * com.my.tutipal_back.ai.quota.AiFeature — AI 호출 한도를 따로 세는 기능 (PT-97)
+ * @typedef {'SCREEN_AUTO' | 'SCREEN_MANUAL' | 'CHAT' | 'QUIZ_GENERATE'} AiFeature
+ */
+
+/**
+ * GlobalExceptionHandler 의 AI 사용 한도 초과 응답 (PT-97). HTTP 429, Content-Type application/problem+json,
+ * Retry-After 헤더(초)도 함께 온다. 기존 ApiError 처럼 message 를 읽어도 되도록 message === detail.
+ * 쓰는 쪽은 ApiRequestError.retryAt(Date, 표시용) · retryAfterMs(잠금 · 멈춤 시간, 로컬 시계 기준) · feature 로 받는다 (client.js).
+ * @typedef {Object} AiQuotaProblem
+ * @property {429} status
+ * @property {string} title
+ * @property {string} detail 사용자 안내 문구 (시각 대신 "약 N분 뒤", HH:mm 은 화면이 retryAt 으로 만든다)
+ * @property {string} message detail 과 같은 값
+ * @property {AiFeature} feature
+ * @property {string} retryAt 다시 쓸 수 있는 시각, UTC ISO-8601 (예 "2026-11-25T01:00:00Z")
+ * @property {number} retryAfterSeconds 1 이상, Retry-After 헤더와 같은 값
  */
 
 /**
@@ -156,7 +185,8 @@
 /**
  * com.my.tutipal_back.common.realtime.SessionEvents.Event — 무엇이 바뀌었는지만, 내용은 REST 로 다시 읽음
  * @typedef {Object} SessionEvent
- * @property {'quiz' | 'quizClosed' | 'settings' | 'ended' | 'joined' | 'presence' | 'quizStats' | 'quizResult' | 'help' | 'helpAccepted' | 'helpDeclined' | 'helpEnded' | 'materials' | 'notice' | 'notices' | 'posts'} type
+ * left: 학생이 나갔거나 내보내짐(선생님에게, id=userId) · removed: 내가 내보내짐(그 학생에게, id=sessionId)
+ * @property {'quiz' | 'quizClosed' | 'settings' | 'ended' | 'joined' | 'left' | 'removed' | 'presence' | 'quizStats' | 'quizResult' | 'help' | 'helpAccepted' | 'helpDeclined' | 'helpEnded' | 'materials' | 'notice' | 'notices' | 'posts'} type
  * @property {number} id
  */
 

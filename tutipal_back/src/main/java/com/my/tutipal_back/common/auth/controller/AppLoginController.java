@@ -9,7 +9,7 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -23,6 +23,7 @@ import com.my.tutipal_back.common.auth.service.SessionLogin;
 import com.my.tutipal_back.users.dto.SocialProfile;
 import com.my.tutipal_back.users.entity.User;
 import com.my.tutipal_back.users.service.UserService;
+import com.my.tutipal_back.common.config.DevLogin;
 import com.my.tutipal_back.common.exception.ApiException;
 
 /**
@@ -47,11 +48,11 @@ public class AppLoginController {
     private final boolean devLogin;
 
     public AppLoginController(AppLoginService appLogin, SessionLogin sessionLogin, UserService userService,
-                              @Value("${app.dev-login:false}") boolean devLogin) {
+                              Environment env) {
         this.appLogin = appLogin;
         this.sessionLogin = sessionLogin;
         this.userService = userService;
-        this.devLogin = devLogin;
+        this.devLogin = DevLogin.enabled(env);
     }
 
     @GetMapping("/auth/app/start")
@@ -60,8 +61,8 @@ public class AppLoginController {
             throw new ApiException(HttpStatus.BAD_REQUEST, "잘못된 로그인 요청이에요. 앱에서 다시 시도해 주세요");
         }
         if (devLogin && provider.equals("dev")) {
-            // 개발용: 소셜 키 없이 딥링크 흐름 전체를 시험 (app.dev-login=true 일 때만)
-            User user = userService.upsert(new SocialProfile("dev", "dev-1", "dev@example.com", "개발 사용자"));
+            // 개발용: 소셜 키 없이 딥링크 흐름 전체를 시험 (DevLogin.enabled: local 프로필 + app.dev-login=true 일 때만)
+            User user = userService.upsert(new SocialProfile("dev", "dev-1", "개발 사용자"));
             return new RedirectView("/auth/app/done?code=" + appLogin.issue(user.getId(), challenge));
         }
         if (!PROVIDERS.contains(provider)) {

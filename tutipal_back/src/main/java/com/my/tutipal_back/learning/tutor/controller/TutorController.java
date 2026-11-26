@@ -7,8 +7,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import jakarta.validation.Valid;
 
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.core.user.OAuth2User;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -16,6 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import com.my.tutipal_back.learning.tutor.dto.ChatRequest;
+import com.my.tutipal_back.learning.tutor.service.OpenedChat;
 import com.my.tutipal_back.learning.tutor.service.TutorService;
 import com.my.tutipal_back.ai.client.AiUnavailableException;
 import com.my.tutipal_back.common.exception.ApiException;
@@ -40,10 +43,16 @@ public class TutorController {
         this.tutor = tutor;
     }
 
-    /** SSE 이벤트: (자료를 찾았으면) sources {"items": [출처]} → delta {"t": 조각} 여러 번 → done, 실패하면 error {"message": …}. */
+    /**
+     * SSE 이벤트: (자료를 찾았으면) sources {"items": [출처]} → delta {"t": 조각} 여러 번 → (PT-85 Agent 경로면)
+     * agent {route, suggestHelp, variant, answerHidden, retryable, helpDraft} → done, 실패하면 error {"message": …}.
+     */
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chat(@AuthenticationPrincipal OAuth2User me, @Valid @RequestBody ChatRequest request) {
         Long userId = Long.valueOf(me.getName());
+        // 권한 확인 + CHAT 한도 예약(+ Agent 턴이면 사용자당 동시 턴 자리)은 스트림을 열기 전에:
+        // 거절은 SSE 가 아니라 HTTP 403/410/429 로 나간다
+        OpenedChat opened = tutor.openChat(userId, request);
         SseEmitter emitter = new SseEmitter(TIMEOUT_MS);
         AtomicBoolean gone = new AtomicBoolean(false);
         emitter.onTimeout(() -> gone.set(true));
@@ -51,24 +60,37 @@ public class TutorController {
         emitter.onCompletion(() -> gone.set(true));
 
         // 답변이 끝날 때까지 기다리는 일이라 가상 스레드 하나에 맡긴다
-        Thread.ofVirtual().name("tutor-chat").start(() -> {
-            try {
-                tutor.chat(userId, request, sources -> send(emitter, "sources", Map.of("items", sources)), delta -> {
-                    if (gone.get()) {
-                        throw new ClientGone();       // 다음 조각에서 멈춤 → AI 스트림 닫힘 → GPU 자리 반납
-                    }
-                    send(emitter, "delta", Map.of("t", delta));
-                });
-                send(emitter, "done", Map.of());
-                emitter.complete();
-            } catch (ClientGone e) {
-                quietComplete(emitter);
-            } catch (ApiException | AiUnavailableException e) {
-                finishWithError(emitter, e.getMessage());
-            } catch (RuntimeException e) {
-                finishWithError(emitter, "답변 중 문제가 생겼어요");
-            }
-        });
+        try {
+            Thread.ofVirtual().name("tutor-chat").start(() -> {
+                try {
+                    tutor.chat(userId, request, opened,
+                            sources -> send(emitter, "sources", Map.of("items", sources)), delta -> {
+                                if (gone.get()) {
+                                    throw new ClientGone();   // 다음 조각에서 멈춤 → AI 스트림 닫힘 → GPU 자리 반납
+                                }
+                                send(emitter, "delta", Map.of("t", delta));
+                            },
+                            event -> send(emitter, "agent", event),
+                            () -> {
+                                // PT-85: 출력 없는 구간(판단 · 변형)의 ping 줄마다 확인. ping 자체는 SSE 로 안 보냄
+                                if (gone.get()) {
+                                    throw new ClientGone();
+                                }
+                            });
+                    send(emitter, "done", Map.of());
+                    emitter.complete();
+                } catch (ClientGone e) {
+                    quietComplete(emitter);
+                } catch (ApiException | AiUnavailableException e) {
+                    finishWithError(emitter, e.getMessage());
+                } catch (RuntimeException e) {
+                    finishWithError(emitter, "답변 중 문제가 생겼어요");
+                }
+            });
+        } catch (RuntimeException | Error e) {
+            opened.release();                         // 스레드를 못 띄웠으면 모델을 안 불렀으니 예약 · 턴 자리 반납
+            throw e;
+        }
 
         // 모델을 처음 올리는 동안 조각이 한참 안 올 수 있음 → 주기적으로 주석 한 줄(": ping")을 보내
         // Cloudflare Tunnel(100초 무응답 시 끊음) 같은 중간 장치가 연결을 닫지 않게 한다. 화면은 주석을 무시.
@@ -87,6 +109,13 @@ public class TutorController {
             }
         });
         return emitter;
+    }
+
+    @ExceptionHandler(ApiException.class)
+    ResponseEntity<Map<String, Object>> rejectChat(ApiException error) {
+        return ResponseEntity.status(error.getStatus())
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("status", error.getStatus().value(), "message", error.getMessage()));
     }
 
     private static void finishWithError(SseEmitter emitter, String message) {

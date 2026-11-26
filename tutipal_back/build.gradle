@@ -38,13 +38,96 @@ dependencies {
     runtimeOnly 'org.postgresql:postgresql'
     runtimeOnly 'org.flywaydb:flyway-database-postgresql'
 
-    // 도구만 준비. 업무 테스트는 요구사항 확정 후 작성한다.
+    // JUnit 5 + AssertJ + Mockito. CI spring-test 잡에서 실행한다 (PT-25).
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 tasks.named('test') {
     useJUnitPlatform()
+    exclude '**/ReviewStorePostgresTest.class'
+    exclude '**/RagSearchRepositoryPostgresTest.class'
+    exclude '**/FocusStorePostgresTest.class'
+    exclude '**/ConceptInsightsPostgresTest.class'
+    exclude '**/ConversationRetentionPostgresTest.class'
+}
+
+// PT-53: 실제 DB 검사는 별도 일회용 DB/CI에서 실행한다. env 누락은 skip 대신 실패한다.
+tasks.register('reviewDbTest', Test) {
+    description = 'Runs review boundary and privacy checks against disposable PostgreSQL/pgvector'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    include '**/ReviewStorePostgresTest.class'
+}
+
+// PT-87: V22 / chat_questions / concept stores against a disposable PostgreSQL. env 누락은 skip 대신 실패한다.
+// INSIGHTS_TEST_DB_URL=jdbc:postgresql://127.0.0.1:PORT/tutipal_insights_e2e, INSIGHTS_TEST_DB_ALLOW_RESET=disposable,
+// INSIGHTS_TEST_DB_PASSWORD (user tutipal_insights_e2e). The test runs Flyway clean on that database.
+tasks.register('insightsDbTest', Test) {
+    description = 'Runs PT-87 concept insights storage checks against disposable PostgreSQL/pgvector'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    include '**/ConceptInsightsPostgresTest.class'
+}
+
+// PT-86: RAG 검색 SQL(세션·임베딩 모델·인덱싱 필터, 정확 코사인 순서)과 V20 을 일회용 PostgreSQL/pgvector 에서 확인한다.
+tasks.register('ragDbTest', Test) {
+    description = 'Runs RAG search repository checks against disposable PostgreSQL/pgvector'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    include '**/RagSearchRepositoryPostgresTest.class'
+}
+
+// PT-90: V23 제약 · 동의 행 잠금(FOR SHARE)과 철회의 직렬화 · 탈퇴와 철회 동시 실행 · 보관 삭제를 일회용 PostgreSQL 에서 확인한다.
+tasks.register('focusDbTest', Test) {
+    description = 'Runs focus check storage, locking and retention checks against disposable PostgreSQL'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    include '**/FocusStorePostgresTest.class'
+}
+
+// PT-106 / PT-13: V24 보관 기간(기존 수업 90일 채움 · 0..90 CHECK) · 수업/개인 보관 삭제 · 저장 제외 · SKIP LOCKED 를
+// 일회용 PostgreSQL 에서 확인한다. CONVERSATION_TEST_DB_URL=jdbc:postgresql://127.0.0.1:PORT/tutipal_conversation_e2e,
+// CONVERSATION_TEST_DB_ALLOW_RESET=disposable, CONVERSATION_TEST_DB_PASSWORD. Flyway clean 을 먼저 한다.
+tasks.register('conversationDbTest', Test) {
+    description = 'Runs AI conversation retention checks against disposable PostgreSQL'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    include '**/ConversationRetentionPostgresTest.class'
+}
+
+// PT-86: RAG 평가 하네스 (src/ragEval). test · build 에 포함되지 않는다. 사용법은 docs/PT-86_RAG_EVAL.md
+sourceSets {
+    ragEval {
+        // testCompileClasspath carries compile-only API jars (apiguardian) used by the JUnit guard tests
+        compileClasspath += sourceSets.main.output + sourceSets.test.output + configurations.testCompileClasspath + configurations.testRuntimeClasspath
+        runtimeClasspath += sourceSets.main.output + sourceSets.test.output + configurations.testRuntimeClasspath
+    }
+}
+
+tasks.register('ragEval', JavaExec) {
+    description = 'PT-86 RAG evaluation harness (needs local FastAPI/Ollama; not part of test or build)'
+    group = 'verification'
+    classpath = sourceSets.ragEval.runtimeClasspath
+    mainClass = 'com.my.tutipal_back.materials.service.RagEvalMain'
+    workingDir = projectDir
+    maxHeapSize = '512m'
+    args((project.findProperty('evalArgs') ?: '').toString().split(' ').findAll { it })
+}
+
+// PT-86: unit tests of the harness guards (sealed hash abort, scored-once rule). Not part of test/build; CI runs it.
+tasks.register('ragEvalTest', Test) {
+    description = 'Runs the PT-86 eval harness guard tests (src/ragEval)'
+    group = 'verification'
+    testClassesDirs = sourceSets.ragEval.output.classesDirs
+    classpath = sourceSets.ragEval.runtimeClasspath
+    useJUnitPlatform()
+    include '**/*Test.class'
 }
 
 tasks.named('bootJar') {

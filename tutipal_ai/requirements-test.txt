@@ -1,0 +1,3 @@
+-r requirements.lock.txt
+# PT-26: isolated contract tests; AnyIO's pytest plugin supplies asyncio support.
+pytest==8.3.5

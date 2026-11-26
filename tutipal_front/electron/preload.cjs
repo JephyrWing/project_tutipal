@@ -14,8 +14,28 @@ contextBridge.exposeInMainWorld('desktop', {
   getScreenSettings: () => ipcRenderer.invoke('screen-settings-get'),
   setScreenSettings: (s) => ipcRenderer.invoke('screen-settings-set', s),
   captureScreen: () => ipcRenderer.invoke('screen-capture'),
+  getReviewDeletionState: () => ipcRenderer.invoke('review-deletion-state'),
+  beginReviewDeletion: () => ipcRenderer.invoke('review-deletion-start'),
+  endReviewDeletion: () => ipcRenderer.invoke('review-deletion-end'),
+  onReviewDeletionChanged: cb => {
+    const listener = (_event, deleting, ticket) => {
+      if (typeof deleting !== 'boolean') return
+      cb(deleting)
+      if (Number.isSafeInteger(ticket)) ipcRenderer.send('review-deletion-ready', ticket)
+    }
+    ipcRenderer.on('review-deletion-changed', listener)
+    return () => ipcRenderer.removeListener('review-deletion-changed', listener)
+  },
   // 4단계 화면공유: 다음 getDisplayMedia 에서 공유할 창 (빈 값 = 주 모니터), 학생 PC 그림 오버레이(목업 19)
   setShareSource: (id) => ipcRenderer.send('share-source', id),
+  helpShareSources: () => ipcRenderer.invoke('help-share-sources'),
+  prepareHelpShare: id => ipcRenderer.invoke('help-share-prepare', id),
+  setHelpShareVideoSize: (id, width, height) => ipcRenderer.send('help-share-size', id, width, height),
+  onHelpShareEnded: cb => {
+    const listener = (_event, reason) => { if (typeof reason === 'string') cb(reason) }
+    ipcRenderer.on('help-share-ended', listener)
+    return () => ipcRenderer.removeListener('help-share-ended', listener)
+  },
   showOverlay: (on) => ipcRenderer.send('overlay-show', on === true),
   sendOverlayDraw: (message) => ipcRenderer.send('overlay-draw', message),
   onOverlayDraw: (cb) => {
@@ -24,6 +44,17 @@ contextBridge.exposeInMainWorld('desktop', {
     }
     ipcRenderer.on('overlay-draw', listener)
     return () => ipcRenderer.removeListener('overlay-draw', listener)
+  },
+  // PT-90 집중도 수집: 화면은 수업 id 로 시작 · 중지 · 상태 조회만 한다. 수집 값은 메인 프로세스가 직접 서버로 보낸다.
+  focusStart: (sessionId) => ipcRenderer.invoke('focus-start', sessionId),
+  focusStop: () => ipcRenderer.invoke('focus-stop'),
+  focusState: () => ipcRenderer.invoke('focus-state'),
+  onFocusState: (cb) => {
+    const listener = (_event, state) => {
+      if (state && typeof state === 'object' && !Array.isArray(state)) cb(state)
+    }
+    ipcRenderer.on('focus-state', listener)
+    return () => ipcRenderer.removeListener('focus-state', listener)
   },
   onScreenSettingsChanged: (cb) => {
     const listener = () => cb()

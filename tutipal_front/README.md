@@ -16,6 +16,8 @@ npm run dist:win
 
 PL 구현의 로그인, 방 개설·참여·설정·핀, 개인/수업 챗봇, 이해도 질문, 자료·공지·게시판, 복습, 화면 분석 동의, 캐릭터 위젯, LiveKit 화면공유와 도움 요청 UI를 현재 단일 앱 구조로 이식했다. 화면은 `src/pages`, 서버 호출은 `src/api`, 캐릭터와 공통 UI는 `src/components`에 둔다. 실제 AI 응답은 서버에 구성한 모델 제공자가 준비돼 있어야 한다.
 
+[AI 채팅·위젯 목표 설계](../docs/TUTIPAL_DESIGN.md#11-ai와-학습-지원-기능)에서 수업 학생과 개인 학습 사용자는 위젯의 자동 요약 말풍선과 상세 모달을 사용한다. 직접 질문의 Agent는 Spring이 학습 맥락에 맞춰 선택한다. 선생님 화면의 현재 `챗봇 미리보기` 탭은 목표 화면에서 제외하며, AI 문제 생성 모달과 학생별 답안 관리 모달을 사용한다.
+
 renderer에서 Node 사용을 끄고 context isolation과 sandbox를 켰다. Main은 설치된 `dist`를 `127.0.0.1`의 임의 포트로 제공하고, 허용된 업무 경로만 Spring으로 중계한다. 각 요청에는 이 앱의 webContents만 주입할 수 있는 실행별 임의 헤더가 필요하다. Spring 로그인 쿠키는 Electron 세션의 서버 쿠키 저장소에만 두고, CSRF 값은 `/api/auth/csrf`에서 읽는다. 로그인 쿠키를 localStorage에 복사하지 않는다. `/ws`와 `/livekit` 연결도 같은 중계를 통과한다.
 
 LiveKit 토큰 응답은 Spring의 세션에 묶인 관문 주소이며 실제 JWT는 renderer에 전달하지 않는다. 그림 좌표는 LiveKit 데이터 채널 대신 Spring API/STOMP를 사용한다. 화면 분석은 선택한 창만 캡처하고 이미지는 저장하지 않는다. 소셜 로그인은 시스템 브라우저와 `tutipal://auth` 딥링크의 일회용 코드 교환을 사용한다.

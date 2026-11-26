@@ -1,0 +1,76 @@
+# PT-110: AI node on the team PC (Windows + Docker Desktop + NVIDIA GPU).
+# EC2 Spring -> https://ai.<domain> -> Cloudflare (Access service token) -> cloudflared below (outbound only,
+# no port forwarding) -> fastapi:8000 -> Ollama installed on this PC (GPU).
+# FastAPI is stateless: no DB, S3 or LiveKit credentials here. Guide: docs/DEPLOYMENT.md 7.
+#
+#   docker compose --env-file infra/.env.ai-node -f infra/docker-compose.ai-node.yml up -d --build --wait
+#
+# Tunnel public hostname service: http://fastapi:8000 (the compose service name, not 127.0.0.1).
+name: tutipal-ai-node
+
+services:
+  fastapi:
+    build:
+      context: ../tutipal_ai
+      args:
+        # PT-86 reranker model baked into the image only when true (needs huggingface.co at build time)
+        WITH_RERANKER: ${WITH_RERANKER:-false}
+    image: ${AI_NODE_IMAGE:-local/tutipal-fastapi:ai-node}
+    environment:
+      # must be the same value as AI_INTERNAL_KEY in the EC2 infra/.env.prod
+      AI_INTERNAL_KEY: ${AI_INTERNAL_KEY:?Set AI_INTERNAL_KEY (same value as EC2 .env.prod)}
+      MODEL_PROVIDER: ${MODEL_PROVIDER:-ollama}
+      MODEL_NAME: ${MODEL_NAME:-gemma3:4b}
+      # Ollama installed on this PC (Windows), reached from the container through Docker Desktop
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-http://host.docker.internal:11434}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5.4-mini}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MAX_COMPLETION_TOKENS: ${OPENAI_MAX_COMPLETION_TOKENS:-4096}
+      EMBEDDING_DIMENSIONS: "1024"
+      # PT-86 /v1/rerank (model is baked into the image; off by default, Spring flag is separate)
+      RERANK_ENABLED: ${RERANK_ENABLED:-false}
+      RERANK_THREADS: ${RERANK_THREADS:-2}
+      RERANK_MAX_LENGTH: ${RERANK_MAX_LENGTH:-256}
+      # below the Spring rerank timeout (TUTIPAL_RAG_RERANK_TIMEOUT, 2s): give up waiting behind another rerank
+      RERANK_QUEUE_TIMEOUT_MS: ${RERANK_QUEUE_TIMEOUT_MS:-1000}
+      # PT-90 /v1/focus/predict: LightGBM text model inside FOCUS_MODEL_DIR (mounted at /models/focus), e.g.
+      # FOCUS_MODEL_PATH=/models/focus/<file>.txt. Empty = model off, only that path is 503
+      FOCUS_MODEL_PATH: ${FOCUS_MODEL_PATH:-}
+      FOCUS_MODEL_SHA256: ${FOCUS_MODEL_SHA256:-}
+    volumes:
+      # read-only model folder on this PC (git-ignored default ./ai-node-models)
+      - ${FOCUS_MODEL_DIR:-./ai-node-models}:/models/focus:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # loopback only, for checks on this PC. Other devices on the LAN cannot reach it; EC2 comes through the tunnel.
+    ports: ["127.0.0.1:${AI_NODE_PORT:-8000}:8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/internal/ai/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # PT-86: reranker model loads at startup
+      start_period: 30s
+    # starts again with Docker Desktop after a reboot (Docker Desktop: "Start when you sign in")
+    restart: unless-stopped
+    networks: [ai]
+
+  cloudflared:
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
+    command: tunnel --no-autoupdate run
+    environment:
+      # token of the AI-only tunnel (Tunnel 2), not the Spring tunnel of EC2
+      # (empty = cloudflared exits and restarts; the AI node is then unreachable from EC2)
+      TUNNEL_TOKEN: ${CLOUDFLARE_AI_TUNNEL_TOKEN:-}
+    depends_on:
+      fastapi:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [ai]
+
+networks:
+  ai:

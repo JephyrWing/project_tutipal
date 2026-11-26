@@ -28,6 +28,52 @@ jobs:
           chmod +x gradlew
           ./gradlew bootJar --no-daemon
 
+  # PT-25: JUnit 은 JAR 빌드와 따로 돌려 "빌드 성공" 과 "기능 검사 통과" 를 구분한다.
+  spring-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Run JUnit tests
+        working-directory: tutipal_back
+        run: |
+          chmod +x gradlew
+          # PT-86: the ragEval harness compiles and its guard tests run here (running the eval needs local models).
+          ./gradlew test ragEvalTest --no-daemon
+      - name: Summarize test results
+        if: always()
+        working-directory: tutipal_back
+        run: |
+          python3 - <<'EOF'
+          import glob, os, sys, xml.etree.ElementTree as ET
+          rows, total, skipped, bad = [], 0, 0, 0
+          for path in sorted(glob.glob("build/test-results/test/*.xml")):
+              r = ET.parse(path).getroot()
+              t, f, e, s = (int(r.get(k, 0)) for k in ("tests", "failures", "errors", "skipped"))
+              total += t
+              skipped += s
+              bad += f + e
+              rows.append(f"| {r.get('name').rsplit('.', 1)[-1]} | {t} | {f + e} | {s} |")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              out.write(f"### JUnit: {total - skipped} ran, {bad} failed, {skipped} skipped\n\n| class | tests | failed | skipped |\n|---|---|---|---|\n")
+              out.write("\n".join(rows) + "\n")
+          print(f"JUnit ran={total - skipped} failed={bad} skipped={skipped}")
+          if total - skipped == 0:
+              sys.exit("실행된 JUnit 이 0건이다(없음 또는 전부 skip). 테스트 없는 성공은 통과로 보지 않는다.")
+          EOF
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-report
+          path: |
+            tutipal_back/build/reports/tests/test
+            tutipal_back/build/test-results/test
+          retention-days: 14
+
   electron-build:
     runs-on: windows-latest
     steps:
@@ -45,6 +91,17 @@ jobs:
           npm run check
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run dist:win
+      - name: Verify runtime ASAR tamper rejection on private copies
+        working-directory: tutipal_front
+        run: npm run test:win-integrity
+      - name: Upload Windows integrity evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-integrity-evidence
+          path: tutipal_front/test-results/win-integrity.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   python-and-compose:
     # Python 3.12.6 공식 배포본은 Ubuntu 24.04까지 제공된다.
@@ -67,4 +124,54 @@ jobs:
           docker compose --env-file infra/.env.local.example -f infra/docker-compose.local.yml config --quiet
           docker compose --env-file infra/.env.local.example -f infra/docker-compose.local.yml -f infra/docker-compose.dev.yml config --quiet
           docker compose --env-file infra/.env.prod.example -f infra/docker-compose.prod.yml --profile cloudflare config --quiet
-      # Playwright / JUnit / pytest execution is added after requirements are agreed.
+          docker compose --env-file infra/.env.prod.example -f infra/docker-compose.prod.yml --profile cloudflare --profile ec2-ai config --quiet
+          docker compose --env-file infra/.env.ai-node.example -f infra/docker-compose.ai-node.yml config --quiet
+      - name: Build FastAPI image (default, without reranker model)
+        # PT-86: the multi-stage Dockerfile must build before deploy does. WITH_RERANKER defaults to false, so this
+        # step needs no huggingface.co access; the model stage is built with --build-arg WITH_RERANKER=true on adoption.
+        run: docker build --pull -t tutipal-fastapi-ci tutipal_ai
+
+  python-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.6"
+      - name: Install isolated test dependencies
+        working-directory: tutipal_ai
+        run: |
+          python -m venv .venv-test
+          .venv-test/bin/python -m pip install -r requirements-test.lock.txt
+          .venv-test/bin/python -m pip check
+      - name: Run inference contract tests without model servers
+        working-directory: tutipal_ai
+        run: .venv-test/bin/python -m pytest -q --junitxml=test-results/pytest.xml
+      - name: Summarize pytest results
+        if: always()
+        working-directory: tutipal_ai
+        run: |
+          python - <<'PY'
+          import os, sys, xml.etree.ElementTree as ET
+          root = ET.parse("test-results/pytest.xml").getroot()
+          cases = list(root.iter("testcase"))
+          failed = sum(c.find("failure") is not None for c in cases)
+          errors = sum(c.find("error") is not None for c in cases)
+          skipped = sum(c.find("skipped") is not None for c in cases)
+          ran = len(cases) - skipped
+          text = f"pytest: collected={len(cases)}, ran={ran}, passed={ran-failed-errors}, failed={failed}, errors={errors}, skipped={skipped}"
+          print(text)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as out:
+              out.write(text + "\n\nMock provider contracts only; no paid API/GPU or model-quality validation.\n")
+          if ran == 0 or failed or errors:
+              sys.exit("pytest did not produce a successful non-empty run")
+          PY
+      - name: Upload pytest report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report
+          path: tutipal_ai/test-results/pytest.xml
+          if-no-files-found: error
+          retention-days: 14

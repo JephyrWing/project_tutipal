@@ -1,0 +1,34 @@
+/* PT-87 개념 분석 탭 · 개념 태그 칩 */
+.insights-tab { display: flex; flex-direction: column; gap: 16px; }
+.insights-result { display: flex; flex-direction: column; gap: 8px; }
+.insights-note { margin: 0; padding: 10px 14px; border-radius: var(--radius-sm); background: var(--primary-weak); }
+.insights-note-insufficient, .insights-note-lowQuality { background: var(--warn-weak); color: var(--warn-text); }
+.insights-note-unavailable { background: var(--danger-weak); color: var(--danger-text); }
+.insights-topics { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.insights-topic {
+  display: flex; align-items: center; gap: 14px; padding: 12px 16px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface);
+}
+.insights-rank {
+  width: 32px; height: 32px; flex: none; border-radius: 50%; display: grid; place-items: center;
+  background: var(--primary-weak); color: var(--primary); font-weight: 700;
+}
+.insights-label { margin-right: 8px; word-break: break-word; }
+.insights-table-wrap { overflow-x: auto; }
+.insights-table th, .insights-table td { text-align: center; white-space: nowrap; }
+.insights-table th[scope='row'] { text-align: left; }
+.insights-table .insights-low { color: var(--red); }
+.insights-table .insights-unsure { opacity: 0.55; }
+
+.concept-tags { display: flex; flex-direction: column; gap: 6px; }
+.concept-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.concept-chips-inline { margin-left: 8px; }
+.concept-chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--primary-line); background: var(--primary-weak); color: var(--primary);
+  font-size: 13px; font-weight: 600;
+}
+.concept-chip button { border: 0; background: none; color: inherit; cursor: pointer; padding: 0 2px; font-size: 14px; }
+.concept-chip-static { font-size: 12px; padding: 2px 8px; }
+.concept-input { width: 200px; height: 34px; }
+.quiz-concepts { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }

@@ -5,6 +5,7 @@ import java.io.InputStreamReader;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -16,8 +17,14 @@ import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.client.ResourceAccessException;
+
+import com.my.tutipal_back.ai.dto.AgentDtos;
+import com.my.tutipal_back.common.support.TransientConnectionFailure;
 
 import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -42,6 +49,7 @@ public class AiClient {
 
     public AiClient(@Value("${app.ai.base-url}") String baseUrl,
                     @Value("${app.ai.internal-key}") String internalKey,
+                    AiAccessHeaders access,
                     JsonMapper json) {
         // HTTP/1.1 고정: JDK 기본(HTTP/2 업그레이드 시도)을 uvicorn 이 거부해서 요청이 깨짐
         HttpClient http = HttpClient.newBuilder()
@@ -56,6 +64,7 @@ public class AiClient {
                 .requestFactory(factory)
                 .baseUrl(baseUrl)
                 .defaultHeader("X-Internal-Key", internalKey)
+                .defaultHeaders(access::addTo)   // PT-110 Cloudflare Access token (none when not configured)
                 .build();
         this.json = json;
     }
@@ -66,21 +75,13 @@ public class AiClient {
      * onDelta 가 던진 예외(예: 화면이 연결을 끊음)는 그대로 올라간다.
      */
     public void chatStream(String system, List<Message> messages, Consumer<String> onDelta) {
-        try {
-            exchangeChat(system, messages, false, onDelta);
-        } catch (RestClientException | JacksonException e) {
-            throw new AiUnavailableException();
-        }
+        exchangeChat(system, messages, false, onDelta);
     }
 
     /** 답변 전체를 한 번에 (채점 · 문제 만들기). jsonMode 면 모델이 JSON 하나만 낸다. */
     public String complete(String system, List<Message> messages, boolean jsonMode) {
         StringBuilder sb = new StringBuilder();
-        try {
-            exchangeChat(system, messages, jsonMode, sb::append);
-        } catch (RestClientException | JacksonException e) {
-            throw new AiUnavailableException();
-        }
+        exchangeChat(system, messages, jsonMode, sb::append);
         return sb.toString();
     }
 
@@ -121,36 +122,167 @@ public class AiClient {
                 for(float v:vector)if(!Float.isFinite(v))throw new AiUnavailableException();
             }
             return res;
+        } catch (ResourceAccessException e) {
+            throw new AiUnavailableException(TransientConnectionFailure.confirmed(e));
+        } catch (RestClientResponseException e) {
+            var headers = e.getResponseHeaders();
+            // FastAPI가 확인된 장애에 붙인 내부 표지만 신뢰한다.
+            throw new AiUnavailableException(e.getStatusCode().value() == 503 && headers != null
+                    && "transient".equals(headers.getFirst("X-Embedding-Failure")));
         } catch (RestClientException e) {
             throw new AiUnavailableException();
         }
     }
 
+    /**
+     * AI 서버 쪽 실패는 전부 AiUnavailableException 으로 바꾼다. 첫 답변 조각을 받은 뒤의 실패면
+     * {@link AiUnavailableException#afterOutput()} (모델이 이미 일함 → PT-97 한도에서 환불하지 않음).
+     */
     private void exchangeChat(String system, List<Message> messages, boolean jsonMode, Consumer<String> onDelta) {
-        rest.post().uri("/v1/chat")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of("system", system, "messages", messages, "json_mode", jsonMode))
-                .exchange((request, response) -> {
-                    if (!response.getStatusCode().is2xxSuccessful()) {
-                        throw new AiUnavailableException();
-                    }
-                    try (BufferedReader reader = new BufferedReader(
-                            new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))) {
-                        String line;
-                        while ((line = reader.readLine()) != null) {
-                            if (line.isBlank()) {
-                                continue;
-                            }
-                            Chunk chunk = json.readValue(line, Chunk.class);
-                            if (chunk.error() != null) {
-                                throw new AiUnavailableException();
-                            }
-                            if (chunk.delta() != null) {
-                                onDelta.accept(chunk.delta());
+        boolean[] emitted = {false};
+        try {
+            rest.post().uri("/v1/chat")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(Map.of("system", system, "messages", messages, "json_mode", jsonMode))
+                    .exchange((request, response) -> {
+                        if (!response.getStatusCode().is2xxSuccessful()) {
+                            throw new AiUnavailableException();
+                        }
+                        try (BufferedReader reader = new BufferedReader(
+                                new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                if (line.isBlank()) {
+                                    continue;
+                                }
+                                Chunk chunk = json.readValue(line, Chunk.class);
+                                if (chunk.error() != null) {
+                                    throw unavailable(emitted[0]);
+                                }
+                                if (chunk.delta() != null) {
+                                    emitted[0] = true;
+                                    onDelta.accept(chunk.delta());
+                                }
                             }
                         }
-                    }
-                    return null;
-                });
+                        return null;
+                    });
+        } catch (RestClientException | JacksonException e) {
+            throw unavailable(emitted[0]);
+        }
+    }
+
+    /**
+     * PT-85 Agent 한 번 호출 (POST /v1/agent/chat, 계약 7.5). 줄마다 listener 를 부르고, need_search 줄이나
+     * 마지막 meta 줄로 끝난 방식을 돌려준다.
+     * AI 서버 연결 실패 · 오류 응답 · error 줄 · 깨진 줄 · meta 없이 끝난 스트림은 AiUnavailableException.
+     * delta 또는 variant 줄을 받은 뒤의 실패면 afterOutput (계약 7.6: 모델이 이미 일함 → 환불 안 함).
+     * ping · start · need_search 는 출력으로 세지 않는다. listener 가 던진 예외는 그대로 올라간다.
+     */
+    public AgentOutcome agentStream(AgentDtos.AgentChatRequest body, AgentListener listener) {
+        boolean[] emitted = {false};
+        try {
+            AgentOutcome outcome = rest.post().uri("/v1/agent/chat")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body)
+                    .exchange((request, response) -> {
+                        if (!response.getStatusCode().is2xxSuccessful()) {
+                            throw new AiUnavailableException();
+                        }
+                        try (BufferedReader reader = new BufferedReader(
+                                new InputStreamReader(response.getBody(), StandardCharsets.UTF_8))) {
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                if (line.isBlank()) {
+                                    continue;
+                                }
+                                AgentOutcome done = agentLine(json.readTree(line), listener, emitted);
+                                if (done != null) {
+                                    return done;
+                                }
+                            }
+                        }
+                        return null;
+                    });
+            if (outcome == null) {
+                throw unavailable(emitted[0]);   // meta · need_search 없이 끊김
+            }
+            return outcome;
+        } catch (RestClientException | JacksonException e) {
+            throw unavailable(emitted[0]);
+        }
+    }
+
+    /** 줄 하나 처리. 끝을 알리는 줄이면 결과, 아니면 null. 모르는 종류의 줄은 건너뛴다. */
+    @SuppressWarnings("unchecked")
+    private AgentOutcome agentLine(JsonNode line, AgentListener listener, boolean[] emitted) {
+        if (!line.isObject()) {
+            throw unavailable(emitted[0]);
+        }
+        if (line.has("error")) {
+            throw unavailable(emitted[0]);
+        }
+        if (line.has("ping")) {
+            listener.onPing();
+        } else if (line.has("start")) {
+            JsonNode ids = line.get("start").path("materialIds");
+            List<String> materialIds = new ArrayList<>();
+            for (JsonNode id : ids) {
+                materialIds.add(id.asString());
+            }
+            listener.onStart(List.copyOf(materialIds));
+        } else if (line.has("delta")) {
+            JsonNode delta = line.get("delta");
+            if (!delta.isString()) {
+                throw unavailable(emitted[0]);
+            }
+            emitted[0] = true;
+            listener.onDelta(delta.asString());
+        } else if (line.has("variant")) {
+            AgentDtos.VariantResult result = json.treeToValue(line.get("variant"), AgentDtos.VariantResult.class);
+            emitted[0] = true;   // 변형 도구가 모델을 이미 썼다
+            listener.onVariant(result);
+        } else if ("need_search".equals(line.path("status").asString(""))) {
+            JsonNode state = line.get("state");
+            Map<String, Object> parsed = state != null && state.isObject()
+                    ? json.treeToValue(state, Map.class) : null;
+            return new AgentOutcome.NeedSearch(line.path("query").asString(""), parsed);
+        } else if (line.has("meta")) {
+            return new AgentOutcome.Completed(json.treeToValue(line.get("meta"), AgentDtos.Meta.class));
+        }
+        return null;
+    }
+
+    /** PT-106 POST /v1/agent/summarize body (contract 6.5): only these three fields (FastAPI extra="forbid"). */
+    private record SummarizeBody(AgentDtos.Scope scope, List<AgentDtos.ContextMessage> messages,
+                                 String previousSummary) {
+    }
+
+    private record SummarizeResult(String summary) {
+    }
+
+    /**
+     * PT-106: summarizes stored conversation messages outside the chat turn (POST /v1/agent/summarize, contract 6.5).
+     * Non-2xx (422 / 502 empty_summary / 503 llm_unavailable ...), a broken or blank body and connection failures
+     * are all AiUnavailableException. Request and response bodies are never logged.
+     */
+    public String summarize(AgentDtos.Scope scope, List<AgentDtos.ContextMessage> messages, String previousSummary) {
+        try {
+            SummarizeResult result = rest.post().uri("/v1/agent/summarize")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(new SummarizeBody(scope, messages, previousSummary))
+                    .retrieve()
+                    .body(SummarizeResult.class);
+            if (result == null || result.summary() == null || result.summary().isBlank()) {
+                throw new AiUnavailableException();
+            }
+            return result.summary().strip();
+        } catch (RestClientException | JacksonException e) {
+            throw new AiUnavailableException();
+        }
+    }
+
+    private static AiUnavailableException unavailable(boolean afterOutput) {
+        return afterOutput ? AiUnavailableException.afterOutput() : new AiUnavailableException();
     }
 }

@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.Set;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.event.EventListener;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -66,6 +67,8 @@ public class ScreenShareService {
     /** 목업 17: 학생만, 열린 요청은 하나만. */
     @Transactional
     public HelpResponse request(Long userId, Long sessionId, CreateHelpRequest req) {
+        users.lockActiveAccount(userId);   // before the class row lock (same order as withdrawal)
+        sessions.lockForHelp(sessionId);
         if (sessions.requireActiveRole(userId, sessionId) != SessionRole.STUDENT) {
             throw new ApiException(HttpStatus.FORBIDDEN, "학생만 도움을 요청할 수 있어요");
         }
@@ -87,7 +90,7 @@ public class ScreenShareService {
 
     @Transactional
     public HelpResponse accept(Long userId, Long helpId) {
-        HelpRequest help = findOpen(helpId);
+        HelpRequest help = findOpenForUpdate(helpId);
         sessions.requireTeacherOf(userId, help.getSessionId());
         if (help.getStatus() != Status.PENDING) {
             throw new ApiException(HttpStatus.CONFLICT, "이미 처리된 요청이에요");
@@ -95,7 +98,7 @@ public class ScreenShareService {
         if (helps.countBySessionIdAndStatus(help.getSessionId(), Status.ACCEPTED) >= MAX_ACTIVE_HELP) {
             throw new ApiException(HttpStatus.CONFLICT, "동시에 " + MAX_ACTIVE_HELP + "명까지 도와줄 수 있어요. 진행 중인 도움을 먼저 끝내 주세요");
         }
-        help.moveTo(Status.ACCEPTED);
+        help.acceptBy(userId);
         notifyBoth(help, "helpAccepted");
         return responses(List.of(help)).getFirst();
     }
@@ -103,7 +106,7 @@ public class ScreenShareService {
     /** "나중에": 학생에게 알리고 닫는다 (학생이 다시 요청할 수 있음). */
     @Transactional
     public void later(Long userId, Long helpId) {
-        HelpRequest help = findOpen(helpId);
+        HelpRequest help = findOpenForUpdate(helpId);
         sessions.requireTeacherOf(userId, help.getSessionId());
         if (help.getStatus() != Status.PENDING) {
             throw new ApiException(HttpStatus.CONFLICT, "진행 중인 도움은 '종료' 로 끝내 주세요");
@@ -115,12 +118,34 @@ public class ScreenShareService {
     /** 끝내기: 그 세션 선생님 또는 요청한 학생. */
     @Transactional
     public void end(Long userId, Long helpId) {
-        HelpRequest help = findOpen(helpId);
+        HelpRequest help = findOpenForUpdate(helpId);
         if (!help.getUserId().equals(userId)) {
             sessions.requireTeacherOf(userId, help.getSessionId());
         }
         help.moveTo(Status.DONE);
         notifyBoth(help, "helpEnded");
+    }
+
+    /** FR-SES-07 학생이 나가거나 내보내지면 그 세션의 열린 도움 요청을 닫는다 (나가기와 같은 트랜잭션, 동기 실행). */
+    @EventListener
+    @Transactional
+    public void onParticipantRemoved(StudySessionService.ParticipantRemoved removed) {
+        for (HelpRequest help : helps.findBySessionIdAndUserIdAndStatusIn(removed.sessionId(), removed.userId(), OPEN)) {
+            help.moveTo(Status.DONE);
+            notifyBoth(help, "helpEnded");
+        }
+    }
+
+    /**
+     * 회원 탈퇴: 그 학생의 열린 도움 요청을 모든 세션에서 나가기와 같은 방식(DONE + helpEnded)으로 닫는다. 기록은 남는다.
+     * 호출하는 쪽이 세션 행을 먼저 잠근다 (WithdrawalService → AccountCleanup.lockHelpSessions).
+     */
+    @Transactional
+    public void closeOpenHelpsOf(Long userId) {
+        for (HelpRequest help : helps.findByUserIdAndStatusInOrderByIdAsc(userId, OPEN)) {
+            help.moveTo(Status.DONE);
+            notifyBoth(help, "helpEnded");
+        }
     }
 
     /** 방 B 입장권: 진행 중(ACCEPTED)일 때 요청한 학생과 그 세션 선생님만. */
@@ -166,6 +191,16 @@ public class ScreenShareService {
         if (!help.isOpen()) {
             throw new ApiException(HttpStatus.CONFLICT, "이미 끝난 요청이에요");
         }
+        return help;
+    }
+
+    private HelpRequest findOpenForUpdate(Long helpId) {
+        Long sessionId = helps.sessionIdOf(helpId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "도움 요청을 찾을 수 없어요"));
+        sessions.lockForHelp(sessionId);
+        HelpRequest help = helps.lockById(helpId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "도움 요청을 찾을 수 없어요"));
+        if (!help.isOpen()) throw new ApiException(HttpStatus.CONFLICT, "이미 끝난 요청이에요");
         return help;
     }
 

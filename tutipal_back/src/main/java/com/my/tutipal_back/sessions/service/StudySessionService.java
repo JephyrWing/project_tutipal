@@ -8,6 +8,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,32 +44,46 @@ public class StudySessionService {
     private final UserService userService;
     private final SessionEvents events;
     private final Presence presence;
+    private final ApplicationEventPublisher publisher;
     private final Clock clock = Clock.systemUTC();
 
+    /**
+     * 참가자가 나가거나 내보내졌을 때 같은 트랜잭션 안에서 알리는 이벤트. 화면공유(ScreenShareService)가 받아 그 학생의
+     * 열린 도움 요청을 닫는다 (ScreenShareService 가 이 서비스를 쓰므로 직접 부르면 순환 의존이 됨).
+     */
+    public record ParticipantRemoved(Long sessionId, Long userId) {
+    }
+
     public StudySessionService(StudySessionRepository sessions, SessionParticipantRepository participants,
-                               UserService userService, SessionEvents events, Presence presence) {
+                               UserService userService, SessionEvents events, Presence presence,
+                               ApplicationEventPublisher publisher) {
         this.sessions = sessions;
         this.participants = participants;
         this.userService = userService;
         this.events = events;
         this.presence = presence;
+        this.publisher = publisher;
     }
 
     /** 세션을 연 사람이 그 세션의 TEACHER. */
     @Transactional
     public SessionResponse create(Long userId, CreateSessionRequest request) {
+        userService.lockActiveAccount(userId);   // first lock: serialized with withdrawal
         String topic = TopicPrompt.subject(request.topic());
-        StudySession session = sessions.save(new StudySession(request.title().trim(), topic, newCode(), userId));
+        StudySession session = sessions.save(new StudySession(request.title().trim(), topic, newCode(), userId,
+                request.aiRetentionDays()));
         participants.save(new SessionParticipant(session.getId(), userId, SessionRole.TEACHER));
         return SessionResponse.of(session, SessionRole.TEACHER, 1);
     }
 
     /**
      * 초대 코드로 참여 → STUDENT. 이미 참가자면 원래 역할 그대로 (선생님이 코드를 넣어도 선생님).
-     * ponytail: 코드 맞히기 시도 제한 없음 (31^6 ≈ 8.9억 가지), 공개 운영 전에 사용자별 시도 제한 추가
+     * 외부 참여 요청의 계정별 실패 제한은 InviteCodeJoinService에서 적용한다.
+     * 종료와 같은 수업 행을 잠근 상태에서 활성 여부를 확인하고 참가를 저장한다.
      */
     @Transactional
     public SessionResponse join(Long userId, String code) {
+        userService.lockActiveAccount(userId);   // before the class row lock (same order as withdrawal)
         StudySession session = sessions.findByInviteCode(InviteCodes.normalize(code))
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "코드에 맞는 방이 없어요"));
         if (session.isEnded()) {
@@ -128,9 +143,22 @@ public class StudySessionService {
         return response(session, SessionRole.TEACHER);
     }
 
+    /**
+     * PT-13 결정 A: 수업 AI 대화 보관 일수 변경 (선생님만: 비참가자 404, 학생 403). 끝난 수업에서도 바꿀 수 있다:
+     * 보관 기간은 종료 시각부터 세므로, 줄이면 이미 지난 대화는 다음 정리 작업(1시간마다)에서 지워진다.
+     */
+    @Transactional
+    public SessionResponse updateAiRetention(Long userId, Long sessionId, int aiRetentionDays) {
+        requireTeacher(sessionId, userId);
+        StudySession session = findSession(sessionId);
+        session.changeAiRetentionDays(aiRetentionDays);
+        return response(session, SessionRole.TEACHER);
+    }
+
     /** 세션 종료: 새 참여 · 세션 챗봇이 막힌다. 여러 번 불러도 같음. */
     @Transactional
     public SessionResponse end(Long userId, Long sessionId) {
+        lockForHelp(sessionId);
         requireTeacher(sessionId, userId);
         StudySession session = findSession(sessionId);
         if (!session.isEnded()) {
@@ -138,6 +166,40 @@ public class StudySessionService {
             events.toSession(sessionId, "ended", sessionId);
         }
         return response(session, SessionRole.TEACHER);
+    }
+
+    /**
+     * FR-SES-07 학생이 방에서 나가기. 참가 기록이 지워지므로 이후 질문 · 챗봇 · 화면공유 요청이 404 로 막히고,
+     * 이미 연결된 LiveKit 은 LiveKitProxy 주기 검사가 끊는다. 선생님은 나갈 수 없다 (방 닫기를 쓴다).
+     */
+    @Transactional
+    public void leave(Long userId, Long sessionId) {
+        lockForHelp(sessionId);
+        SessionParticipant me = requireParticipant(sessionId, userId);
+        if (me.isTeacher()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "선생님은 나갈 수 없어요. 방 닫기를 써 주세요");
+        }
+        remove(me);
+    }
+
+    /** FR-SES-07 선생님이 학생 내보내기. 내보낸 학생 화면에는 removed 알림. 다시 코드로 참여하는 것은 막지 않는다. */
+    @Transactional
+    public void kick(Long teacherId, Long sessionId, Long studentId) {
+        lockForHelp(sessionId);
+        requireTeacher(sessionId, teacherId);
+        SessionParticipant target = participants.findBySessionIdAndUserId(sessionId, studentId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "참가자를 찾을 수 없어요"));
+        if (target.isTeacher()) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "선생님은 내보낼 수 없어요");
+        }
+        remove(target);
+        events.toUser(studentId, "removed", sessionId);
+    }
+
+    private void remove(SessionParticipant p) {
+        participants.delete(p);
+        publisher.publishEvent(new ParticipantRemoved(p.getSessionId(), p.getUserId()));
+        events.toTeacher(p.getSessionId(), "left", p.getUserId());
     }
 
     /** tutor 도메인용: 참가자이고 진행 중인 세션이면 선생님 챗봇 설정. */
@@ -149,8 +211,13 @@ public class StudySessionService {
 
     /** STOMP 구독 검사용: 진행 중인 세션의 참가자면 역할, 아니면 empty. */
     public Optional<SessionRole> roleOf(Long userId, Long sessionId) {
+        return participantRole(userId, sessionId)
+                .filter(role -> sessions.findById(sessionId).filter(s -> !s.isEnded()).isPresent());
+    }
+
+    /** 알림 전달 시 참가자 권한을 확인한다. 남은 참가자는 방이 닫혔다는 알림을 받을 수 있다. */
+    public Optional<SessionRole> participantRole(Long userId, Long sessionId) {
         return participants.findBySessionIdAndUserId(sessionId, userId)
-                .filter(p -> sessions.findById(sessionId).filter(s -> !s.isEnded()).isPresent())
                 .map(SessionParticipant::getRole);
     }
 
@@ -159,6 +226,12 @@ public class StudySessionService {
         SessionRole role = requireParticipant(sessionId, userId).getRole();
         requireActive(sessionId);
         return role;
+    }
+
+    /** Serialize help/chat writes with close, leave and kick. Check access separately. */
+    @Transactional
+    public void lockForHelp(Long sessionId) {
+        sessions.lockById(sessionId);
     }
 
     /** 다른 도메인(quiz)용: 그 세션의 선생님인지 확인 (아니면 404 · 403). */

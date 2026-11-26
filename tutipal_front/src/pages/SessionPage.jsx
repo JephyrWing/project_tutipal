@@ -7,10 +7,14 @@ import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
 import { ChatPanel } from './ChatPage'
 import SubjectPicker from '../components/SubjectPicker'
+import AiRetentionInput from '../components/AiRetentionInput'
+import { parseAiRetentionDays } from '../utils/aiRetention'
 import { BoardPanel, MaterialsPanel, NoticesPanel } from './BoardPanels'
 import { StudentHelp, StudentLiveTab, TeacherHelpTab, TeacherShareTab } from './LivePanels'
-import { notices } from '../api/board'
+import { materials, notices } from '../api/board'
 import { StudentQuizModal, TeacherQuizTab } from './QuizPanels'
+import { FocusBadge, FocusNotice, StudentFocusCard, useFocusStates } from './FocusPanels'
+import InsightsTab from './InsightsPanels'
 
 /** 세션 화면: 내 역할에 따라 학생 홈(목업 13) 또는 선생님 모드(목업 20 · 21) */
 export default function SessionPage() {
@@ -36,6 +40,7 @@ export default function SessionPage() {
   }
   if (!session) return <p className="muted">불러오는 중…</p>
   if (session.ended) {
+    if (session.myRole === 'TEACHER') return <EndedTeacherView session={session} />
     return (
       <div className="center-page">
         <div className="card session-card">
@@ -74,11 +79,15 @@ function SessionHead({ session, badge, live, actions }) {
 function StudentView({ session, reload }) {
   const [tab, setTab] = useState('chat')
   const [keys, setKeys] = useState({ notice: 0, board: 0, materials: 0 })
-  const [toast, setToast] = useState('')
+  const [toast, setToast] = useState(null)
   const bump = (k) => setKeys((v) => ({ ...v, [k]: v[k] + 1 }))
   const [quiz, setQuiz] = useState(null)
   const [dismissed, setDismissed] = useState([])
   const [helpKey, setHelpKey] = useState(0)
+  /** 챗봇 답변의 "선생님께 도움 요청" 버튼이 넘긴 초안 {text, sessionId, seq}. seq 가 바뀔 때마다 StudentHelp 가
+   * 같은 수업의 초안이면 모달을 연다 (PT-113) */
+  const [helpDraft, setHelpDraft] = useState(null)
+  const [removed, setRemoved] = useState(false)
 
   // 화면을 열 때 이미 열려 있는 질문이 있으면 띄운다 (늦게 들어온 학생 · 새로고침)
   const loadOpen = useCallback(() => {
@@ -95,18 +104,27 @@ function StudentView({ session, reload }) {
 
   const live = useSessionEvents(session.id, false, (e) => {
     if (e.type === 'settings' || e.type === 'ended') reload()
+    else if (e.type === 'removed' && e.id === session.id) setRemoved(true)
     else if (e.type === 'quiz') {
       setDismissed((d) => d.filter((x) => x !== e.id))
       refreshQuiz(e.id)
     } else if ((e.type === 'quizResult' || e.type === 'quizClosed') && quiz?.id === e.id) refreshQuiz(e.id)
-    else if (e.type === 'helpAccepted' || e.type === 'helpDeclined' || e.type === 'helpEnded') setHelpKey((k) => k + 1)
+    else if (e.type === 'helpAccepted' || e.type === 'helpDeclined' || e.type === 'helpEnded' || e.type === 'helpChat') setHelpKey((k) => k + 1)
     else if (e.type === 'notice') {
       bump('notice')
-      // 목업 31 알림: 새 공지 제목을 잠깐 띄움
-      notices.list(session.id).then((l) => l[0] && setToast(l[0].title), () => undefined)
+      notices.list(session.id).then((list) => {
+        const notice = list.find((n) => n.id === e.id)
+        if (notice) setToast({ tab: 'notice', title: notice.title })
+      }, () => undefined)
     } else if (e.type === 'notices') bump('notice')
     else if (e.type === 'posts') bump('board')
-    else if (e.type === 'materials') bump('materials')
+    else if (e.type === 'materialAlert') {
+      bump('materials')
+      materials.list(session.id).then((list) => {
+        const material = list.find((m) => m.id === e.id)
+        if (material) setToast({ tab: 'materials', title: material.filename })
+      }, () => undefined)
+    } else if (e.type === 'materials') bump('materials')
     else if (e.type === 'reconnect') {
       reload()
       loadOpen()
@@ -116,10 +134,24 @@ function StudentView({ session, reload }) {
 
   const showQuiz = quiz && !dismissed.includes(quiz.id) && (quiz.open || quiz.myAnswer)
 
+  // FR-SES-07 선생님이 내보냄: 이후 이 방의 질문 · 챗봇 · 화면공유는 서버에서 막힘
+  if (removed) {
+    return (
+      <div className="center-page">
+        <div className="card session-card">
+          <Mascot mood="curious" size={110} />
+          <p>선생님이 「{session.title}」 방에서 내보냈어요</p>
+          <Link to="/" className="btn">홈으로</Link>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="page session-page">
       <SessionHead session={session} badge="학생" live={live}
-        actions={<StudentHelp sessionId={session.id} reloadKey={helpKey} />} />
+        actions={<><StudentHelp sessionId={session.id} reloadKey={helpKey} draft={helpDraft} /><LeaveButton sessionId={session.id} /></>} />
+      <StudentFocusCard sessionId={session.id} />
       {showQuiz && (
         <StudentQuizModal
           key={quiz.id}
@@ -135,23 +167,37 @@ function StudentView({ session, reload }) {
         <button role="tab" aria-selected={tab === 'board'} onClick={() => setTab('board')}>게시판</button>
         <button role="tab" aria-selected={tab === 'materials'} onClick={() => setTab('materials')}>자료</button>
       </nav>
-      {tab === 'chat' && <ChatPanel topic={session.topic} sessionId={session.id} />}
+      {tab === 'chat' && <ChatPanel topic={session.topic} sessionId={session.id}
+        onRequestHelp={(text) => setHelpDraft((d) => ({ text, sessionId: session.id, seq: (d?.seq ?? 0) + 1 }))} />}
       {tab === 'live' && <StudentLiveTab sessionId={session.id} />}
       {tab === 'notice' && <NoticesPanel sessionId={session.id} teacher={false} reloadKey={keys.notice} />}
       {tab === 'board' && <BoardPanel sessionId={session.id} teacher={false} reloadKey={keys.board} />}
       {tab === 'materials' && <MaterialsPanel sessionId={session.id} teacher={false} reloadKey={keys.materials} />}
       {toast && (
         <div className="toast" role="status">
-          <span>📢 새 공지: <b>{toast}</b></span>
-          <button className="btn btn-sm" onClick={() => { setTab('notice'); setToast('') }}>보기</button>
-          <button className="btn-link small" onClick={() => setToast('')} aria-label="닫기">✕</button>
+          <span>📢 {toast.tab === 'notice' ? '새 공지' : '새 자료'}: <b>{toast.title}</b></span>
+          <button className="btn btn-sm" onClick={() => { setTab(toast.tab); setToast(null) }}>보기</button>
+          <button className="btn-link small" onClick={() => setToast(null)} aria-label="닫기">✕</button>
         </div>
       )}
     </div>
   )
 }
 
-/** 목업 20 선생님 모드: 참가자 · 주제 설정(목업 21) · 챗봇 미리보기 · 세션 종료 */
+/** 목업 20 선생님 모드: 참가자 · 주제 설정(목업 21) · 출제와 답안 관리 · 세션 종료 */
+/** PT-87: 닫힌 방에서도 선생님은 개념 분석(TOP3 · 숙련도)을 볼 수 있다 (서버도 끝난 수업 조회를 허용). */
+function EndedTeacherView({ session }) {
+  return (
+    <div className="page session-page">
+      <div className="card session-body row-between">
+        <span>「{session.title}」 방은 닫혔어요. 개념 분석은 계속 볼 수 있어요.</span>
+        <Link to="/" className="btn btn-sm">홈으로</Link>
+      </div>
+      <InsightsTab sessionId={session.id} />
+    </div>
+  )
+}
+
 function TeacherView({ session, onChange, reload }) {
   const [tab, setTab] = useState('people')
   const [boardKeys, setBoardKeys] = useState({ notice: 0, board: 0, materials: 0 })
@@ -159,17 +205,20 @@ function TeacherView({ session, onChange, reload }) {
   const [quizKey, setQuizKey] = useState(0)
   const [helpKey, setHelpKey] = useState(0)
   const [newHelp, setNewHelp] = useState(false)
+  const [focusKey, setFocusKey] = useState(0)
   const live = useSessionEvents(session.id, true, (e) => {
-    if (e.type === 'joined') reload()   // 참가자 수
-    if (e.type === 'joined' || e.type === 'presence') setPeopleKey((k) => k + 1)
+    if (e.type === 'focus') setFocusKey((k) => k + 1)
+    if (e.type === 'joined' || e.type === 'left') reload()   // 참가자 수
+    if (e.type === 'joined' || e.type === 'left' || e.type === 'presence') setPeopleKey((k) => k + 1)
     if (e.type === 'quizStats' || e.type === 'quiz' || e.type === 'quizClosed') setQuizKey((k) => k + 1)
     if (e.type === 'notice' || e.type === 'notices') setBoardKeys((v) => ({ ...v, notice: v.notice + 1 }))
     if (e.type === 'posts') setBoardKeys((v) => ({ ...v, board: v.board + 1 }))
-    if (e.type === 'materials') setBoardKeys((v) => ({ ...v, materials: v.materials + 1 }))
+    if (e.type === 'materials' || e.type === 'materialAlert') setBoardKeys((v) => ({ ...v, materials: v.materials + 1 }))
     if (e.type === 'help') {
       setHelpKey((k) => k + 1)
       setNewHelp(true)
     }
+    if (e.type === 'helpChat') setHelpKey((k) => k + 1)
     if (e.type === 'reconnect') {
       setHelpKey((k) => k + 1)
       reload()
@@ -190,10 +239,10 @@ function TeacherView({ session, onChange, reload }) {
         </button>
         <button role="tab" aria-selected={tab === 'materials'} onClick={() => setTab('materials')}>자료 · 공지</button>
         <button role="tab" aria-selected={tab === 'board'} onClick={() => setTab('board')}>게시판</button>
-        <button role="tab" aria-selected={tab === 'chat'} onClick={() => setTab('chat')}>챗봇 미리보기</button>
+        <button role="tab" aria-selected={tab === 'insights'} onClick={() => setTab('insights')}>개념 분석</button>
         <EndButton session={session} onChange={onChange} />
       </nav>
-      {tab === 'people' && <Participants sessionId={session.id} reloadKey={peopleKey} />}
+      {tab === 'people' && <Participants sessionId={session.id} reloadKey={peopleKey} focusKey={focusKey} />}
       {tab === 'quiz' && <TeacherQuizTab sessionId={session.id} reloadKey={quizKey} />}
       {tab === 'share' && <TeacherShareTab sessionId={session.id} />}
       {tab === 'help' && <TeacherHelpTab sessionId={session.id} reloadKey={helpKey} />}
@@ -204,14 +253,20 @@ function TeacherView({ session, onChange, reload }) {
         </div>
       )}
       {tab === 'board' && <BoardPanel sessionId={session.id} teacher reloadKey={boardKeys.board} />}
-      {tab === 'settings' && <Settings session={session} onChange={onChange} />}
-      {tab === 'chat' && <ChatPanel topic={session.topic} sessionId={session.id} />}
+      {tab === 'settings' && (
+        <>
+          <Settings session={session} onChange={onChange} />
+          <AiRetentionSetting session={session} onChange={onChange} />
+        </>
+      )}
+      {tab === 'insights' && <InsightsTab sessionId={session.id} reloadKey={quizKey} />}
     </div>
   )
 }
 
-function Participants({ sessionId, reloadKey }) {
+function Participants({ sessionId, reloadKey, focusKey }) {
   const [list, setList] = useState(null)
+  const focus = useFocusStates(sessionId, focusKey)
   const [error, setError] = useState('')
   // 참여 · 접속 변화는 실시간 알림(reloadKey)으로 다시 읽음
   const load = useCallback(() => {
@@ -231,19 +286,69 @@ function Participants({ sessionId, reloadKey }) {
       </div>
       {error && <p className="error-text">{error}</p>}
       <table className="table">
-        <thead><tr><th>이름</th><th>접속</th><th>역할</th><th>참여 시각</th></tr></thead>
+        <thead><tr><th>이름</th><th>접속</th><th>역할</th><th>집중도</th><th>참여 시각</th><th aria-label="관리" /></tr></thead>
         <tbody>
           {list?.map((p) => (
             <tr key={p.userId}>
               <td><span className="avatar avatar-sm"><Icon name="user" size={16} /></span> {p.name}</td>
               <td><span className={`dot${p.online ? '' : ' off'}`} aria-label={p.online ? '접속 중' : '접속 안 함'} /></td>
               <td>{p.role === 'TEACHER' ? '선생님' : '학생'}</td>
+              <td>{p.role === 'STUDENT' && <FocusBadge state={focus[p.userId]?.state ?? 'NOT_PARTICIPATING'} />}</td>
               <td className="muted">{new Date(p.joinedAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</td>
+              <td>{p.role === 'STUDENT' && <KickButton sessionId={sessionId} student={p} onDone={load} onError={setError} />}</td>
             </tr>
           ))}
         </tbody>
       </table>
+      <FocusNotice />
     </section>
+  )
+}
+
+/** FR-SES-07 선생님이 학생 내보내기: 한 번 더 확인 */
+function KickButton({ sessionId, student, onDone, onError }) {
+  const [confirming, setConfirming] = useState(false)
+  async function kick() {
+    try {
+      await sessions.kick(sessionId, student.userId)
+      onDone()
+    } catch (e) {
+      onError(e instanceof Error ? e.message : '내보내지 못했어요')
+      setConfirming(false)
+    }
+  }
+  return confirming ? (
+    <span className="row-gap">
+      <button className="btn btn-sm btn-danger" onClick={() => void kick()}>{student.name} 내보내기</button>
+      <button className="btn btn-sm" onClick={() => setConfirming(false)}>취소</button>
+    </span>
+  ) : (
+    <button className="btn btn-sm" onClick={() => setConfirming(true)}>내보내기</button>
+  )
+}
+
+/** FR-SES-07 학생이 방에서 나가기: 한 번 더 확인 후 홈으로 */
+function LeaveButton({ sessionId }) {
+  const navigate = useNavigate()
+  const [confirming, setConfirming] = useState(false)
+  const [error, setError] = useState('')
+  async function leave() {
+    try {
+      await sessions.leave(sessionId)
+      navigate('/')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '나가지 못했어요')
+    }
+  }
+  return confirming ? (
+    <span className="row-gap">
+      <span className="muted small">이 방의 질문 · 챗봇 · 화면공유를 더 쓸 수 없어요.</span>
+      <button className="btn btn-sm btn-danger" onClick={() => void leave()}>나가기</button>
+      <button className="btn btn-sm" onClick={() => setConfirming(false)}>취소</button>
+      {error && <span className="error-text">{error}</span>}
+    </span>
+  ) : (
+    <button className="btn btn-sm" onClick={() => setConfirming(true)}>방 나가기…</button>
   )
 }
 
@@ -302,6 +407,46 @@ function Settings({ session, onChange }) {
       <div className="row-between">
         <span className="muted" aria-live="polite">{status}</span>
         <button className="btn btn-primary btn-lg" disabled={busy}>학생 챗봇에 적용</button>
+      </div>
+    </form>
+  )
+}
+
+/** PT-13: 수업 AI 대화 보관 기간 (수업 종료 후 0~90일). 선생님 설정 탭에서만 보이고, 서버도 선생님만 허용한다 */
+function AiRetentionSetting({ session, onChange }) {
+  const [value, setValue] = useState(session.aiRetentionDays == null ? '' : String(session.aiRetentionDays))
+  const [status, setStatus] = useState('')
+  const [busy, setBusy] = useState(false)
+  const days = parseAiRetentionDays(value)
+  const unchanged = days === session.aiRetentionDays
+
+  async function onSubmit(e) {
+    e.preventDefault()
+    if (days === null || busy) return
+    setBusy(true)
+    try {
+      onChange(await sessions.updateAiRetention(session.id, days))
+      setStatus('보관 기간을 바꿨어요')
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : '저장하지 못했어요')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form className="card session-body settings" onSubmit={onSubmit}>
+      <div className="field">
+        <strong>AI 대화 보관 기간 (수업 종료 후, 최대 90일)</strong>
+        <AiRetentionInput value={value} onChange={(v) => { setValue(v); setStatus('') }} required />
+        <span className="muted small">
+          학생이 이 수업에서 AI 조교와 나눈 대화는 수업이 끝나고 이 기간이 지나면 지워져요(학생이 "저장"한 대화는 남음).
+          줄이면 이미 기간이 지난 대화는 1시간 안에 지워져요.
+        </span>
+      </div>
+      <div className="row-between">
+        <span className="muted" aria-live="polite">{status}</span>
+        <button className="btn btn-primary" disabled={busy || days === null || unchanged}>보관 기간 저장</button>
       </div>
     </form>
   )

@@ -10,15 +10,33 @@
     "node": ">=24.22.3 <25"
   },
   "scripts": {
+    "predev": "node scripts/build-window-target.mjs",
+    "prebuild": "node scripts/build-window-target.mjs",
+    "prestart": "node scripts/build-window-target.mjs",
     "postinstall": "install-electron",
     "dev": "node scripts/dev.mjs",
     "build": "vite build",
     "start": "electron .",
+    "test:e2e": "playwright test",
+    "test:e2e:list": "playwright test --list",
+    "test:desktop-lifecycle": "playwright test --config=playwright.desktop.config.js",
+    "test:livekit-media": "playwright test --config=playwright.livekit.config.js",
+    "pretest:help-access": "node --check tests/helpAccess.integration.mjs && node --check tests/helpers/fakeLiveKit.mjs && node --check scripts/e2e-server.mjs && node -e \"require('node:fs').mkdirSync('test-results',{recursive:true})\"",
+    "test:help-access": "node --test --test-concurrency=1 --test-reporter=spec --test-reporter=junit --test-reporter-destination=stdout --test-reporter-destination=test-results/help-access.xml tests/helpAccess.integration.mjs",
     "pack": "npm run build && electron-builder --dir --publish never",
-    "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
+    "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never && npm run verify:win",
+    "dist:win:release": "node scripts/build-release.mjs",
+    "verify:release": "node scripts/verify-release.mjs",
+    "predist:win:release": "node --check electron/serverConfig.cjs && node --check scripts/build-release.mjs && node --check scripts/verify-release.mjs",
+    "verify:win": "node scripts/verify-win-package.mjs",
+    "test:win-integrity": "node scripts/test-win-integrity.mjs",
+    "preverify:win": "node --check scripts/verify-win-package.mjs",
     "dist:mac": "npm run build && electron-builder --mac dmg --publish never",
     "dist:linux": "npm run build && electron-builder --linux AppImage --publish never",
-    "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/bridge.cjs && node --check electron/applogin.cjs && node --check electron/screen.cjs && node --check electron/share.cjs && node --check scripts/dev.mjs && node --check vite.config.js"
+    "check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/bridge.cjs && node --check electron/applogin.cjs && node --check electron/screen.cjs && node --check electron/share.cjs && node --check scripts/dev.mjs && node --check vite.config.js && node --check electron/helpShareTarget.cjs && node --check electron/windowTarget.cjs && node --check electron/focusProbe.cjs && node --check electron/focusCollector.cjs && node --check electron/focusTransport.cjs && node --check electron/shareGeometry.cjs && node --check scripts/build-window-target.mjs && node --check electron/serverConfig.cjs && node --check scripts/build-release.mjs && node --check scripts/verify-release.mjs && node --check scripts/test-win-integrity.mjs",
+    "test:window-target": "node scripts/build-window-target.mjs && electron tests/native-window-target.cjs",
+    "test:share-ui": "node tests/help-share-ui.mjs",
+    "test:native-capture": "node scripts/build-window-target.mjs && electron tests/native-capture.cjs"
   },
   "dependencies": {
     "livekit-client": "2.24.1",
@@ -30,6 +48,9 @@
     "ws": "8.18.3"
   },
   "devDependencies": {
+    "@electron/asar": "3.4.1",
+    "@electron/fuses": "1.8.0",
+    "@playwright/test": "1.65.1",
     "@vitejs/plugin-react": "6.3.0",
     "electron": "45.3.3",
     "electron-builder": "26.17.0",
@@ -39,6 +60,18 @@
     "appId": "com.tutipal.desktop",
     "productName": "TUTIPAL",
     "asar": true,
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "grantFileProtocolExtraPrivileges": false
+    },
+    "asarUnpack": [
+      "electron/native/bin/*.exe"
+    ],
     "directories": {
       "output": "release"
     },
