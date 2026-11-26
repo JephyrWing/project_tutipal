@@ -48,14 +48,32 @@ public class StudySession extends BaseTimeEntity {
 
     private Instant endedAt;
 
+    /**
+     * PT-13 결정 A: 수업 AI 대화 보관 일수 (수업 종료 뒤 0..90일, 0 = 종료 직후 삭제). 만들 때 선생님이 반드시 정한다.
+     * V24 이전 수업은 90 으로 채웠다. null 은 API 밖에서 넣은 행뿐이며 보관 작업이 90 으로 본다.
+     */
+    @JdbcTypeCode(SqlTypes.SMALLINT)
+    private Integer aiRetentionDays;
+
+    public static final int MAX_AI_RETENTION_DAYS = 90;
+
     protected StudySession() {
     }
 
-    public StudySession(String title, String topic, String inviteCode, Long ownerId) {
+    public StudySession(String title, String topic, String inviteCode, Long ownerId, int aiRetentionDays) {
         this.title = title;
         this.topic = topic;
         this.inviteCode = inviteCode;
         this.ownerId = ownerId;
+        changeAiRetentionDays(aiRetentionDays);
+    }
+
+    /** 0..90 (요청 DTO 가 먼저 막고, 여기서도 한 번 더 확인한다). 끝난 수업에서도 바꿀 수 있다. */
+    public void changeAiRetentionDays(int days) {
+        if (days < 0 || days > MAX_AI_RETENTION_DAYS) {
+            throw new IllegalArgumentException("aiRetentionDays must be 0.." + MAX_AI_RETENTION_DAYS);
+        }
+        this.aiRetentionDays = days;
     }
 
     public void updateSettings(String topic, int difficulty, boolean hideAnswers, boolean preferMaterials) {
@@ -81,4 +99,5 @@ public class StudySession extends BaseTimeEntity {
     public boolean isHideAnswers() { return hideAnswers; }
     public boolean isPreferMaterials() { return preferMaterials; }
     public Instant getEndedAt() { return endedAt; }
+    public Integer getAiRetentionDays() { return aiRetentionDays; }
 }

@@ -21,9 +21,10 @@ GAP-12 / FR-TUT-05 / NFR-SEC-11의 구현 원본. `docs/AI_WORKFLOW_CONTRACT.md`
 
 ## HTTP (Spring, 로그인 필요, id는 문자열)
 
-- `GET /api/conversations?sessionId=&cursor=&limit=20` → `{items:[{id,topic,title,sessionId,messageCount,lastMessageAt}], nextCursor, hasMore}`. sessionId가 없으면 개인 대화만, 있으면 그 수업의 내 대화만. 최근 순 keyset, limit 1~50, 잘못된 cursor 400.
+- `GET /api/conversations?sessionId=&cursor=&limit=20` → `{items:[{id,topic,title,sessionId,messageCount,lastMessageAt,saved,savedAt}], nextCursor, hasMore, personalRetentionDays}`. `personalRetentionDays`는 서버가 실제로 쓰는 개인 보관 일수(아래 "보관 기간" B)다. sessionId가 없으면 개인 대화만, 있으면 그 수업의 내 대화만. 최근 순 keyset, limit 1~50, 잘못된 cursor 400.
 - `POST /api/conversations {topic?, sessionId?}` → 201 + Location. 개인 대화는 topic(1~30자) 필수, 수업 대화는 진행 중인 수업의 학생만(참가자 아님 404, 종료 410, 선생님 403)이며 수업 주제를 쓴다. 빈 대화는 제목 없이("새 대화") 목록에 보인다.
-- `GET /api/conversations/{id}` → `{id, topic, title, sessionId, messageCount, createdAt, lastMessageAt, summary:{text,updatedAt}|null, memories:[{id,text,createdAt}]}`.
+- `GET /api/conversations/{id}` → `{id, topic, title, sessionId, messageCount, createdAt, lastMessageAt, summary:{text,updatedAt}|null, memories:[{id,text,createdAt}], saved, savedAt, personalRetentionDays}` (`POST` 201 응답도 같은 모양).
+- `PUT /api/conversations/{id}/saved {saved: true|false}` → 200 `{id, saved, savedAt}`. 주인만(남의 대화·없는 대화·지운 대화 404, DB 쓰기 없음), `saved` 빠짐·null 400. 살아 있는 행을 `FOR UPDATE`로 잠근 뒤 바꾼다. 뜻은 아래 "보관 기간".
 - `GET /api/conversations/{id}/messages?before=&limit=50` → 최신 페이지부터, 페이지 안은 오래된 순 `{items:[{id,role,content,createdAt}], nextBefore, hasMore}`. limit 1~100.
 - `POST /api/conversations/{id}/messages {content 1..8000, clientMessageId?}` → SSE `sources` → `delta {t}` … → `agent` → `saved {userMessageId, assistantMessageId}` → `done`, 실패 시 `error {message}`. 스트림 전 거절(400/403/404/409/410/429)은 JSON `{status, message}`(한도 429는 공통 ProblemDetail). 같은 사용자의 대화 턴이 진행 중이면 429. 스트림 중 대화가 지워지면 `error "대화가 삭제되어 저장하지 않았어요"`.
 - 중복 저장 방지(`clientMessageId`, UUID, HELP_CHAT과 같은 방식): 화면은 질문마다 새 UUID를 만들고, `saved` 전에 끊기거나 실패·중지된 질문을 **글자 그대로** 다시 보내면 같은 값을 쓴다(글을 고치면 새 값, 409면 버림). 서버는 소유·수업 확인(404/410/403) 뒤, 한도·모델 호출 전에 그 대화의 질문 행에서 이 값을 찾는다. 같은 질문이면 모델을 부르지 않고 SSE로 저장된 답을 다시 보낸다(`delta` 1개(저장된 답 전체) → `saved {저장된 ids}` → `done`, CHAT 한도·요약 없음). 다른 질문이면 409 JSON. 값은 질문 행 `client_message_id`에 저장되고 부분 UNIQUE `(conversation_id, client_message_id)`다. 같은 값으로 두 요청이 모두 모델까지 간 경우(다중 서버)에도 `savePair`가 대화 행 잠금 뒤 다시 찾아 이미 있으면 그 쌍을 돌려주고, 그래도 UNIQUE에 걸리면 되돌린 뒤 저장된 쌍을 `saved`로 보낸다(쌍·`message_count` 한 번만). 이때 방금 스트리밍한 답이 저장된 답과 다르면 `saved {userMessageId, assistantMessageId, answer, replaced:true}`로 저장된 답을 함께 보내고, 화면은 말풍선을 그 글로 바꾼다(새로 고침과 같게). 값이 없는 요청은 예전처럼 매번 새 턴이다.
@@ -37,8 +38,8 @@ GAP-12 / FR-TUT-05 / NFR-SEC-11의 구현 원본. `docs/AI_WORKFLOW_CONTRACT.md`
 
 - 대화 삭제: 살아 있는 대화 행을 `FOR UPDATE`로 잠근 뒤 `UPDATE ai_conversations SET deleted_at = now` 한 번. 그 순간부터 모든 사람에게 없는 대화와 같다: 목록·상세·메시지·이어가기·재생·기억 저장/삭제가 404이고, 그 대화의 메시지·요약·기억은 어떤 조회에도 나오지 않는다. 저장소의 모든 조회가 `deleted_at IS NULL`(메시지·요약·기억은 부모 대화가 살아 있는지 `EXISTS`)로 거르므로 `StoredConversationMemory`의 이력·요약·기억(`memories(userId, scope)`도 지운 대화의 기억은 뺌), 요약기의 입력·저장(`saveSummary`가 잠글 행이 없어 버림)에 들어가지 않는다. 스트리밍 중에 지워지면 `savePair`가 잠글 행을 못 찾아 기존 `error "대화가 삭제되어 저장하지 않았어요"`로 끝난다.
 - 기억 삭제: 살아 있는 대화 행을 `FOR UPDATE`로 잠근 뒤(동시에 들어온 대화 삭제는 먼저 끝났으면 404, 아니면 이 트랜잭션을 기다림) `UPDATE ai_memories SET deleted_at = now`. UPDATE 자체도 부모 대화가 살아 있어야 하며 0행이면 404. 즉시 상세·다음 턴 기억·20개 상한에서 빠진다(계약 6.6의 `deletedAt IS NULL`). 지운 대화의 기억도 상한에 세지 않는다.
-- 물리 삭제(유예): `app.ai.conversations.deleted-purge-days`(환경변수 `AI_CONVERSATION_DELETED_PURGE_DAYS`) 기본 **30일 — PT-13 결정 전 임시값**. 1시간마다 `deleted_at < 지금 - N일`인 대화(메시지·요약·기억은 `ON DELETE CASCADE`)와 기억을 `retention-batch-size`(500)개씩 지운다. 지금 잠긴 행은 `FOR UPDATE SKIP LOCKED`로 건너뛰고, 바깥 `DELETE`가 `deleted_at < ?`를 다시 확인한다. **값은 1 이상만 허용**하고 0·음수는 시작할 때 설정 오류로 막는다("0 = 삭제 즉시 물리 삭제"는 삭제 경로가 둘이 되어 지원하지 않음).
-- 인덱스(V21): 목록 `(user_id, session_id, last_message_at DESC, id DESC) WHERE deleted_at IS NULL`, 기억 범위 `(user_id, session_id, created_at DESC, id DESC) WHERE deleted_at IS NULL`, 정리 대상 `(deleted_at, id) WHERE deleted_at IS NOT NULL`(대화·기억 각각). 보관 기간용 `last_message_at` 인덱스는 지운 행도 포함한다.
+- 물리 삭제(유예): `app.ai.conversations.deleted-purge-days`(환경변수 `AI_CONVERSATION_DELETED_PURGE_DAYS`) 기본 **30일**(PT-13 결정 2026-11-26으로 유지). 1시간마다 `deleted_at < 지금 - N일`인 대화(메시지·요약·기억은 `ON DELETE CASCADE`)와 기억을 `retention-batch-size`(500)개씩 지운다. 지금 잠긴 행은 `FOR UPDATE SKIP LOCKED`로 건너뛰고, 바깥 `DELETE`가 `deleted_at < ?`를 다시 확인한다. **값은 1 이상만 허용**하고 0·음수는 시작할 때 설정 오류로 막는다("0 = 삭제 즉시 물리 삭제"는 삭제 경로가 둘이 되어 지원하지 않음).
+- 인덱스(V21): 목록 `(user_id, session_id, last_message_at DESC, id DESC) WHERE deleted_at IS NULL`, 기억 범위 `(user_id, session_id, created_at DESC, id DESC) WHERE deleted_at IS NULL`, 정리 대상 `(deleted_at, id) WHERE deleted_at IS NOT NULL`(대화·기억 각각). 보관 기간용 인덱스는 V24(아래 "보관 기간")가 바꿨다.
 - 회원 탈퇴: 대화·메시지·요약·기억을 지우지 않는다. PM 결정(2026-11-26, PT-13)으로 `users` 행을 익명화(`AccountCleanup.anonymize`)만 하므로 FK `ON DELETE CASCADE`가 동작하지 않는다.
 - 수업 삭제: `session_id` FK가 `ON DELETE CASCADE`라 그 수업의 대화도 물리 삭제된다.
 - 계약 문서: `docs/AI_WORKFLOW_CONTRACT.md` 6.6의 "대화 삭제 → 메시지·요약 삭제" 문구는 PR #60 병합 뒤 "soft delete 후 유예 기간 뒤 물리 삭제"로 고쳐야 한다(이 PR에서는 계약 문서를 고치지 않음).
@@ -46,12 +47,28 @@ GAP-12 / FR-TUT-05 / NFR-SEC-11의 구현 원본. `docs/AI_WORKFLOW_CONTRACT.md`
  Agent가 꺼진 기존 경로는 턴을 열 때 만든 `ChatRequest.messages` 사본을 그대로 쓴다(그 턴의 저장은 막힘). 요약기는 자리(요약 자리·AiSlots)를 얻은 뒤 모델 호출 직전에 대화가 살아 있는지 다시 확인하고 지워졌으면 건너뛴다. 그 확인과 모델 호출 사이(또는 호출 도중)에 지워지면 그 대화의 메시지가 요약 모델에 한 번 갈 수 있다(결과는 저장 직전 확인에서 버려짐) — 남은 아주 짧은 창이다.
 - 요약이 밀린 경우(자리 없음·모델 실패·Agent를 나중에 켬): 활성 요약 끝과 최근 39개 사이의 메시지는 요약에도 이력에도 들어가지 않는다. 다음 요약이 따라잡을 때까지의 차이이며 리코 테스트(AC-1·AC-19)가 이 창 계산을 고정하고 있다. 단일 메시지 삭제(요약 `invalidated_at`)는 이번 범위가 아니다(컬럼만 준비).
 
-## 보관 기간 (미정)
+## 보관 기간 (PT-13 PM 결정, 2026-11-26)
 
-PT-13에 보관 기간 결정이 없다. 두 값이 따로 있다.
+`ConversationRetention`이 1시간마다(시작 10분 뒤부터) 세 단계를 따로 돌린다: 삭제 유예 → A 수업 → B 개인. 한 단계가 실패해도(로그에는 오류 종류만) 나머지는 돈다. 모두 **물리 삭제**(기존 보관 작업과 같음)이며 메시지·요약·그 대화의 기억은 `ON DELETE CASCADE`로 같이 지워진다. 한 문장에 `retention-batch-size`(500)개씩, 잠긴 행(저장 중인 턴·저장 토글)은 `FOR UPDATE SKIP LOCKED`로 건너뛰고 다음 시간에 다시 본다.
 
-- 비활성 보관 `app.ai.conversations.retention-days`(환경변수 `AI_CONVERSATION_RETENTION_DAYS`) 기본 0 = 끔: 사용자가 지울 때까지 보관한다(회원 탈퇴 때도 보존). N을 주면 마지막 메시지가 N일 지난 대화를 **지운 것(soft delete)까지 포함해** 1시간마다 `retention-batch-size`(500)개씩 물리 삭제한다. 지금 저장 중인(잠긴) 대화는 건너뛰고, 고르는 사이에 새 메시지가 저장돼 기준을 넘긴 대화는 지우지 않는다. **PT-13 결정 전까지 운영에서 켜지 않는다.**
-- 삭제 유예 `app.ai.conversations.deleted-purge-days` 기본 30(임시, 1 이상): 위 "삭제" 참고. 비활성 보관이 꺼져 있어도 돈다. PT-13이 정해지면 기본값을 다시 정한다.
+| 종류 | 언제 지우나 | 설정 | "저장"한 대화 |
+| --- | --- | --- | --- |
+| A. 수업 대화 (`session_id` 있음) | 수업이 끝나고(`ended_at`) 그 수업의 `ai_retention_days`일이 지난 뒤(`ended_at + N일 < 지금`). 0 = 종료 직후(다음 정리 때). **진행 중인 수업은 지우지 않는다** | 선생님이 수업마다 정함: 0~90일, 방 만들 때 **필수**(기본값 없음), 나중에 바꿀 수 있음 | 남김 |
+| A'. 그 수업의 수업 범위 기억 (`ai_memories.session_id`) | A와 같은 때. 기억은 대화가 아니라 (사용자, 범위) 단위라 **저장한 대화에서 쓴 기억도 지운다** | A와 같음 | 기억은 지워짐 |
+| B. 개인 대화 (`session_id` 없음) | 마지막 활동(`last_message_at`, 메시지가 없으면 만든 시각) 뒤 30일 | `app.ai.conversations.personal-retention-days`(환경변수 `AI_CONVERSATION_PERSONAL_RETENTION_DAYS`) 기본 30, 1 이상(0·음수는 시작할 때 설정 오류) | 남김 |
+| 사용자가 지운 대화·기억 | `deleted_at` 뒤 30일 | `deleted-purge-days` 기본 30, 1 이상 (위 "삭제") | 지운 것은 저장 여부와 관계없이 유예 뒤 삭제 |
+
+- 지운(soft delete) 대화도 A·B 기준이 지나면 바로 물리 삭제한다(예전 비활성 보관과 같음). 단, 저장한 뒤 지운 대화는 A·B가 건너뛰고 삭제 유예가 지운다.
+- 저장(C): 주인이 `PUT /api/conversations/{id}/saved {"saved":true}`로 표시하면 `saved_at`이 채워지고 A·B 모두에서 빠진다. 사용자가 직접 지울 때까지 남는다. `{"saved":false}`면 다시 보관 기간을 따른다(이미 기준이 지났으면 다음 정리 때 지워짐). 다시 저장해도 처음 시각을 유지하고, 저장은 마지막 활동 시각을 바꾸지 않는다. 끝난 수업의 대화도 저장할 수 있다.
+- 수업 보관 일수: `study_sessions.ai_retention_days SMALLINT CHECK (0..90)`. `POST /api/sessions`에 `aiRetentionDays`(Integer, `@NotNull @Min(0) @Max(90)`, 빠지거나 범위 밖이면 400)가 필수이고, 세션 응답(`SessionResponse.aiRetentionDays`)에 모두(학생 포함) 보인다. 선생님은 `PUT /api/sessions/{id}/ai-retention {"aiRetentionDays":0..90}`으로 바꾼다(비참가자 404, 학생 403, **끝난 수업도 가능** — 줄이면 이미 지난 대화는 다음 정리 때 지워짐).
+- 기존 수업(V24 이전): 마이그레이션이 **90일(최대)** 로 채웠다. 이 결정 전에 쌓인 대화가 허용 최대보다 일찍 지워지지 않게 하려는 값이다. 컬럼은 nullable로 두었고(API 밖에서 넣은 행, 예: DB 검사용 합성 행), 정리 작업은 NULL을 90으로 본다.
+- 수업 쪽 남은 차이: 끝난 수업의 저장한 대화에서도 "기억 저장"은 막지 않으므로, 보관 기간이 지난 수업에서 새로 저장한 기억은 다음 정리 때 지워진다. 화면은 저장한 수업 대화에 "이 수업의 기억은 수업 보관 기간이 지나면 지워져요"라고 알린다.
+- 인덱스(V24): 개인 후보 `(last_message_at, id) WHERE session_id IS NULL AND saved_at IS NULL`, 수업 후보 `(session_id, id) WHERE session_id IS NOT NULL AND saved_at IS NULL`, 끝난 수업 `study_sessions (ended_at) WHERE ended_at IS NOT NULL`(쿼리는 `ended_at < 지금`을 같이 걸어 이 인덱스로 좁힌다). 예전 비활성 보관용 `idx_ai_conversations_last_message`(모든 행)는 지웠다.
+- SQL 모양: A는 `DELETE FROM ai_conversations WHERE saved_at IS NULL AND id IN (SELECT c.id FROM ai_conversations c JOIN study_sessions s ... ORDER BY c.id LIMIT ? FOR UPDATE OF c SKIP LOCKED FOR SHARE OF s SKIP LOCKED)`, A'는 같은 조건·잠금의 `ai_memories`, B는 바깥 `DELETE`가 `session_id IS NULL AND saved_at IS NULL AND last_message_at < ?`를 다시 확인한다(그사이 저장되거나 새 턴이 저장된 대화는 남음).
+- 기간 변경과 정리의 경합(Codex P1): A·A'는 수업 행을 `FOR SHARE OF s SKIP LOCKED`로 잠근다. 이 잠금은 선생님의 기간 변경(·수업 종료) `UPDATE study_sessions`의 행 잠금과 충돌한다(`FOR KEY SHARE`는 키가 아닌 열의 UPDATE와 충돌하지 않아 쓰지 않음). 변경 트랜잭션이 열려 있으면 그 수업은 이번 정리에서 건너뛰고(다음 시간에 새 기간으로 판단), 변경이 정리 문장의 스냅샷 뒤에 커밋됐으면 행을 잠글 때 READ COMMITTED가 최신 행으로 `ended_at + ai_retention_days`를 다시 평가하며, 정리가 먼저 잠그면 변경이 그 문장(자동 커밋 한 문장)이 끝날 때까지 기다린다. 정리 쪽 잠금은 모두 `SKIP LOCKED`라 기다리지 않으므로 교착이 생기지 않는다.
+- 화면: 방 만들기와 선생님 설정 탭에서 0~90 사이 아무 정수(일)를 숫자 칸에 쓰거나 빠른 선택(종료 직후·7·30·60·90일)을 누른다. 기본값은 없고, 비었거나 정수가 아니거나 범위 밖이면 버튼이 막히고 안내가 나온다.
+- 개인 보관 안내(Codex 2회차): 화면은 개인 대화 일수를 고정하지 않고 대화 목록·상세 응답의 `personalRetentionDays`(= `app.ai.conversations.personal-retention-days`, 운영에서 `AI_CONVERSATION_PERSONAL_RETENTION_DAYS`로 바꾼 값)를 안내에 쓴다. 응답에 없거나 1 이상 정수가 아니면(예: 예전 서버) 30으로 대체한다. 수업 대화 안내는 그 수업의 `aiRetentionDays`를 쓴다.
+- 예전 설정 `app.ai.conversations.retention-days`(`AI_CONVERSATION_RETENTION_DAYS`, 0 = 끔)는 없앴다. 그 환경변수를 넣어도 이제 아무 효과가 없다.
 
 ## 대화 묶기(ThreadLocal)와 후속
 
@@ -64,3 +81,5 @@ PT-113(Draft)이 `TutorService` · `TutorController` · `ChatRequest` 주변을 
 ## 검증 경계
 
 JUnit(`learning.conversation.*`, `AiClientSummarizeTest`)은 DB 없이 메모리 저장소와 SQL 문자열 검사로 확인한다(soft delete 필터·정리 SQL 모양·V21 컬럼/인덱스 문자열 포함, 실제 PostgreSQL 실행 계획은 확인 안 함). pytest `tests/test_agent_summarize.py`는 모델을 가짜로 바꿔 확인한다. node:test `tests/conversations.test.mjs`는 API 모듈과 화면 상태 함수다. 실제 PostgreSQL에서의 V21(CASCADE · 부분 UNIQUE) 적용, Playwright·Electron 실행, 실제 모델 요약 품질은 확인하지 않았다.
+
+보관 기간(PT-13): JUnit `ConversationRetentionTest`(메모리 저장소: 수업 만료 삭제 · 기간 안 유지 · 진행 중 수업 유지 · 0일 · NULL=90 · 저장 유지와 수업 기억 삭제 · 개인 30일 · 빈 대화 · 저장 해제), `JdbcConversationStoreRetentionSqlTest`(SQL 모양), `ConversationRetentionMigrationTest`(V24 문자열), `ConversationSaveToggleWebTest`(저장 토글 권한 · 응답 필드), `ConversationPersonalRetentionWebTest`(목록·상세·생성 응답의 `personalRetentionDays`가 설정값을 따름, Spring 바인딩 포함), `StudySessionAiRetentionTest` · `StudySessionAiRetentionWebTest`(필수 · 0..90 검증 400, 선생님만). 실제 PostgreSQL 검사는 `./gradlew conversationDbTest`(`ConversationRetentionPostgresTest`, `test`에서 제외, 일회용 DB `CONVERSATION_TEST_DB_URL=jdbc:postgresql://127.0.0.1:PORT/tutipal_conversation_e2e`, `CONVERSATION_TEST_DB_ALLOW_RESET=disposable`, `CONVERSATION_TEST_DB_PASSWORD`; env가 없으면 skip 대신 실패)로 V23 → 기존 수업 → V24 채움 · CHECK · 수업/개인 보관 삭제 · CASCADE · 저장 토글 · SKIP LOCKED · 기간 변경이 열린 수업 건너뛰기 · 정리 중 기간 변경 대기를 확인하며, CI `review-checks.yml`이 돌린다. node:test `tests/aiRetention.test.mjs`는 보관 기간 선택 · 안내 문구 · 저장 API다.

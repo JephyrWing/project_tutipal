@@ -99,7 +99,7 @@ V20(PT-86 `chunk_provenance`) · V21(PT-106 `ai_conversations`)은 develop에 �
 - **원문 이중 저장 (PT-106 병합 후)**: PT-106 대화 턴(`ConversationTurnService`)도 `TutorService.chat`을 감싸므로, 수업 학생이 저장 대화로 물은 질문은 `ai_conversation_messages`와 `chat_questions`에 모두 남는다. 기존 챗봇 경로(저장 대화 아님)의 질문은 `chat_questions`에만 남는다.
 - **PT-106 저장소로 바꾸지 않은 이유 (2026-11-26 판단)**: 분석은 `SessionQuestionSource`로만 읽으므로(현재 구현은 어댑터 빈 `ChatQuestionSource`, 계약은 그 인터페이스 javadoc) 빈 하나만 바꾸면 되지만, 지금 바꾸면 계약을 못 지킨다.
   - 저장 대화를 거치지 않은 질문이 빠진다.
-  - 보관이 다르다: PT-106은 `retention-days` 기본 0으로 사용자가 지우거나 탈퇴할 때까지 남기고, 지운 대화는 soft delete 뒤 30일에 물리 삭제한다. 분석은 30일 창이다.
+  - 보관이 다르다: PT-106은 PT-13 결정(2026-11-26)에 따라 수업 대화를 선생님이 정한 기간(수업 종료 후 0~90일), 개인 대화를 마지막 활동 후 30일 뒤 지우고("저장"한 대화는 남김), 지운 대화는 soft delete 뒤 30일에 물리 삭제한다(`docs/AI_CONVERSATIONS.md` "보관 기간"). 분석은 30일 창이다.
   - PT-106은 나가기 · 내보내기 때 대화를 지우지 않는다.
   - 학생 본인의 대화 이력을 선생님 분석에 쓰는 것은 목적이 달라 PT-13 고지 · 동의 결정이 먼저다.
   - 이관 조건: 학생 챗봇이 모두 저장 대화를 거치고 PT-13이 정해지면 `ConversationQuestionSource`(`deleted_at IS NULL`, role `user`, 그 수업, 현재 STUDENT 참가자, `created_at >= now - 30일`, 메시지 id 순)로 바꾸고 `chat_questions` · `ChatQuestionRecorder`를 걷어 낸다.

@@ -43,6 +43,11 @@ export function deleteConversation(id) {
   return request(path(id), { method: 'DELETE' })
 }
 
+/** "저장": true = 보관 기간이 지나도 남김, false = 다시 보관 기간을 따름. → { id, saved, savedAt } */
+export function setConversationSaved(id, saved) {
+  return request(`${path(id)}/saved`, { method: 'PUT', headers: json, body: JSON.stringify({ saved: !!saved }) })
+}
+
 export function saveMemory(id, text) {
   return request(`${path(id)}/memories`, { method: 'POST', headers: json, body: JSON.stringify({ text }) })
 }

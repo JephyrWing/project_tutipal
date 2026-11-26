@@ -60,7 +60,7 @@ class StudySessionWithdrawnAccountTest {
             return saved;
         });
 
-        service.create(USER, new CreateSessionRequest("자바", "자바"));
+        service.create(USER, new CreateSessionRequest("자바", "자바", 30));
 
         InOrder order = inOrder(users, sessions);
         order.verify(users).lockActiveAccount(USER);
@@ -71,7 +71,7 @@ class StudySessionWithdrawnAccountTest {
     void withdrawnAccountCannotCreateAClass() {
         accountIsWithdrawn();
 
-        assertThatThrownBy(() -> service.create(USER, new CreateSessionRequest("자바", "자바")))
+        assertThatThrownBy(() -> service.create(USER, new CreateSessionRequest("자바", "자바", 30)))
                 .isInstanceOfSatisfying(ApiException.class,
                         e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
         verifyNoInteractions(sessions, participants);

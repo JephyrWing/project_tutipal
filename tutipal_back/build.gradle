@@ -49,6 +49,7 @@ tasks.named('test') {
     exclude '**/RagSearchRepositoryPostgresTest.class'
     exclude '**/FocusStorePostgresTest.class'
     exclude '**/ConceptInsightsPostgresTest.class'
+    exclude '**/ConversationRetentionPostgresTest.class'
 }
 
 // PT-53: 실제 DB 검사는 별도 일회용 DB/CI에서 실행한다. env 누락은 skip 대신 실패한다.
@@ -87,6 +88,17 @@ tasks.register('focusDbTest', Test) {
     classpath = sourceSets.test.runtimeClasspath
     useJUnitPlatform()
     include '**/FocusStorePostgresTest.class'
+}
+
+// PT-106 / PT-13: V24 보관 기간(기존 수업 90일 채움 · 0..90 CHECK) · 수업/개인 보관 삭제 · 저장 제외 · SKIP LOCKED 를
+// 일회용 PostgreSQL 에서 확인한다. CONVERSATION_TEST_DB_URL=jdbc:postgresql://127.0.0.1:PORT/tutipal_conversation_e2e,
+// CONVERSATION_TEST_DB_ALLOW_RESET=disposable, CONVERSATION_TEST_DB_PASSWORD. Flyway clean 을 먼저 한다.
+tasks.register('conversationDbTest', Test) {
+    description = 'Runs AI conversation retention checks against disposable PostgreSQL'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    include '**/ConversationRetentionPostgresTest.class'
 }
 
 // PT-86: RAG 평가 하네스 (src/ragEval). test · build 에 포함되지 않는다. 사용법은 docs/PT-86_RAG_EVAL.md

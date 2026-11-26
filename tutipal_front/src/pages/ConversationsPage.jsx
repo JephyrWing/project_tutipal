@@ -10,7 +10,10 @@ import {
   listMessages,
   saveMemory,
   sendMessage,
+  setConversationSaved,
 } from '../api/conversations'
+import { sessions } from '../api/sessions'
+import { applySavedState, personalRetentionDaysOf, retentionNotice } from '../utils/aiRetention'
 import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
 import SubjectPicker from '../components/SubjectPicker'
@@ -58,6 +61,25 @@ export default function ConversationsPage() {
   return id ? <ConversationDetail key={id} id={id} /> : <ConversationList />
 }
 
+/**
+ * The session's AI conversation retention (days after it ends) for the notice, or null while unknown (personal
+ * scope, not loaded, or no longer a participant): the notice then falls back to "up to 90 days".
+ */
+function useSessionRetention(sessionId) {
+  const [days, setDays] = useState(null)
+  useEffect(() => {
+    setDays(null)
+    if (!sessionId) return undefined
+    let current = true
+    sessions.get(sessionId).then(
+      (s) => { if (current) setDays(s?.aiRetentionDays ?? null) },
+      () => {},
+    )
+    return () => { current = false }
+  }, [sessionId])
+  return days
+}
+
 function ConversationList() {
   const navigate = useNavigate()
   const [params] = useSearchParams()
@@ -68,6 +90,9 @@ function ConversationList() {
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState('')
   const [loadingMore, setLoadingMore] = useState(false)
+  const retentionDays = useSessionRetention(sessionId)
+  /** Server's personal retention (list response); null until loaded → the notice falls back to 30. */
+  const [personalDays, setPersonalDays] = useState(null)
   const alive = useRef(true)
   /** Changes with ?sessionId: a next page requested for the previous scope is dropped. */
   const scopeRef = useRef(sessionId)
@@ -84,7 +109,10 @@ function ConversationList() {
     const controller = new AbortController()
     setState((s) => listLoading(s))
     listConversations({ sessionId }, controller.signal).then(
-      (page) => setState((s) => listLoaded(s, page)),
+      (page) => {
+        setState((s) => listLoaded(s, page))
+        setPersonalDays((d) => personalRetentionDaysOf(page) ?? d)
+      },
       (e) => { if (!controller.signal.aborted) setState((s) => listFailed(s, e)) },
     )
     return () => controller.abort()
@@ -134,6 +162,7 @@ function ConversationList() {
                 {sessionId ? '이 수업에서 AI 조교와 나눈 대화예요.' : '개인 학습에서 AI 조교와 나눈 대화예요.'}
                 {' '}이어서 질문하면 앞 대화 내용을 기억하고 답해요.
               </p>
+              <p className="muted small">{retentionNotice({ sessionId, aiRetentionDays: retentionDays, personalRetentionDays: personalDays })}</p>
             </div>
           </div>
         </header>
@@ -176,6 +205,7 @@ function ConversationList() {
                   <strong>{conversationTitle(c)}</strong>
                   <time className="muted small" dateTime={c.lastMessageAt}>{formatTime(c.lastMessageAt)}</time>
                 </span>
+                {c.saved && <span className="badge badge-ok">저장됨</span>}
                 <span className="badge">{c.topic}</span>
                 <span className="muted small">메시지 {c.messageCount}개</span>
               </button>
@@ -201,6 +231,8 @@ function ConversationDetail({ id }) {
   const [memoryBusy, setMemoryBusy] = useState(false)
   const [actionError, setActionError] = useState('')
   const [deleting, setDeleting] = useState(false)
+  const [savingToggle, setSavingToggle] = useState(false)
+  const retentionDays = useSessionRetention(state.conversation?.sessionId ?? null)
   const abortRef = useRef(null)
   const sending = useRef(false)
   const endRef = useRef(null)
@@ -320,6 +352,23 @@ function ConversationDetail({ id }) {
     }
   }
 
+  /** "저장" 켜고 끄기: 저장한 대화는 보관 기간이 지나도 남는다 (사용자가 지울 때까지). */
+  async function toggleSaved() {
+    if (savingToggle || !state.conversation) return
+    setSavingToggle(true)
+    setActionError('')
+    try {
+      const result = await setConversationSaved(id, !state.conversation.saved)
+      if (alive.current) setState((s) => ({ ...s, conversation: applySavedState(s.conversation, result) }))
+    } catch (err) {
+      if (!alive.current) return
+      if (err?.status === 404) setState((s) => detailFailed(s, err))
+      else setActionError(errorText(err, '저장 상태를 바꾸지 못했어요'))
+    } finally {
+      if (alive.current) setSavingToggle(false)
+    }
+  }
+
   async function submitMemory(e) {
     e.preventDefault()
     const text = (memoryText ?? '').trim()
@@ -397,6 +446,12 @@ function ConversationDetail({ id }) {
           </button>
           <h1>{conversationTitle(conversation)}</h1>
           <span className="badge">{conversation?.sessionId ? `수업 대화 · ${conversation.topic}` : conversation?.topic}</span>
+          {conversation?.saved && <span className="badge badge-ok">저장됨</span>}
+          <button className="btn btn-sm" disabled={savingToggle} aria-pressed={!!conversation?.saved}
+            title="저장한 대화는 보관 기간이 지나도 지워지지 않아요"
+            onClick={() => void toggleSaved()}>
+            {conversation?.saved ? '저장 해제' : '저장'}
+          </button>
           <button className="btn btn-outline-danger btn-sm" disabled={deleting || locked}
             onClick={() => void removeConversation()}>
             <Icon name="trash" size={16} /> 대화 삭제
@@ -404,6 +459,16 @@ function ConversationDetail({ id }) {
         </header>
 
         {actionError && <p className="error-text" role="alert">{actionError}</p>}
+        <p className="muted small">
+          {conversation?.saved
+            ? `저장한 대화예요. 직접 지우기 전까지 보관 기간이 지나도 남아요.${
+              conversation.sessionId ? ' 이 수업의 기억은 수업 보관 기간이 지나면 지워져요.' : ''}`
+            : retentionNotice({
+              sessionId: conversation?.sessionId,
+              aiRetentionDays: retentionDays,
+              personalRetentionDays: personalRetentionDaysOf(conversation),
+            })}
+        </p>
 
         <div className="chat-list" aria-live="polite">
           {state.hasMore && (

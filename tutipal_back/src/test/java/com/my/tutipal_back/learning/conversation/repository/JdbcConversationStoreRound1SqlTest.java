@@ -58,7 +58,7 @@ class JdbcConversationStoreRound1SqlTest {
 
     @Test
     void retentionDeleteRechecksTheCutoffAndSkipsLockedRows() {
-        store.deleteInactiveBefore(java.time.Instant.parse("2026-10-26T00:00:00Z"), 500);
+        store.deleteIdlePersonalConversationsBefore(java.time.Instant.parse("2026-10-26T00:00:00Z"), 500);
 
         List<String> sent = new ArrayList<>();
         for (Invocation i : mockingDetails(jdbc).getInvocations()) {
@@ -69,7 +69,8 @@ class JdbcConversationStoreRound1SqlTest {
             }
         }
         assertThat(sent).singleElement().satisfies(s -> {
-            assertThat(s).startsWith("delete from ai_conversations where last_message_at < ? and id in (");
+            assertThat(s).startsWith("delete from ai_conversations where session_id is null and saved_at is null"
+                    + " and last_message_at < ? and id in (");
             assertThat(s).contains("for update skip locked");
         });
         assertThat(args()).filteredOn(a -> a instanceof java.time.OffsetDateTime).hasSize(2);

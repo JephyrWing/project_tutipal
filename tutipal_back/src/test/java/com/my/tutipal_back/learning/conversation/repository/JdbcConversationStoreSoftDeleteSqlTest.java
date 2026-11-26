@@ -162,11 +162,26 @@ class JdbcConversationStoreSoftDeleteSqlTest {
         assertThat(args()).filteredOn(a -> a instanceof OffsetDateTime).hasSize(2);
     }
 
-    /** Inactivity retention removes old conversations whether or not the user already deleted them. */
+    /** Retention removes expired conversations whether or not the user already deleted them. */
     @Test
-    void inactivityRetentionAlsoCoversSoftDeletedConversations() {
-        List<String> sql = sent(s -> s.deleteInactiveBefore(NOW, 500));
+    void personalRetentionAlsoCoversSoftDeletedConversations() {
+        List<String> sql = sent(s -> s.deleteIdlePersonalConversationsBefore(NOW, 500));
 
         assertThat(sql).singleElement().satisfies(s -> assertThat(s).doesNotContain("deleted_at"));
+    }
+
+    @Test
+    void classRetentionAlsoCoversSoftDeletedConversations() {
+        List<String> sql = sent(s -> s.deleteExpiredClassConversations(NOW, 500));
+
+        assertThat(sql).singleElement().satisfies(s -> assertThat(s).doesNotContain("deleted_at"));
+    }
+
+    /** Saving or unsaving a deleted conversation changes nothing (404 upstream). */
+    @Test
+    void saveToggleOnlyTouchesLiveConversations() {
+        assertThat(sent(s -> s.setSaved(7L, NOW))).singleElement().satisfies(s -> assertThat(s)
+                .startsWith("update ai_conversations set saved_at = coalesce(saved_at, ?)")
+                .contains("deleted_at is null"));
     }
 }

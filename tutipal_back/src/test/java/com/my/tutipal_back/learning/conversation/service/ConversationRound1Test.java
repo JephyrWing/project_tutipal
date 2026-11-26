@@ -117,7 +117,8 @@ class ConversationRound1Test {
         AiSlots slots = mock(AiSlots.class);
         when(slots.run(any(Duration.class), any(Supplier.class)))
                 .thenAnswer(inv -> ((Supplier<?>) inv.getArgument(1)).get());
-        ConversationProperties properties = new ConversationProperties(0, 500,
+        ConversationProperties properties = new ConversationProperties(
+                ConversationProperties.DEFAULT_PERSONAL_RETENTION_DAYS, 500,
                 new ConversationProperties.Summary(20, 6, 40, Duration.ofSeconds(5), 1, 12000));
         ConversationStore.Conversation a = store.seedConversation(2L, null, "수학", NOW);
         store.seedMessages(a.id(), 30, NOW);
