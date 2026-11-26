@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import com.my.tutipal_back.ai.client.AiAccessHeaders;
 import com.my.tutipal_back.learning.focus.FocusState;
 import com.sun.net.httpserver.HttpServer;
 
@@ -92,7 +93,7 @@ class FocusClientTest {
     }
 
     private static FocusClient client(String baseUrl) {
-        return new FocusClient(baseUrl, KEY, Duration.ofSeconds(2));
+        return new FocusClient(baseUrl, KEY, AiAccessHeaders.none(), Duration.ofSeconds(2));
     }
 
     private static String ok(String state) {
@@ -188,7 +189,7 @@ class FocusClientTest {
     @Test
     void slowServerIsUnavailableWithinTheTimeout() throws IOException {
         String base = serving(200, ok("focus"), 1500);
-        FocusClient client = new FocusClient(base, KEY, Duration.ofMillis(300));
+        FocusClient client = new FocusClient(base, KEY, AiAccessHeaders.none(), Duration.ofMillis(300));
 
         long started = System.nanoTime();
         assertThatThrownBy(() -> client.predict(REQUEST)).isInstanceOf(FocusUnavailableException.class);
@@ -207,7 +208,7 @@ class FocusClientTest {
     @ParameterizedTest
     @ValueSource(strings = {"", "   "})
     void blankBaseUrlIsUnavailableWithoutNetwork(String blank) {
-        FocusClient client = new FocusClient(blank, KEY, Duration.ofSeconds(2));
+        FocusClient client = new FocusClient(blank, KEY, AiAccessHeaders.none(), Duration.ofSeconds(2));
 
         assertThatThrownBy(() -> client.predict(REQUEST)).isInstanceOf(FocusUnavailableException.class);
     }

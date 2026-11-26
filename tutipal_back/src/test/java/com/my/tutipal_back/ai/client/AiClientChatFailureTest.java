@@ -54,7 +54,7 @@ class AiClientChatFailureTest {
     }
 
     private static AiClient client(String baseUrl) {
-        return new AiClient(baseUrl, "test-key", JsonMapper.builder().build());
+        return new AiClient(baseUrl, "test-key", AiAccessHeaders.none(), JsonMapper.builder().build());
     }
 
     @Test

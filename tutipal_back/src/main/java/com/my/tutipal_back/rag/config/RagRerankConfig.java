@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import com.my.tutipal_back.ai.client.AiAccessHeaders;
 import com.my.tutipal_back.ai.client.RerankClient;
 
 /**
@@ -16,7 +17,8 @@ class RagRerankConfig {
     @Bean
     RerankClient rerankClient(@Value("${app.ai.base-url:}") String baseUrl,
                               @Value("${app.ai.internal-key:}") String internalKey,
+                              AiAccessHeaders access,
                               RagRerankProperties properties) {
-        return new RerankClient(baseUrl, internalKey, properties.timeout());
+        return new RerankClient(baseUrl, internalKey, access, properties.timeout());
     }
 }

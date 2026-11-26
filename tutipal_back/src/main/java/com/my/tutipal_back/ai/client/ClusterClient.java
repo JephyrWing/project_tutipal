@@ -42,6 +42,7 @@ public class ClusterClient {
 
     public ClusterClient(@Value("${app.ai.base-url}") String baseUrl,
                          @Value("${app.ai.internal-key}") String internalKey,
+                         AiAccessHeaders access,
                          JsonMapper json) {
         // HTTP/1.1 fixed for uvicorn, same as AiClient
         HttpClient http = HttpClient.newBuilder()
@@ -54,6 +55,7 @@ public class ClusterClient {
                 .requestFactory(factory)
                 .baseUrl(baseUrl)
                 .defaultHeader("X-Internal-Key", internalKey)
+                .defaultHeaders(access::addTo)   // PT-110 Cloudflare Access token (none when not configured)
                 .build();
         this.json = json;
     }

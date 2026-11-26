@@ -63,7 +63,8 @@ class AiClientAgentStreamTest {
             }
         });
         server.start();
-        return new AiClient("http://127.0.0.1:" + server.getAddress().getPort(), "test-key", JSON);
+        return new AiClient("http://127.0.0.1:" + server.getAddress().getPort(), "test-key", AiAccessHeaders.none(),
+                JSON);
     }
 
     static class Recorder implements AgentListener {
@@ -258,7 +259,7 @@ class AiClientAgentStreamTest {
         try (ServerSocket free = new ServerSocket(0)) {
             port = free.getLocalPort();
         }
-        AiClient ai = new AiClient("http://127.0.0.1:" + port, "test-key", JSON);
+        AiClient ai = new AiClient("http://127.0.0.1:" + port, "test-key", AiAccessHeaders.none(), JSON);
 
         assertThatThrownBy(() -> ai.agentStream(personalRequest(), new Recorder()))
                 .isInstanceOfSatisfying(AiUnavailableException.class, e -> assertThat(e.isAfterOutput()).isFalse());

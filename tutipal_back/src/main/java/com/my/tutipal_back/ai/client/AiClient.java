@@ -49,6 +49,7 @@ public class AiClient {
 
     public AiClient(@Value("${app.ai.base-url}") String baseUrl,
                     @Value("${app.ai.internal-key}") String internalKey,
+                    AiAccessHeaders access,
                     JsonMapper json) {
         // HTTP/1.1 고정: JDK 기본(HTTP/2 업그레이드 시도)을 uvicorn 이 거부해서 요청이 깨짐
         HttpClient http = HttpClient.newBuilder()
@@ -63,6 +64,7 @@ public class AiClient {
                 .requestFactory(factory)
                 .baseUrl(baseUrl)
                 .defaultHeader("X-Internal-Key", internalKey)
+                .defaultHeaders(access::addTo)   // PT-110 Cloudflare Access token (none when not configured)
                 .build();
         this.json = json;
     }

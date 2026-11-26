@@ -64,7 +64,8 @@ class AiClientSummarizeTest {
             exchange.close();
         });
         server.start();
-        return new AiClient("http://127.0.0.1:" + server.getAddress().getPort(), "test-key", JSON);
+        return new AiClient("http://127.0.0.1:" + server.getAddress().getPort(), "test-key", AiAccessHeaders.none(),
+                JSON);
     }
 
     @Test
@@ -140,7 +141,7 @@ class AiClientSummarizeTest {
         try (ServerSocket free = new ServerSocket(0)) {
             port = free.getLocalPort();
         }
-        AiClient ai = new AiClient("http://127.0.0.1:" + port, "test-key", JSON);
+        AiClient ai = new AiClient("http://127.0.0.1:" + port, "test-key", AiAccessHeaders.none(), JSON);
 
         assertThatThrownBy(() -> ai.summarize(AgentDtos.Scope.personal(), MESSAGES, null))
                 .isInstanceOf(AiUnavailableException.class);

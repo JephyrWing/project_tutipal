@@ -15,6 +15,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import com.my.tutipal_back.ai.client.AiAccessHeaders;
 import com.my.tutipal_back.ai.client.AiClient;
 import com.my.tutipal_back.ai.client.AiSlots;
 import com.my.tutipal_back.ai.client.AiUnavailableException;
@@ -62,7 +63,8 @@ class AiQuotaRealClientTest {
             }
         });
         server.start();
-        AiClient ai = new AiClient("http://127.0.0.1:" + server.getAddress().getPort(), "k", JsonMapper.builder().build());
+        AiClient ai = new AiClient("http://127.0.0.1:" + server.getAddress().getPort(), "k", AiAccessHeaders.none(),
+                JsonMapper.builder().build());
         return new TutorService(ai, mock(StudySessionService.class), mock(RagSearchService.class),
                 new AiSlots(2, Duration.ofSeconds(1)), quota, null, null, false,
                 StudentQuestionSink.NONE);

@@ -12,6 +12,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
@@ -20,6 +21,7 @@ import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+import com.my.tutipal_back.ai.client.AiAccessHeaders;
 import com.my.tutipal_back.learning.focus.FocusState;
 
 import tools.jackson.core.JacksonException;
@@ -53,14 +55,16 @@ public class FocusClient {
 
     private final URI endpoint;
     private final String internalKey;
+    private final AiAccessHeaders access;
     private final Duration timeout;
     private final HttpClient http;
     private final JsonMapper json = JsonMapper.builder().build();
 
-    public FocusClient(String baseUrl, String internalKey, Duration timeout) {
+    public FocusClient(String baseUrl, String internalKey, AiAccessHeaders access, Duration timeout) {
         this.endpoint = baseUrl == null || baseUrl.isBlank() ? null
                 : URI.create(stripSlash(baseUrl.strip()) + "/v1/focus/predict");
         this.internalKey = internalKey == null ? "" : internalKey;
+        this.access = Objects.requireNonNull(access, "access");
         this.timeout = timeout;
         // HTTP/1.1: uvicorn rejects the JDK's HTTP/2 upgrade attempt (same as AiClient / RerankClient)
         this.http = endpoint == null ? null : HttpClient.newBuilder()
@@ -73,7 +77,7 @@ public class FocusClient {
         if (endpoint == null) {
             throw new FocusUnavailableException("unconfigured");
         }
-        HttpRequest httpRequest = HttpRequest.newBuilder(endpoint)
+        HttpRequest httpRequest = access.addTo(HttpRequest.newBuilder(endpoint))   // PT-110 Access token, if any
                 .timeout(timeout)
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
