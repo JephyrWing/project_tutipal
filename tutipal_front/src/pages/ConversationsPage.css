@@ -1,0 +1,129 @@
+/* PT-106 AI 대화 기록 (목록 · 상세). 기본 모양은 app.css 의 card · chat-* · msg · bubble 을 그대로 쓴다. */
+.conversation-new {
+  flex-wrap: wrap;
+  margin: 12px 0 16px;
+}
+
+.conversation-list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.conversation-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.conversation-row:hover,
+.conversation-row:focus-visible {
+  border-color: rgba(0, 0, 0, 0.25);
+}
+
+.conversation-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.conversation-text strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 16px;
+  align-items: start;
+}
+
+.conversation-detail .chat-head h1 {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-older {
+  align-self: center;
+  margin: 4px auto 12px;
+  display: block;
+}
+
+.conversation-notice {
+  margin: 6px 0;
+  color: #9a6700;
+}
+
+.conversation-side {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+.conversation-summary {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+
+.conversation-memories {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.conversation-memories li {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  justify-content: space-between;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.conversation-memory-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.conversation-memory-form textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+}
+
+.conversation-detail .bubble {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .conversation-detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

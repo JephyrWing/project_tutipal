@@ -84,6 +84,10 @@ const materialAi = createServer(async (request, response) => {
     } else if (request.url === '/v1/chat' && /^PT(70MATERIAL|99QUERY)/.test(body.messages?.at(-1)?.content ?? '')) {
       response.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
       response.end(JSON.stringify({ delta: 'PT70 test response' }) + '\n')
+    } else if (request.url === '/v1/chat' && (body.messages?.at(-1)?.content ?? '').startsWith('PT106')) {
+      // PT-106: echo the message count so the spec can prove stored history is sent with the next turn.
+      response.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
+      response.end(JSON.stringify({ delta: `PT106 reply n=${body.messages.length}` }) + '\n')
     } else {
       response.writeHead(503).end()
     }
