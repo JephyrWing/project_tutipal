@@ -110,7 +110,7 @@
 | --- | --- | --- | --- | --- | --- |
 | GET | `/auth/app/start` | 공개 | query `provider`(google·naver·kakao, dev-login 시 `dev`), `challenge`(base64url 43자) | 302 → `/oauth2/authorization/{provider}` (dev: `/auth/app/done?code=`) | 400 잘못된 challenge·provider |
 | GET | `/auth/app/done` | 공개 | query `code`(선택) | 200 HTML (딥링크 `tutipal://` 열기) | — |
-| POST | `/api/auth/app/exchange` | 공개, **CSRF 예외**, Origin 검사 | `ExchangeRequest{code ≤64, verifier ≤128}` | 200 `{name}` + `TUTIPAL_SESSION` 쿠키 | 401 코드 만료·불일치, 429 대기 코드 1만 개 |
+| POST | `/api/auth/app/exchange` | 공개, **CSRF 예외**, Origin 검사 | `ExchangeRequest{code ≤64, verifier ≤128}` | 200 `{name}` + `TUTIPAL_SESSION` 쿠키 | 401 코드 만료·불일치 또는 탈퇴한 계정(코드 발급 뒤 탈퇴, 계정별 잠금 안에서 재확인), 429 대기 코드 1만 개 |
 | GET | `/api/auth/csrf` | 공개 | — | 200 `{token, headerName}` + `XSRF-TOKEN` 쿠키 | — |
 | GET | `/api/auth/providers` | 공개 | — | 200 `string[]` (등록된 OAuth 제공자 id) | — |
 | GET | `/api/auth/config` | 공개 | — | 200 `{devLogin: boolean, providers: string[]}` | — |
@@ -131,8 +131,8 @@
 | 메서드 | 경로 | 권한 | 요청 | 응답 | 주요 오류 |
 | --- | --- | --- | --- | --- | --- |
 | GET | `/api/users/me` | 로그인 | — | 200 `UserResponse{id, name, provider, role(ADMIN\|USER)}` | 404 |
-| PATCH | `/api/users/me/name` | 로그인 | `UpdateNameRequest{name}` (`@Valid` 없음, 서비스가 검사) | 200 `UserResponse` | 400 제어문자·1~50자 위반 |
-| DELETE | `/api/users/me` | 로그인 | — | 204, 기록 삭제 후 세션 종료 (커밋 d5e3536 이후 그 사용자의 모든 로그인 세션) | 404 |
+| PATCH | `/api/users/me/name` | 로그인 | `UpdateNameRequest{name}` (`@Valid` 없음, 서비스가 검사) | 200 `UserResponse` (이름 컬럼만 UPDATE) | 400 제어문자·1~50자 위반, 401 탈퇴했거나 없는 계정(탈퇴와 겹친 요청 포함) |
+| DELETE | `/api/users/me` | 로그인 | — | 204. 계정 익명화(provider=`withdrawn`, 이름 `탈퇴한 사용자`, 이메일·소셜 ID 제거), 기록은 모두 보존. 내가 연 진행 중 수업은 종료(`ended`), 내 열린 도움 요청은 DONE(`helpEnded`). 커밋 뒤 그 사용자의 모든 로그인 세션 종료 (PM 2026-11-26, PT-13). 사용자 행을 먼저 잠가 수업 만들기·참가·도움 요청과 직렬화 | 401 같은 클라이언트의 두 번째 요청(첫 탈퇴 커밋 뒤 세션이 끊김), 404 동시에 보낸 요청이 경합해 이미 탈퇴한 계정을 만난 경우 |
 
 ### 2.4 수업 (`/api/sessions`)
 
@@ -140,8 +140,8 @@
 
 | 메서드 | 경로 | 권한 | 요청 | 응답 | 주요 오류 |
 | --- | --- | --- | --- | --- | --- |
-| POST | `/api/sessions` | 로그인(만든 사람 = 교사) | `CreateSessionRequest{title ≤50, topic ≤30}` | 201 `SessionResponse` | 503 초대 코드 생성 실패 |
-| POST | `/api/sessions/join` | 로그인 | `JoinSessionRequest{code ≤20}` | 200 `SessionResponse` | 404 코드 없음, 410 닫힌 방, 429 실패 5회/5분(+`Retry-After`), 409 동시 중복 |
+| POST | `/api/sessions` | 로그인(만든 사람 = 교사) | `CreateSessionRequest{title ≤50, topic ≤30}` | 201 `SessionResponse` | 401 탈퇴한 계정(탈퇴와 겹친 요청), 503 초대 코드 생성 실패 |
+| POST | `/api/sessions/join` | 로그인 | `JoinSessionRequest{code ≤20}` | 200 `SessionResponse` | 401 탈퇴한 계정(탈퇴와 겹친 요청), 404 코드 없음, 410 닫힌 방, 429 실패 5회/5분(+`Retry-After`), 409 동시 중복 |
 | GET | `/api/sessions` | 로그인 | — | 200 `SessionResponse[]` (끝나지 않은 내 수업, 즐겨찾기 먼저) | — |
 | GET | `/api/sessions/{id}` | 참가자 | — | 200 `SessionResponse` | 404 |
 | GET | `/api/sessions/{id}/participants` | 교사 | — | 200 `ParticipantResponse[]{userId, name, role, joinedAt, online}` | 403·404 |
@@ -218,7 +218,7 @@
 | 메서드 | 경로 | 권한 | 요청 | 응답 | 주요 오류 |
 | --- | --- | --- | --- | --- | --- |
 | POST | `/api/sessions/{sessionId}/screenshare/token` | 참가자+활성 (교사=발행+보기, 학생=보기) | — | 200 `JoinInfo` | 503 LiveKit 준비 안 됨, 429 키 1만 개 |
-| POST | `/api/sessions/{sessionId}/help` | 학생+활성 | `CreateHelpRequest{message ≤300, shareScreen}` | 201 `HelpResponse` | 403 교사, 409 열린 요청 있음 |
+| POST | `/api/sessions/{sessionId}/help` | 학생+활성 | `CreateHelpRequest{message ≤300, shareScreen}` | 201 `HelpResponse` | 401 탈퇴한 계정(탈퇴와 겹친 요청), 403 교사, 409 열린 요청 있음 |
 | GET | `/api/sessions/{sessionId}/help` | 참가자+활성 (교사=전체 열린 요청, 학생=내 것) | — | 200 `HelpResponse[]` | — |
 | POST | `/api/help/{helpId}/accept` | 교사 | — | 200 `HelpResponse` | 409 이미 처리·동시 4명 한도 |
 | POST | `/api/help/{helpId}/later` | 교사 | — | 204 (DECLINED) | 409 진행 중은 end로 |
@@ -340,7 +340,7 @@ payload는 항상 `{"type": string, "id": number}` 하나. **원문은 싣지 �
 | `/topic/sessions/{sid}/events` | 수업 참가자 전체 | `quiz` | quizId | 퀴즈 출제 |
 | 〃 | 〃 | `quizClosed` | quizId | 퀴즈 마감 |
 | 〃 | 〃 | `settings` | sessionId | 수업 설정 변경 |
-| 〃 | 〃 | `ended` | sessionId | 수업 종료, 교사 탈퇴로 수업 닫힘 |
+| 〃 | 〃 | `ended` | sessionId | 수업 종료, 교사 탈퇴로 수업 종료 |
 | 〃 | 〃 | `notice` / `notices` | noticeId | 알림 공지(`alert=true`) / 일반 공지 등록·삭제 |
 | 〃 | 〃 | `posts` | postId | 글·댓글 등록·삭제 |
 | 〃 | 〃 | `materialAlert` / `materials` | materialId | 알림 업로드(`alert=true`) / 업로드·재사용·삭제·재색인·색인 완료 |

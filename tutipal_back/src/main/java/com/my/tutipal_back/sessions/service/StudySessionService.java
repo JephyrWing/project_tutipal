@@ -68,6 +68,7 @@ public class StudySessionService {
     /** 세션을 연 사람이 그 세션의 TEACHER. */
     @Transactional
     public SessionResponse create(Long userId, CreateSessionRequest request) {
+        userService.lockActiveAccount(userId);   // first lock: serialized with withdrawal
         String topic = TopicPrompt.subject(request.topic());
         StudySession session = sessions.save(new StudySession(request.title().trim(), topic, newCode(), userId));
         participants.save(new SessionParticipant(session.getId(), userId, SessionRole.TEACHER));
@@ -81,6 +82,7 @@ public class StudySessionService {
      */
     @Transactional
     public SessionResponse join(Long userId, String code) {
+        userService.lockActiveAccount(userId);   // before the class row lock (same order as withdrawal)
         StudySession session = sessions.findByInviteCode(InviteCodes.normalize(code))
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "코드에 맞는 방이 없어요"));
         if (session.isEnded()) {
