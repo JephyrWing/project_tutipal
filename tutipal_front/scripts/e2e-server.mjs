@@ -25,17 +25,18 @@ if (jars.length !== 1) throw new Error('Build exactly one Spring bootJar before 
 const temporary = await mkdtemp(path.join(os.tmpdir(), 'tutipal-e2e-server-'))
 const java = process.env.JAVA_HOME
   ? path.join(process.env.JAVA_HOME, 'bin', process.platform === 'win32' ? 'java.exe' : 'java') : 'java'
-// Only the material tests' synthetic input reaches this loopback stand-in.
+// Only synthetic input reaches this loopback stand-in.
 const materialVector = [1, ...Array(1023).fill(0)]
 const indexModel = (name) => 'e2e:' + name + ':1024'
 const held = new Set()
 let documentCalls = 0
 let lastDocumentCallAt = null
 let indexReply = { outcome: 'success', model: 'old', allowThrough: 0 }
+const heldGrades = new Map()
 let child
 
 const materialAi = createServer(async (request, response) => {
-  if (request.method !== 'POST' || !['/v1/embed', '/v1/chat', '/_test/material-index'].includes(request.url)) {
+  if (request.method !== 'POST' || !['/v1/embed', '/v1/chat', '/_test/material-index', '/_test/quiz-grading'].includes(request.url)) {
     response.writeHead(503).end()
     return
   }
@@ -43,6 +44,7 @@ const materialAi = createServer(async (request, response) => {
     const chunks = []
     for await (const chunk of request) chunks.push(chunk)
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    const prompt = body.messages?.at(-1)?.content ?? ''
     if (request.url === '/_test/material-index') {
       if (body.restart) {
         const previous = child
@@ -57,6 +59,9 @@ const materialAi = createServer(async (request, response) => {
         held.forEach(resume => resume())
       }
       sendJson(response, { documentCalls, lastDocumentCallAt, held: held.size })
+    } else if (request.url === '/_test/quiz-grading') {
+      if (body.release) heldGrades.get(body.marker)?.()
+      sendJson(response, { held: heldGrades.has(body.marker) })
     } else if (request.url === '/v1/embed' && body.texts?.length &&
         body.texts.every(text => text.startsWith('PT70MATERIAL'))) {
       sendJson(response, { model: 'e2e:pt70', vectors: body.texts.map(() => materialVector) })
@@ -81,10 +86,29 @@ const materialAi = createServer(async (request, response) => {
       else sendJson(response, { model: indexModel(indexReply.model), vectors: body.texts.map(() => materialVector) })
     } else if (request.url === '/v1/embed' && body.texts?.[0]?.startsWith('PT99QUERY ')) {
       sendJson(response, { model: indexModel(body.texts[0].split(' ')[1]), vectors: [materialVector] })
-    } else if (request.url === '/v1/chat' && /^PT(70MATERIAL|99QUERY)/.test(body.messages?.at(-1)?.content ?? '')) {
+    } else if (request.url === '/v1/chat' && prompt === '수업 내용: PT50DRAFT') {
+      sendAi(response, { question: '2의 제곱을 쓰세요.', modelAnswer: '4' })
+    } else if (request.url === '/v1/chat' && prompt === '수업 내용: PT50CHOICE') {
+      sendAi(response, { question: '2의 제곱은?', choices: ['3', '4'], answerIndex: 1 })
+    } else if (request.url === '/v1/chat' && /<student_answer>PT50GRADE_/.test(prompt)) {
+      const marker = /<student_answer>(PT50GRADE_[A-Z0-9_]+)<\/student_answer>/.exec(prompt)?.[1]
+      if (!marker) return response.writeHead(400).end()
+      if (marker.startsWith('PT50GRADE_HELD_')) {
+        await new Promise(resolve => {
+          const resume = () => {
+            heldGrades.delete(marker)
+            response.off('close', resume)
+            resolve()
+          }
+          heldGrades.set(marker, resume)
+          response.once('close', resume)
+        })
+      }
+      if (!response.destroyed) sendAi(response, { correct: false, feedback: 'AI 모의 오답 피드백' })
+    } else if (request.url === '/v1/chat' && /^PT(70MATERIAL|99QUERY)/.test(prompt)) {
       response.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
       response.end(JSON.stringify({ delta: 'PT70 test response' }) + '\n')
-    } else if (request.url === '/v1/chat' && (body.messages?.at(-1)?.content ?? '').startsWith('PT106')) {
+    } else if (request.url === '/v1/chat' && prompt.startsWith('PT106')) {
       // PT-106: echo the message count so the spec can prove stored history is sent with the next turn.
       response.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
       response.end(JSON.stringify({ delta: `PT106 reply n=${body.messages.length}` }) + '\n')
@@ -99,6 +123,11 @@ const materialAi = createServer(async (request, response) => {
 function sendJson(response, body) {
   response.writeHead(200, { 'Content-Type': 'application/json' })
   response.end(JSON.stringify(body))
+}
+
+function sendAi(response, result) {
+  response.writeHead(200, { 'Content-Type': 'application/x-ndjson' })
+  response.end(JSON.stringify({ delta: JSON.stringify(result) }) + '\n')
 }
 
 materialAi.listen(28081, '127.0.0.1')

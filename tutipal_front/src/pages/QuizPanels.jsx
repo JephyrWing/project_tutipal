@@ -136,6 +136,7 @@ function QuizForm({ sessionId, aiMode, conceptNames, onCreated, onClose }) {
   const [busy, setBusy] = useState('')
   const [status, setStatus] = useState('')
   const [draftState, setDraftState] = useState('empty')
+  const [draftId, setDraftId] = useState(null)
   /** AI 문제 만들기 한도(429)를 다 쓰면 기다릴 시간 동안(대화상자가 열려 있는 동안) "AI로 문제 만들기" 를 막는다. 직접 출제 · 보내기는 그대로. */
   const [aiLock, lockAi] = useRetryLock()
   const kept = choices.map((value, index) => ({ value: value.trim(), index })).filter(({ value }) => value)
@@ -143,6 +144,14 @@ function QuizForm({ sessionId, aiMode, conceptNames, onCreated, onClose }) {
   const validQuestion = question.trim() !== '' && (type === 'CHOICE'
     ? kept.length >= 2 && newAnswer >= 0
     : modelAnswer.trim() !== '')
+  const content = {
+    type,
+    question,
+    choices: type === 'CHOICE' ? kept.map(({ value }) => value) : null,
+    answerIndex: type === 'CHOICE' ? newAnswer : null,
+    modelAnswer: type === 'TEXT' ? modelAnswer : null,
+    timeLimitSec,
+  }
 
   function edit(setter, value) {
     setter(value)
@@ -154,18 +163,18 @@ function QuizForm({ sessionId, aiMode, conceptNames, onCreated, onClose }) {
 
   function changeType(nextType) {
     if (nextType === type) return
-    setType(nextType)
-    setDraftState('empty')
-    setStatus('')
+    edit(setType, nextType)
   }
 
   async function generate() {
     if (aiLock) return
     setDraftState('empty')
+    setDraftId(null)
     setBusy('ai')
     setStatus('AI가 문제를 만들고 있어요…')
     try {
       const d = await quizzes.generate(sessionId, type, hint)
+      setDraftId(d.draftId)
       setQuestion(d.question)
       setChoices(d.choices ? [...d.choices, ...EMPTY_CHOICES].slice(0, Math.max(4, d.choices.length)) : EMPTY_CHOICES)
       setAnswerIndex(d.answerIndex ?? null)
@@ -184,19 +193,28 @@ function QuizForm({ sessionId, aiMode, conceptNames, onCreated, onClose }) {
     }
   }
 
+  async function approve() {
+    if (busy || !validQuestion || draftId == null) return
+    setBusy('approve')
+    try {
+      await quizzes.approveDraft(sessionId, draftId, content)
+      setDraftState('approved')
+      setStatus('초안이 승인됐어요. 수업에 보낼 수 있습니다.')
+    } catch (err) {
+      setStatus(errText(err, '초안을 승인하지 못했어요'))
+    } finally {
+      setBusy('')
+    }
+  }
+
   async function onSubmit(e) {
     e.preventDefault()
     if (busy || !validQuestion || (aiMode && draftState !== 'approved')) return
     setBusy('send')
     try {
-      const created = await quizzes.create(sessionId, {
-        type,
-        question,
-        choices: type === 'CHOICE' ? kept.map(({ value }) => value) : null,
-        answerIndex: type === 'CHOICE' ? newAnswer : null,
-        modelAnswer: type === 'TEXT' ? modelAnswer : null,
-        timeLimitSec,
-      })
+      const created = aiMode
+        ? await quizzes.sendDraft(sessionId, draftId, content)
+        : await quizzes.create(sessionId, content)
       let tagError = null
       if (conceptTags.length > 0) {
         // 문항은 이미 보냈다: 태그 저장만 실패하면 알리고 답안 보기에서 다시 붙이게 한다.
@@ -207,6 +225,7 @@ function QuizForm({ sessionId, aiMode, conceptNames, onCreated, onClose }) {
       }
       onCreated(created, tagError)
     } catch (err) {
+      if (aiMode && err.status === 409) setDraftState('review')
       setStatus(errText(err, '보내지 못했어요'))
     } finally {
       setBusy('')
@@ -214,7 +233,7 @@ function QuizForm({ sessionId, aiMode, conceptNames, onCreated, onClose }) {
   }
 
   return (
-    <TeacherQuizDialog title={aiMode ? 'AI 문제 생성' : '직접 문제 출제'} onClose={onClose} closeDisabled={busy === 'send'}>
+    <TeacherQuizDialog title={aiMode ? 'AI 문제 생성' : '직접 문제 출제'} onClose={onClose} closeDisabled={busy === 'send' || busy === 'approve'}>
       <form className="session-body quiz-form" onSubmit={onSubmit}>
         <div className="row-between">
           <div className="seg" role="tablist" aria-label="질문 종류">
@@ -262,10 +281,7 @@ function QuizForm({ sessionId, aiMode, conceptNames, onCreated, onClose }) {
           </div>
           <div className="row-between">
             {aiMode && draftState !== 'approved' && (
-              <button type="button" className="btn" disabled={!validQuestion} onClick={() => {
-                setDraftState('approved')
-                setStatus('초안이 승인됐어요. 수업에 보낼 수 있습니다.')
-              }}>초안 승인</button>
+              <button type="button" className="btn" disabled={!validQuestion || draftId == null} onClick={() => void approve()}>초안 승인</button>
             )}
             <button type="submit" className="btn btn-primary" disabled={!validQuestion || (aiMode && draftState !== 'approved')}>
               <Icon name="send" size={18} /> 전체 학생에게 보내기
@@ -348,13 +364,21 @@ function AnswerReview({ quiz, reloadKey, onChanged }) {
           <strong className="answer-name">{r.name}</strong>
           <span className="answer-text">
             {r.text ?? (r.choiceIndex !== null && quiz.choices ? quiz.choices[r.choiceIndex] : '')}
-            {r.feedback && <span className="muted small"> — {r.feedback}</span>}
+            {r.aiOriginalCorrect != null && (
+              <span className="muted small"> — AI 원판정 {r.aiOriginalCorrect ? '정답' : '오답'}
+                {r.aiOriginalFeedback && ` · ${r.aiOriginalFeedback}`}
+              </span>
+            )}
+            {r.aiOriginalCorrect == null && r.feedback && <span className="muted small"> — {r.feedback}</span>}
+            {r.teacherCorrect != null && (
+              <span className="muted small"> — 교사 최종판정 {r.teacherCorrect ? '정답' : '오답'}</span>
+            )}
           </span>
           <Verdict row={r} />
           {quiz.type === 'TEXT' && (
             <span className="answer-actions">
-              <button className="btn btn-sm" onClick={() => void regrade(r, true)} disabled={r.correct === true}>✓ 맞음으로</button>
-              <button className="btn btn-sm" onClick={() => void regrade(r, false)} disabled={r.correct === false}>✕ 틀림으로</button>
+              <button className="btn btn-sm" onClick={() => void regrade(r, true)} disabled={r.teacherCorrect === true}>✓ 맞음으로</button>
+              <button className="btn btn-sm" onClick={() => void regrade(r, false)} disabled={r.teacherCorrect === false}>✕ 틀림으로</button>
             </span>
           )}
         </div>

@@ -45,10 +45,11 @@ class QuizServiceQuotaTest {
 
     private final StudySessionService sessions = mock(StudySessionService.class);
     private final QuizAi quizAi = mock(QuizAi.class);
+    private final QuizDrafts drafts = mock(QuizDrafts.class);
     private final AiQuota quota = AiQuotaFixtures.quota(1, Duration.ofHours(1),
             new MutableClock(Instant.parse("2026-11-25T00:00:00Z")));
     private final QuizService service = new QuizService(mock(QuizRepository.class), mock(QuizAnswerRepository.class),
-            sessions, mock(UserService.class), quizAi, mock(SessionEvents.class), quota);
+            sessions, mock(UserService.class), quizAi, mock(SessionEvents.class), quota, drafts, mock(QuizGradeWriter.class));
 
     @BeforeEach
     void settings() {
@@ -58,9 +59,11 @@ class QuizServiceQuotaTest {
     @Test
     void successIsCountedAndReturnsDraft() {
         var draft = new QuizDraft(QuizType.CHOICE, "미분이란?", List.of("a", "b"), 0, null);
+        var registered = new QuizDraft(draft.type(), draft.question(), draft.choices(), draft.answerIndex(), null, 91L);
         when(quizAi.generate(SETTINGS, QuizType.CHOICE, "미분")).thenReturn(draft);
+        when(drafts.register(TEACHER, SESSION, draft)).thenReturn(registered);
 
-        assertThat(service.generate(TEACHER, SESSION, REQ)).isEqualTo(draft);
+        assertThat(service.generate(TEACHER, SESSION, REQ)).isEqualTo(registered);
         assertThat(hasRoom(quota, TEACHER, AiFeature.QUIZ_GENERATE)).isFalse();
     }
 
