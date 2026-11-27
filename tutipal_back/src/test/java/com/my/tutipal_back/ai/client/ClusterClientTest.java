@@ -32,7 +32,7 @@ import tools.jackson.databind.json.JsonMapper;
 class ClusterClientTest {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
-    private static final String OK_BODY = "{\"status\":\"OK\",\"algorithm\":\"kmeans-silhouette-v1\",\"k\":2,"
+    private static final String OK_BODY = "{\"status\":\"OK\",\"algorithm\":\"kmeans-silhouette-v2\",\"k\":2,"
             + "\"silhouette\":0.61,\"clusters\":[{\"members\":[0,2],\"concept\":{\"index\":0,\"similarity\":0.83}},"
             + "{\"members\":[1],\"concept\":null}]}";
 
@@ -154,7 +154,7 @@ class ClusterClientTest {
                 List.of(vector(0.4f)));
 
         assertThat(result.status()).isEqualTo("OK");
-        assertThat(result.algorithm()).isEqualTo("kmeans-silhouette-v1");
+        assertThat(result.algorithm()).isEqualTo("kmeans-silhouette-v2");
         assertThat(result.k()).isEqualTo(2);
         assertThat(result.silhouette()).isEqualTo(0.61);
         assertThat(result.clusters()).hasSize(2);
@@ -166,7 +166,7 @@ class ClusterClientTest {
 
     @Test
     void lowQualityWithNullSilhouetteIsMapped() throws IOException {
-        ClusterClient client = serving(200, "{\"status\":\"LOW_QUALITY\",\"algorithm\":\"kmeans-silhouette-v1\","
+        ClusterClient client = serving(200, "{\"status\":\"LOW_QUALITY\",\"algorithm\":\"kmeans-silhouette-v2\","
                 + "\"k\":1,\"silhouette\":null,\"clusters\":[{\"members\":[0,1,2],\"concept\":null}]}");
 
         ClusterClient.Result result = client.cluster(ten(0.1f, 0.1f, 0.1f), List.of());

@@ -87,7 +87,7 @@ class TopicAnalysisServiceRound1Test {
     /** Two clusters that together cover every position 0..questions-1 exactly once. */
     private static ClusterClient.Result twoTopics(int questions) {
         int half = questions / 2;
-        return new ClusterClient.Result("OK", "kmeans-silhouette-v1", 2, 0.4, List.of(
+        return new ClusterClient.Result("OK", "kmeans-silhouette-v2", 2, 0.4, List.of(
                 new ClusterClient.Cluster(IntStream.range(0, half).boxed().toList(), null),
                 new ClusterClient.Cluster(IntStream.range(half, questions).boxed().toList(), null)));
     }
@@ -95,7 +95,7 @@ class TopicAnalysisServiceRound1Test {
     @Test
     void answerMissingAQuestionPositionIs503RefundedAndNotCached() {
         questionsWithIds(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
-        clusterAnswers(new ClusterClient.Result("OK", "kmeans-silhouette-v1", 2, 0.4, List.of(
+        clusterAnswers(new ClusterClient.Result("OK", "kmeans-silhouette-v2", 2, 0.4, List.of(
                 new ClusterClient.Cluster(IntStream.range(0, 6).boxed().toList(), null),
                 new ClusterClient.Cluster(IntStream.range(6, 11).boxed().toList(), null))));   // position 11 missing
 
@@ -110,7 +110,7 @@ class TopicAnalysisServiceRound1Test {
     @Test
     void malformedClusterAnswerIs503AndTheQuotaIsRefunded() {
         questionsWithIds(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
-        clusterAnswers(new ClusterClient.Result("OK", "kmeans-silhouette-v1", 2, 0.4,
+        clusterAnswers(new ClusterClient.Result("OK", "kmeans-silhouette-v2", 2, 0.4,
                 List.of(new ClusterClient.Cluster(List.of(0, 1, 99), null))));   // 99 is not a question position
 
         assertThatThrownBy(() -> service.analyze(TEACHER, SESSION)).isInstanceOf(AiUnavailableException.class);
@@ -121,7 +121,7 @@ class TopicAnalysisServiceRound1Test {
     @Test
     void singleClusterIsNotATopic() {
         questionsWithIds(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
-        clusterAnswers(new ClusterClient.Result("LOW_QUALITY", "kmeans-silhouette-v1", 1, null,
+        clusterAnswers(new ClusterClient.Result("LOW_QUALITY", "kmeans-silhouette-v2", 1, null,
                 List.of(new ClusterClient.Cluster(IntStream.range(0, 12).boxed().toList(), null))));
 
         ConfusionsResponse r = service.analyze(TEACHER, SESSION);

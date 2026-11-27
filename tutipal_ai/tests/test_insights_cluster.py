@@ -73,7 +73,7 @@ def test_three_separated_groups_give_k3_ok_and_size_order():
     result = dump(insights_service.cluster_vectors(vectors, []))
 
     assert result["status"] == "OK"
-    assert result["algorithm"] == "kmeans-silhouette-v1"
+    assert result["algorithm"] == "kmeans-silhouette-v2"
     assert result["k"] == 3
     assert result["silhouette"] is not None and result["silhouette"] > 0.5
     expected = members_by_group(labels)
@@ -110,6 +110,54 @@ def test_k_candidates_are_limited_by_n_over_five():
 
     assert result["k"] == 2
     assert len(result["clusters"]) == 2
+
+
+def test_near_tie_in_silhouette_goes_to_the_larger_k():
+    # PT-87 bge-m3 synthetic set: k=2 merged two concepts although k=3 was only 0.0066 lower
+    assert insights_service.choose_k({2: 0.0763, 3: 0.0697, 4: 0.0570}) == 3
+
+
+def test_exact_tie_goes_to_the_larger_k():
+    assert insights_service.choose_k({2: 0.2, 3: 0.2}) == 3
+
+
+def test_clear_winner_is_kept_when_larger_k_is_outside_the_margin():
+    assert insights_service.choose_k({2: 0.30, 3: 0.10, 4: 0.05}) == 2
+
+
+def test_only_candidates_within_the_margin_are_considered():
+    # 4 is within the margin of the best (3), 5 is not
+    assert insights_service.choose_k({2: 0.10, 3: 0.40, 4: 0.395, 5: 0.30}) == 4
+
+
+def test_tie_break_only_steps_through_adjacent_k():
+    # PT-87 bge-m3 synthetic set: k=5 (0.0670) is also within 0.01 of k=2 but k=4 (0.0570) breaks the chain
+    scores = {2: 0.0763, 3: 0.0697, 4: 0.0570, 5: 0.0670, 6: 0.0540, 7: 0.0580, 8: 0.0420}
+    assert insights_service.choose_k(scores) == 3
+
+
+def test_exact_best_tie_starts_from_the_smaller_k_then_steps_up():
+    # best 0.30 at k=2 and k=4, k=3 outside the margin: start at 2 and stop there
+    assert insights_service.choose_k({2: 0.30, 3: 0.10, 4: 0.30}) == 2
+
+
+def test_no_candidate_gives_none():
+    assert insights_service.choose_k({}) is None
+
+
+def test_reported_silhouette_is_the_chosen_k_score(monkeypatch):
+    # k=2 scores 0.105 (OK on its own), k=3 ties within the margin at 0.098: k=3 is chosen and its score is reported
+    vectors, _ = blobs([6, 6, 6], seed=4)
+    fake = {2: 0.105, 3: 0.098}
+    monkeypatch.setattr(insights_service, "silhouette_score",
+                        lambda points, labels, metric: fake[len(set(labels.tolist()))])
+
+    result = dump(insights_service.cluster_vectors(vectors, []))
+
+    assert result["k"] == 3
+    assert result["silhouette"] == 0.098
+    assert result["status"] == "LOW_QUALITY"
+    assert len(result["clusters"]) == 3
 
 
 def test_identical_vectors_give_one_cluster_without_silhouette():

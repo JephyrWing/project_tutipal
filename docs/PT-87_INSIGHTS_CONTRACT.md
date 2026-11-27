@@ -41,7 +41,7 @@ V20(PT-86 `chunk_provenance`) · V21(PT-106 `ai_conversations`)은 develop에 �
 
 - 인증: 기존 `internal_only`(X-Internal-Key). 모델 제공자를 쓰지 않으므로 provider 검사는 붙이지 않는다.
 - 요청 `{vectors: [[float ×1024] ×10..256], concepts: [[float ×1024] ×0..50]}`, 유한값만, `extra=forbid`. 텍스트 · user_id 없음. Spring은 소수 5자리로 반올림해 보낸다 (최대 요청 256+50개 기준 약 3.2MB, 본문 제한 4.5MB 미만).
-- 응답 `{status: "OK"|"LOW_QUALITY", algorithm: "kmeans-silhouette-v1", k, silhouette|null, clusters:[{members:[int], concept:{index, similarity}|null}]}`. members는 요청 vectors의 순번, concept.index는 요청 concepts의 순번. representatives 없음.
+- 응답 `{status: "OK"|"LOW_QUALITY", algorithm: "kmeans-silhouette-v2", k, silhouette|null, clusters:[{members:[int], concept:{index, similarity}|null}]}`. members는 요청 vectors의 순번, concept.index는 요청 concepts의 순번. representatives 없음.
 - 422 본문은 기존 `safe_error`로 입력값을 되돌려 주지 않는다.
 
 ## 5. 원문 보관 · 삭제 · 외부 전송 경계
@@ -64,7 +64,11 @@ V20(PT-86 `chunk_provenance`) · V21(PT-106 `ai_conversations`)은 develop에 �
 ## 6. 알고리즘 선택: KMeans + 실루엣 (HDBSCAN 아님)
 
 - 입력은 수업 최근 질문 최대 256개(5자 미만 제외)로 작고, 결과는 "TOP3 주제"만 쓴다. KMeans는 같은 입력에 같은 결과(`random_state=0`, `n_init=10`, `algorithm="lloyd"`, BLAS 스레드 1개)를 내기 쉬워 테스트 · 설명이 단순하다.
-- k는 2..min(8, n//5, n-1) 중 실루엣 최대(동점이면 작은 k). 군집 후보가 없거나 벡터가 전부 같으면 k=1, silhouette null, LOW_QUALITY. 최고 실루엣 < 0.1이면 LOW_QUALITY.
+- k는 2..min(8, n//5, n-1) 후보의 실루엣을 모두 구한 뒤, **최고 점수의 k(동점이면 작은 k)에서 시작해 바로 다음 k가 최고값과 0.01(`SILHOUETTE_TIE_MARGIN`, 미보정) 이내이면 한 칸씩 올라가고, 끊기면 멈춘다**(v2, 2026-11-26, `choose_k`). v1은 최댓값(동점이면 작은 k)이었는데, bge-m3로 만든 합성 질문 45개(재귀·스택·반복문 15개씩)에서 k=2(0.0763)와 k=3(0.0697)이 거의 같아 k=2가 선택되었고 재귀와 반복문이 한 군집(순도 64%)으로 합쳐졌다. v2에서는 같은 데이터가 k=3(순도 93%, 개념 이름 3개 모두 일치)이 된다. 처음 시도한 "0.01 이내 후보 중 가장 큰 k"는 같은 데이터에서 멀리 떨어진 k=5(0.0670)까지 골라 주제를 더 쪼갰기 때문에, 인접한 k로만 올라가게 했다. 응답의 silhouette와 LOW_QUALITY 판정은 **고른 k의 점수** 기준이다. 군집 후보가 없거나 벡터가 전부 같으면 k=1, silhouette null, LOW_QUALITY. 고른 k의 실루엣 < 0.1이면 LOW_QUALITY.
+- 한계(과분할): 인접 후보 점수가 계속 0.01 이내로 평평하면 v2는 큰 k(최대 8)까지 올라가 한 주제를 여러 군집으로 나눌 수 있다. 점수 수준과 무관하게 생기는 일이라 고른 k의 실루엣이 0.1 이상이면 OK로 표시될 수도 있다. Spring은 LOW_QUALITY여도 학생 3명 이상인 군집을 TOP3에 올리므로, 이 경우를 막는 장치는 다음뿐이다.
+  - 개념 태그가 있으면 같은 개념에 매칭된 군집을 Spring이 하나로 합친다(합성 데이터에서 시험한 첫 번째 규칙 k=5도 합치면 재귀 · 스택 · 반복문 3개가 됐다).
+  - 태그가 없거나 매칭되지 않으면 "태그되지 않은 주제 N"이 여러 개 보일 수 있다. 화면에는 LOW_QUALITY 문구가 함께 나간다.
+  - 0.01은 합성 데이터 한 세트(45문항)로 정한 미보정 값이다. PT-89에서 실제 수업 데이터로 동점 폭과 과분할 빈도를 함께 다시 본다.
 - HDBSCAN은 잡음 점을 버려 주는 장점이 있지만, 질문 수십 개 규모에서는 `min_cluster_size` 등에 결과가 크게 흔들리고 "전부 잡음"이 자주 나와 선생님 화면에 설명하기 어렵다. 추가 의존성도 피했다. 대신 KMeans는 잡담도 어느 군집에 넣으므로 "학생 3명 이상" 규칙과 개념 매칭으로 걸러 낸다 (한계 8장).
 - 벡터는 L2 정규화 후 유클리드 거리 = 코사인 거리와 같은 순서.
 - 개념 매칭: 정규화한 군집 중심과 정규화한 개념 벡터의 코사인이 0.55 이상인 것 중 최대 (FastAPI 상수 `CONCEPT_MATCH_THRESHOLD`, **미보정**). Spring은 같은 개념에 매칭된 군집을 합치고 고유 학생 수를 다시 센다.
