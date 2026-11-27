@@ -15,7 +15,10 @@ const ROOM_CARDS = [
 export default function HomePage() {
   const { me } = useAuth()
   const [mine, setMine] = useState(null)
+  const [ended, setEnded] = useState(null)
+  const [endedError, setEndedError] = useState('')
   const [reviewCount, setReviewCount] = useState(0)
+  const owned = mine?.filter((r) => r.myRole === 'TEACHER')
   /** 즐겨찾기 먼저, 그다음 최근(id 큰) 것부터 — 서버 mySessions 정렬과 같게 */
   const sorted = (list) => [...list].sort((a, b) => (b.pinned - a.pinned) || (b.id - a.id))
   async function togglePin(room) {
@@ -29,6 +32,7 @@ export default function HomePage() {
   }
   useEffect(() => {
     sessions.mine().then(setMine, () => setMine([]))
+    sessions.endedMine().then(setEnded, () => setEndedError('종료한 수업을 불러오지 못했어요'))
     reviewApi.items().then((l) => setReviewCount(l.length), () => undefined)
   }, [])
   return (
@@ -62,7 +66,7 @@ export default function HomePage() {
       <section className="room-lists">
         <RoomList
           title="내가 방장인 방"
-          rooms={mine?.filter((r) => r.myRole === 'TEACHER')}
+          rooms={owned}
           empty="아직 만든 방이 없어요. 위의 방 만들기로 시작해 보세요"
           onPin={togglePin}
         />
@@ -74,12 +78,38 @@ export default function HomePage() {
         />
       </section>
 
+      {(owned?.length > 0 || ended?.length > 0 || endedError) && <EndedRooms rooms={ended} error={endedError} />}
+
       <Link to="/review" className="card review-strip">
         <span className="review-icon"><Icon name="clock" size={30} /></span>
         <strong>복습할 내용 {reviewCount}개</strong>
         <span className="muted">화면 분석을 켜면 자주 보거나 오래 본 내용이 여기에 모여요</span>
       </Link>
     </div>
+  )
+}
+
+function EndedRooms({ rooms, error }) {
+  return (
+    <section className="card room-list ended-room-list" aria-label="내가 종료한 수업">
+      <h2>내가 종료한 수업 {rooms && <span className="badge badge-gray">{rooms.length}</span>}</h2>
+      <div className="room-scroll">
+        {error && <p role="alert">{error}</p>}
+        {!rooms && !error && <p className="muted">불러오는 중…</p>}
+        {rooms?.length === 0 && <p className="muted">종료한 수업이 없어요</p>}
+        {rooms?.map((room) => (
+          <div className="room-row ended-room-row" key={room.id}>
+            <div className="room-link"><strong>{room.title}</strong><span className="badge">{room.topic}</span></div>
+            <div className="ended-room-actions">
+              <Link className="btn btn-sm" to={`/sessions/${room.id}?tab=results`}
+                aria-label={`${room.title} 학습 결과`}>학습 결과</Link>
+              <Link className="btn btn-sm" to={`/sessions/${room.id}?tab=insights`}
+                aria-label={`${room.title} 개념 분석`}>개념 분석</Link>
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
 
