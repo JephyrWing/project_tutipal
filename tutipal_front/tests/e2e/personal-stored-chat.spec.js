@@ -48,7 +48,7 @@ test('PT124 lost saved event retries the same key without a second stored pair',
     keys.push(route.request().postDataJSON().clientMessageId)
     const response = await route.fetch()
     const body = await response.text()
-    if (first) { first = false; await route.fulfill({ response, body: body.split('event: saved')[0] }); }
+    if (first) { first = false; await route.fulfill({ response, body: body.split(/event:\s*saved/)[0] }); }
     else await route.fulfill({ response, body })
   })
   await ask(app.page, 'PT106 저장 응답 유실')
@@ -89,6 +89,7 @@ test('PT124 failure retry, stop, account transition and late response are isolat
   await expect(app.page.locator('.chat-list')).not.toContainText('OLD ACCOUNT RESPONSE')
   hold = true; waiting = new Promise(resolve => { entered = resolve })
   await ask(app.page, 'PT106 이전 계정 질문'); await waiting
+  await app.page.getByRole('button', { name: '로그아웃', exact: true }).click()
   await login(app, 2); release(); await open(app)
   await expect(app.page.locator('.chat-list')).not.toContainText('PT106 이전 계정 질문')
   await expect(app.page.getByRole('link', { name: '이 대화 기록 열기' })).toHaveCount(0)
