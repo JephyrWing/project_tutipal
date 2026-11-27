@@ -47,7 +47,10 @@ try{
  passed++;console.log('PASS same selected window summary update preserves modal and question draft')
 
  control.hold=true;control.summary='OLD ACCOUNT RESPONSE';await app.evaluate(()=>{global.pt119.version++})
- const posts=control.screenPosts;await widget.clock.fastForward(40001);await expect.poll(()=>control.screenPosts).toBe(posts+1)
+ const posts=control.screenPosts
+ // Summary is published before the observe calls settle. Advance subsequent ticks
+ // until the held request actually starts; a busy tick only checks target lifetime.
+ await expect.poll(async()=>{await widget.clock.fastForward(40001);return control.screenPosts}).toBe(posts+1)
  await main.evaluate(()=>fetch('/logout',{method:'POST'}))
  await expect.poll(settings).toMatchObject({enabled:false,sourceId:''})
  await expect(dialog).toHaveCount(0)
