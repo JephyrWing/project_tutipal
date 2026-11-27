@@ -32,6 +32,29 @@ async function ask(widget) {
    form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))
  })
 }
+
+test('화면 상세 모달은 추가 분석 없이 열고 요약만 질문으로 전송하며 중지 시 닫힘',async({apps})=>{
+ const app=await apps.launch();await login(app,8)
+ const {widget,screens}=await prepare(app),posts=[]
+ await widget.route('**/api/tutor/chat',route=>{posts.push(route.request().postDataJSON());return answer(route)})
+ const count=screens.length
+ await widget.getByRole('button',{name:'자세히 보기',exact:true}).click()
+ const dialog=widget.getByRole('dialog',{name:'화면 분석 상세'})
+ await expect(dialog).toBeVisible()
+ await expect(dialog.getByText('현재 분석은 요약만 제공해요. 별도의 상세 설명은 아직 제공되지 않아요.')).toBeVisible()
+ expect(screens.length).toBe(count)
+ await dialog.getByRole('textbox',{name:'화면 질문'}).fill('모달에서 질문')
+ await widget.evaluate(()=>{const form=document.querySelector('dialog form');for(let i=0;i<2;i++)form.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}))})
+ await expect(dialog.getByText('공통 채팅 답변',{exact:true})).toBeVisible()
+ expect(posts.length).toBe(1);expect(posts[0].screenSummary.length).toBe(4000)
+ expect(posts[0].messages).toEqual([{role:'user',content:'모달에서 질문'}])
+ expect(JSON.stringify(posts)).not.toContain('PRIVATE_DETAIL');expect(JSON.stringify(posts)).not.toContain('SYNTHETIC_IMAGE')
+ expect(screens.length).toBe(count)
+ await widget.keyboard.press('Escape');await expect(dialog).toHaveCount(0)
+ await expect(widget.getByRole('button',{name:'자세히 보기',exact:true})).toBeFocused()
+ await widget.getByRole('button',{name:'일시정지',exact:true}).click()
+ await expect(widget.getByRole('button',{name:'자세히 보기',exact:true})).toHaveCount(0)
+})
 test('위젯 개인 질문은 실제 브리지에서 요약만 공통 채팅 한 번 전송',async({apps})=>{
  const app=await apps.launch();await login(app,8)
  const {widget,screens}=await prepare(app),posts=[]
