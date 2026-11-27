@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.my.tutipal_back.sessions.dto.CreateSessionRequest;
+import com.my.tutipal_back.sessions.dto.EndedSessionResponse;
 import com.my.tutipal_back.sessions.dto.JoinSessionRequest;
 import com.my.tutipal_back.sessions.dto.ParticipantResponse;
 import com.my.tutipal_back.sessions.dto.SessionResponse;
@@ -64,6 +65,11 @@ public class StudySessionController {
     @GetMapping
     public List<SessionResponse> mySessions(@AuthenticationPrincipal OAuth2User me) {
         return service.mySessions(userId(me));
+    }
+
+    @GetMapping("/ended")
+    public List<EndedSessionResponse> myEndedSessions(@AuthenticationPrincipal OAuth2User me) {
+        return service.myEndedSessions(userId(me));
     }
 
     @GetMapping("/{id}")

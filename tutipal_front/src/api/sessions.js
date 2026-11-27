@@ -15,7 +15,9 @@ export const sessions = {
     request(`/api/sessions/${id}/ai-retention`, { ...json({ aiRetentionDays }), method: 'PUT' }),
   join: (code) => request('/api/sessions/join', json({ code })),
   mine: () => request('/api/sessions'),
+  endedMine: () => request('/api/sessions/ended'),
   get: (id) => request(`/api/sessions/${id}`),
+  teacherResults: (id) => request(`/api/sessions/${id}/learning-results`),
   participants: (id) => request(`/api/sessions/${id}/participants`),
   updateSettings: (id, settings) =>
     request(`/api/sessions/${id}/settings`, { ...json(settings), method: 'PUT' }),

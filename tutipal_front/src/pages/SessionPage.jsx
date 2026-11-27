@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { quizzes } from '../api/quizzes'
 import { useSessionEvents } from '../api/realtime'
 import { sessions } from '../api/sessions'
@@ -15,6 +15,7 @@ import { materials, notices } from '../api/board'
 import { StudentQuizModal, TeacherQuizTab } from './QuizPanels'
 import { FocusBadge, FocusNotice, StudentFocusCard, useFocusStates } from './FocusPanels'
 import InsightsTab from './InsightsPanels'
+import TeacherResultsPanel from './TeacherResultsPanel'
 
 /** 세션 화면: 내 역할에 따라 학생 홈(목업 13) 또는 선생님 모드(목업 20 · 21) */
 export default function SessionPage() {
@@ -187,13 +188,19 @@ function StudentView({ session, reload }) {
 /** 목업 20 선생님 모드: 참가자 · 주제 설정(목업 21) · 출제와 답안 관리 · 세션 종료 */
 /** PT-87: 닫힌 방에서도 선생님은 개념 분석(TOP3 · 숙련도)을 볼 수 있다 (서버도 끝난 수업 조회를 허용). */
 function EndedTeacherView({ session }) {
+  const [search] = useSearchParams()
+  const results = search.get('tab') === 'results'
   return (
     <div className="page session-page">
       <div className="card session-body row-between">
-        <span>「{session.title}」 방은 닫혔어요. 개념 분석은 계속 볼 수 있어요.</span>
+        <span>「{session.title}」 방은 닫혔어요.</span>
         <Link to="/" className="btn btn-sm">홈으로</Link>
       </div>
-      <InsightsTab sessionId={session.id} />
+      <nav className="ended-room-actions" aria-label="종료 수업 보기">
+        <Link className="btn btn-sm" to="?tab=results" aria-current={results ? 'page' : undefined}>학습 결과</Link>
+        <Link className="btn btn-sm" to="?tab=insights" aria-current={results ? undefined : 'page'}>개념 분석</Link>
+      </nav>
+      {results ? <TeacherResultsPanel sessionId={session.id} /> : <InsightsTab sessionId={session.id} />}
     </div>
   )
 }
@@ -203,12 +210,17 @@ function TeacherView({ session, onChange, reload }) {
   const [boardKeys, setBoardKeys] = useState({ notice: 0, board: 0, materials: 0 })
   const [peopleKey, setPeopleKey] = useState(0)
   const [quizKey, setQuizKey] = useState(0)
+  const [rosterKey, setRosterKey] = useState(0)
   const [helpKey, setHelpKey] = useState(0)
   const [newHelp, setNewHelp] = useState(false)
   const [focusKey, setFocusKey] = useState(0)
   const live = useSessionEvents(session.id, true, (e) => {
     if (e.type === 'focus') setFocusKey((k) => k + 1)
-    if (e.type === 'joined' || e.type === 'left') reload()   // 참가자 수
+    if (e.type === 'joined' || e.type === 'left') {
+      reload()
+      setRosterKey((k) => k + 1)
+    }
+    if (e.type === 'ended') reload()
     if (e.type === 'joined' || e.type === 'left' || e.type === 'presence') setPeopleKey((k) => k + 1)
     if (e.type === 'quizStats' || e.type === 'quiz' || e.type === 'quizClosed') setQuizKey((k) => k + 1)
     if (e.type === 'notice' || e.type === 'notices') setBoardKeys((v) => ({ ...v, notice: v.notice + 1 }))
@@ -233,6 +245,7 @@ function TeacherView({ session, onChange, reload }) {
         <button role="tab" aria-selected={tab === 'people'} onClick={() => setTab('people')}>참가자</button>
         <button role="tab" aria-selected={tab === 'settings'} onClick={() => setTab('settings')}>주제 설정</button>
         <button role="tab" aria-selected={tab === 'quiz'} onClick={() => setTab('quiz')}>이해도 질문</button>
+        <button role="tab" aria-selected={tab === 'results'} onClick={() => setTab('results')}>학습 결과</button>
         <button role="tab" aria-selected={tab === 'share'} onClick={() => setTab('share')}>화면 공유</button>
         <button role="tab" aria-selected={tab === 'help'} onClick={() => { setTab('help'); setNewHelp(false) }}>
           도움 요청{newHelp && tab !== 'help' && <span className="tab-dot" aria-label="새 요청" />}
@@ -244,6 +257,7 @@ function TeacherView({ session, onChange, reload }) {
       </nav>
       {tab === 'people' && <Participants sessionId={session.id} reloadKey={peopleKey} focusKey={focusKey} />}
       {tab === 'quiz' && <TeacherQuizTab sessionId={session.id} reloadKey={quizKey} />}
+      {tab === 'results' && <TeacherResultsPanel sessionId={session.id} reloadKey={quizKey + rosterKey} />}
       {tab === 'share' && <TeacherShareTab sessionId={session.id} />}
       {tab === 'help' && <TeacherHelpTab sessionId={session.id} reloadKey={helpKey} />}
       {tab === 'materials' && (
