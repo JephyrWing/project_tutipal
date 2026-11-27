@@ -166,3 +166,74 @@ test('participant removal and class closure revoke existing help connections', {
   assert.equal((await validate(second.student, next)).status, 410)
   assert.equal((await second.student.request(`/api/help/${second.help.id}/token`, 'POST')).status, 410)
 })
+
+const helpAction = (client, help, action) => client.request('/api/help/' + help.id + '/' + action, 'POST')
+const openHelp = (client, room) => client.request('/api/sessions/' + room.id + '/help')
+const requestHelp = (client, room) => client.request('/api/sessions/' + room.id + '/help', 'POST',
+  { message: 'PT47 synthetic request', shareScreen: false })
+
+test('four accepted requests are the limit even when two acceptance commands overlap', { timeout: 30000 }, async () => {
+  const { teacher, peer, room, help } = await context(false)
+  const additionalStudents = [new Client(), new Client(), new Client()]
+  await Promise.all(additionalStudents.map(async (client, index) => {
+    await client.login(index + 4)
+    assert.equal((await client.request('/api/sessions/join', 'POST', { code: room.inviteCode })).status, 200)
+  }))
+  const pending = [help]
+  for (const student of [peer, ...additionalStudents]) {
+    const result = await requestHelp(student, room)
+    assert.equal(result.status, 201)
+    pending.push(result.body)
+  }
+  for (const request of pending.slice(0, 3)) assert.equal((await helpAction(teacher, request, 'accept')).status, 200)
+
+  const contenders = pending.slice(3)
+  const results = await Promise.all(contenders.map(request => helpAction(teacher, request, 'accept')))
+  assert.deepEqual(results.map(result => result.status).sort(), [200, 409])
+  const list = await openHelp(teacher, room)
+  assert.equal(list.status, 200)
+  assert.equal(list.body.filter(request => request.status === 'ACCEPTED').length, 4)
+  assert.equal(list.body.filter(request => request.status === 'PENDING').length, 1)
+  const waiting = contenders[results.findIndex(result => result.status === 409)]
+  assert.equal((await helpAction(teacher, pending[0], 'end')).status, 204)
+  assert.equal((await helpAction(teacher, waiting, 'accept')).status, 200)
+  await endClass({ teacher, room })
+})
+
+test('student cancellation and teacher acceptance leave no active request when they overlap', { timeout: 30000 }, async () => {
+  const { teacher, student, peer, room, help } = await context(false)
+  assert.equal((await requestHelp(student, room)).status, 409)
+  assert.deepEqual((await openHelp(peer, room)).body, [])
+  assert.equal((await helpAction(peer, help, 'end')).status, 403)
+
+  const [accepted, cancelled] = await Promise.all([
+    helpAction(teacher, help, 'accept'),
+    helpAction(student, help, 'end'),
+  ])
+  assert.ok([200, 409].includes(accepted.status), 'Acceptance may precede or follow cancellation')
+  assert.equal(cancelled.status, 204)
+  assert.deepEqual((await openHelp(teacher, room)).body, [])
+  assert.deepEqual((await openHelp(student, room)).body, [])
+  assert.equal((await helpAction(teacher, help, 'accept')).status, 409)
+
+  const next = await requestHelp(student, room)
+  assert.equal(next.status, 201)
+  assert.equal((await helpAction(teacher, next.body, 'later')).status, 204)
+  assert.deepEqual((await openHelp(student, room)).body, [])
+  assert.equal((await requestHelp(student, room)).status, 201)
+  await endClass({ teacher, room })
+})
+
+test('a closed class rejects accept, later, cancellation and end of existing requests', { timeout: 30000 }, async () => {
+  const { teacher, student, peer, room, help } = await context(false)
+  const second = await requestHelp(peer, room)
+  assert.equal(second.status, 201)
+  assert.equal((await helpAction(teacher, second.body, 'accept')).status, 200)
+  await endClass({ teacher, room })
+
+  assert.equal((await helpAction(teacher, help, 'accept')).status, 410)
+  assert.equal((await helpAction(teacher, help, 'later')).status, 410)
+  assert.equal((await helpAction(student, help, 'end')).status, 410)
+  assert.equal((await helpAction(teacher, second.body, 'end')).status, 410)
+  assert.equal((await helpAction(peer, second.body, 'end')).status, 410)
+})
