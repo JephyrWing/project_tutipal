@@ -63,6 +63,14 @@ function cancelAnalysisCapture() {
   captureRevision++; cancelCapture('analysis')
 }
 
+/** Revoke in memory before touching disk, including every pending preview/capture. */
+function stopAnalysis() {
+  revision++; captureRevision++; runningId = ''; lastHash = ''
+  preview = null; previewPending = false
+  cancelCapture()
+  writeFileSync(file(), JSON.stringify(OFF))
+}
+
 async function capture() {
   const settings = loadSettings(), ownRevision = revision, ownCapture = captureRevision
   const current = () => revision === ownRevision && captureRevision === ownCapture
@@ -97,4 +105,4 @@ async function targetStatus(expectedSourceId) {
   if (latest.sourceId !== settings.sourceId) return { status: 'changed' }
   return { status: sources.some(s => s.id === settings.sourceId) ? 'ok' : 'gone' }
 }
-module.exports = { loadSettings, saveSettings, listSources, previewSource, cancelPreview, cancelAnalysisCapture, capture, targetStatus }
+module.exports = { loadSettings, saveSettings, listSources, previewSource, cancelPreview, cancelAnalysisCapture, stopAnalysis, capture, targetStatus }

@@ -5,12 +5,14 @@ const { Readable } = require('node:stream')
 const { randomBytes, timingSafeEqual } = require('node:crypto')
 const { session, app } = require('electron')
 const { WebSocket, WebSocketServer } = require('ws')
+const { createAuthBoundary } = require('./authBoundary.cjs')
 
 const BACKEND_PATH = /^(?:\/api(?:\/|$)|\/livekit(?:\/|$)|\/dev\/login$|\/logout$|\/health$|\/actuator\/health(?:\/|$))/
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.woff2': 'font/woff2' }
 
 /** 내장 화면만 loopback으로 제공한다. Spring의 쿠키는 Electron 세션에 보관한다. */
-async function startBridge(backend) {
+async function startBridge(backend, { onAuthBoundary = () => {} } = {}) {
+  const auth = createAuthBoundary(onAuthBoundary)
   const secret = randomBytes(32).toString('hex')
   const owned = new Set()
   const sockets = new Set()
@@ -22,6 +24,10 @@ async function startBridge(backend) {
   const csp = () => `default-src 'self'; script-src 'self'${dev ? " 'unsafe-inline'" : ''}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ${origin.replace(/^http:/, 'ws:')}; media-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-src 'none'`
 
   async function proxy(req, res, target) {
+    const backendRequest = target.origin === backend.origin
+    if (backendRequest && (target.pathname === '/logout' || target.pathname === '/dev/login'
+        || target.pathname === '/api/users/me' && req.method === 'DELETE')) auth.revoke()
+    const ownAuth = auth.revision()
     const abort = new AbortController()
     res.on('close', () => abort.abort())
     const headers = {}
@@ -45,6 +51,7 @@ async function startBridge(backend) {
     const response = target.origin === backend.origin
       ? await session.defaultSession.fetch(target.href, options)
       : await fetch(target.href, { method: req.method, signal: abort.signal })
+    if (backendRequest && response.status === 401) auth.unauthorized(ownAuth)
     res.statusCode = response.status
     for (const [name, value] of response.headers) {
       if (!['set-cookie', 'content-encoding', 'content-length', 'transfer-encoding', 'connection', 'access-control-allow-origin', 'content-security-policy'].includes(name)) res.setHeader(name, value)
@@ -115,6 +122,7 @@ async function startBridge(backend) {
   })
   return {
     base: new URL(origin),
+    invalidateAuth: () => auth.revoke(),
     own(contents) { owned.add(contents.id); contents.once('destroyed', () => owned.delete(contents.id)) },
     close() { for (const socket of sockets) socket.terminate(); wss.close(); server.close() },
   }

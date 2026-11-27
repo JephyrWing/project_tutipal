@@ -55,7 +55,8 @@ export default function ScreenConsentPage() {
     setBusy(true); setError('')
     try {
       setSettings(await desktop.setScreenSettings({ enabled: true, sourceId: src.id, sourceName: src.name, previewToken: preview.previewToken }))
-      navigate('/')
+      if (desktop.completeScreenConsent) await desktop.completeScreenConsent()
+      else navigate('/')
     } catch (e) { setError(e.message); setBusy(false) }
   }
 
