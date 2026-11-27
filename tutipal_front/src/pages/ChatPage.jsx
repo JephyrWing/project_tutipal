@@ -35,8 +35,12 @@ export default function ChatPage() {
   const [params, setParams] = useSearchParams()
   const { me } = useAuth()
   const ask = params.get('ask')
+  // Review's explanation entry keeps its existing single-question contract.
+  // Keep this choice after onAsked removes the query parameter.
+  const explanationEntry = useRef(!!ask).current
+  const PersonalEntry = explanationEntry ? ChatPanel : PersonalStoredChat
   return (
-    <PersonalStoredChat key={`${me?.id}:${toTopic(params.get('topic'))}`}
+    <PersonalEntry key={`${me?.id}:${toTopic(params.get('topic'))}`}
       topic={toTopic(params.get('topic'))}
       onTopicChange={(t) => setParams({ topic: t }, { replace: true })}
       initialAsk={ask ?? undefined}

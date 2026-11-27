@@ -15,6 +15,16 @@ async function idOf(page) {
   return (await page.getByRole('link', { name: '이 대화 기록 열기' }).getAttribute('href')).split('/').at(-1)
 }
 
+// Node route.fetch bypasses Electron's private bridge header. Fetch inside the
+// real page, skipping just this interceptor, so Main supplies its normal header.
+async function forwarded(page, route) {
+  const request = route.request()
+  return page.evaluate(async ({ url, body, headers }) => {
+    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers, 'X-PT124-Forward': '1' }, body })
+    return { status: response.status, body: await response.text() }
+  }, { url: request.url(), body: request.postData(), headers: await request.allHeaders().then(h => Object.fromEntries(Object.entries(h).filter(([k]) => k.toLowerCase().includes('csrf')))) })
+}
+
 test('PT124 personal entry persists once and continues the same conversation in records', async ({ apps }) => {
   const app = await apps.launch(); await login(app, 1); await open(app)
   let creates = 0, posts = 0
@@ -45,11 +55,12 @@ test('PT124 lost saved event retries the same key without a second stored pair',
   const keys = []; let first = true
   await app.page.route('**/api/conversations/*/messages', async route => {
     if (route.request().method() !== 'POST') return route.continue()
+    if (route.request().headers()['x-pt124-forward']) return route.continue()
     keys.push(route.request().postDataJSON().clientMessageId)
-    const response = await route.fetch()
-    const body = await response.text()
-    if (first) { first = false; await route.fulfill({ response, body: body.split(/event:\s*saved/)[0] }); }
-    else await route.fulfill({ response, body })
+    const response = await forwarded(app.page, route)
+    expect(response.status).toBe(200)
+    if (first) { first = false; await route.fulfill({ status: response.status, contentType: 'text/event-stream', body: response.body.split(/event:\s*saved/)[0] }); }
+    else await route.fulfill({ status: response.status, contentType: 'text/event-stream', body: response.body })
   })
   await ask(app.page, 'PT106 저장 응답 유실')
   await expect(app.page.getByRole('button', { name: '답변 다시 시도' })).toBeVisible()
@@ -90,6 +101,7 @@ test('PT124 failure retry, stop, account transition and late response are isolat
   hold = true; waiting = new Promise(resolve => { entered = resolve })
   await ask(app.page, 'PT106 이전 계정 질문'); await waiting
   await app.page.getByRole('button', { name: '로그아웃', exact: true }).click()
+  await expect(app.page.getByRole('button', { name: '개발용 로그인 (내 PC 전용)', exact: true })).toBeVisible()
   await login(app, 2); release(); await open(app)
   await expect(app.page.locator('.chat-list')).not.toContainText('PT106 이전 계정 질문')
   await expect(app.page.getByRole('link', { name: '이 대화 기록 열기' })).toHaveCount(0)
@@ -104,9 +116,11 @@ test('PT124 stop during conversation creation reuses the row and does not send a
   app.page.on('request', r => { if (r.method() === 'POST' && /\/api\/conversations\/\d+\/messages$/.test(new URL(r.url()).pathname)) posts++ })
   await app.page.route('**/api/conversations', async route => {
     if (route.request().method() !== 'POST') return route.continue()
-    creates++; const response = await route.fetch()
+    if (route.request().headers()['x-pt124-forward']) return route.continue()
+    creates++; const response = await forwarded(app.page, route)
+    expect(response.status).toBe(201)
     entered(); await new Promise(resolve => { release = resolve })
-    await route.fulfill({ response })
+    await route.fulfill({ status: response.status, contentType: 'application/json', body: response.body })
   })
   await ask(app.page, 'PT106 생성 중지 질문'); await waiting
   await app.page.getByRole('button', { name: '대화 준비 중지' }).click()

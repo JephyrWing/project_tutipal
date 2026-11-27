@@ -113,6 +113,13 @@ test('PT113 추천이 없거나 개인 학습 채팅이면 도움 요청 버튼�
   const solo = await apps.launch(); await login(solo, 3)
   await solo.page.goto(new URL('/chat', solo.page.url()).href)
   await mockTutor(solo)
+  // Personal entry now uses the stored-conversation transport; the session
+  // recommendation cases above keep the original Tutor SSE mock unchanged.
+  await solo.page.route('**/api/conversations/*/messages', route => route.fulfill({
+    contentType: 'text/event-stream',
+    body: sse([['delta', { t: '힌트 3단계입니다.' }], ['agent', agentEvent()],
+      ['saved', { userMessageId: 'synthetic-user', assistantMessageId: 'synthetic-assistant' }], ['done', {}]]),
+  }))
   await ask(solo, '에러가 나요')
   await expect(solo.page.getByRole('button', { name: '✋ 선생님께 도움 요청', exact: true })).toHaveCount(0)
 })
