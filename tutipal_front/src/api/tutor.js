@@ -1,4 +1,5 @@
 import { csrfHeader, toApiError } from './client.js'
+import { boundedScreenSummary } from '../utils/screenSummary.js'
 
 /**
  * 도우미 챗봇에 묻고 답변을 조각 단위로 받는다 (TutorController 의 SSE).
@@ -14,11 +15,16 @@ export async function streamChat(
   sessionId,
   onSources,
   onAgent,
+  options = {},
 ) {
+  signal?.throwIfAborted()
+  const headers = await csrfHeader(signal)
+  signal?.throwIfAborted()
+  const screenSummary = boundedScreenSummary(options.screenSummary)
   const res = await fetch('/api/tutor/chat', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...await csrfHeader() },
-    body: JSON.stringify({ topic, messages, sessionId }),
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', ...headers },
+    body: JSON.stringify({ topic, messages, sessionId, ...(screenSummary ? { screenSummary } : {}) }),
     signal,
   })
   if (!res.ok || !res.body) throw await toApiError(res)
@@ -27,6 +33,7 @@ export async function streamChat(
   let buffer = ''
   for (;;) {
     const { value, done } = await reader.read()
+    signal?.throwIfAborted()
     // done/error 이벤트 없이 끝났다면 중간에 끊긴 것 (서버 재시작 · 프록시 타임아웃 등)
     if (done) throw new Error('연결이 끊겨 답변이 중간에 멈췄어요')
     buffer += value.replace(/\r\n/g, '\n')
@@ -35,6 +42,7 @@ export async function streamChat(
       const raw = buffer.slice(0, end)
       buffer = buffer.slice(end + 2)
       const event = parseEvent(raw)
+      signal?.throwIfAborted()
       if (event.name === 'delta') onDelta((JSON.parse(event.data)).t)
       else if (event.name === 'sources') onSources?.((JSON.parse(event.data)).items)
       else if (event.name === 'agent') onAgent?.(JSON.parse(event.data))

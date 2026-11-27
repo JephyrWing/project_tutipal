@@ -217,3 +217,26 @@ test('late rejected model cannot replace the new answer with an error', async ()
   reject(Error('late failure')); await first
   assert.deepEqual(seen.answers,['new']); assert.deepEqual(seen.errors,[])
 })
+
+test('chat context contains only the latest automatic summary, never question answers',async()=>{
+ const {engine}=setup({describe:async(_,q)=>q?'QUESTION ANSWER':'SCREEN SUMMARY'})
+ assert.equal(await engine.summaryForChat(),undefined)
+ await engine.look();assert.equal(await engine.summaryForChat(),'SCREEN SUMMARY')
+ await engine.look('q');assert.equal(await engine.summaryForChat(),'SCREEN SUMMARY')
+ engine.setRunning(false);assert.equal(await engine.summaryForChat(),undefined)
+ engine.setRunning(true);assert.equal(await engine.summaryForChat(),undefined)
+})
+test('a changed frame whose analysis fails cannot reuse its previous summary',async()=>{
+ let count=0
+ const {engine}=setup({capture:async()=>({status:'ok',changed:true,image:'synthetic'}),describe:async()=>{if(++count>1)throw Error('failed');return'old'}})
+ await engine.look();assert.equal(await engine.summaryForChat(),'old')
+ await engine.look();assert.equal(await engine.summaryForChat(),undefined)
+})
+test('summary lookup cannot carry a late snapshot across reset or closure',async()=>{
+ let status='ok'
+ const {engine,seen}=setup({checkTarget:async()=>({status})})
+ await engine.look();const lookup=engine.summaryForChat();engine.reset()
+ assert.equal(await lookup,undefined)
+ await engine.look();status='gone';assert.equal(await engine.summaryForChat(),undefined)
+ assert.deepEqual(seen.gone,[true])
+})
