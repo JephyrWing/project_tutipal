@@ -25,6 +25,35 @@ NFR-SEC-06 / AC-APP-001-2 / CHK-INSTALLER-SECURITY의 실행 중 경계를
 외부 PC·실 OAuth/WSS, 서명·업데이트·다른 OS는 별도 인수 항목이다.
 산출물 fuse/ASAR/helper 확인은 기존 `npm run verify:win`의 별도 검사다.
 
+## 집중도 Main·Preload 통합 검사 (PT-30 / PT-90)
+
+`npm run test:desktop-lifecycle -- focus.spec.js`로 집중도 셸만 실행한다.
+기존 Windows desktop-lifecycle CI는 새 spec도 자동 수집하고 같은 JUnit 보고서에
+실제 실행·실패·건너뜀을 기록한다. 위 표의 "이 E2E에는 아직 없음"은 기존
+`tests/e2e/desktop-security.spec.js`만 뜻하며, 이 절의 별도 검사가 이를 보완한다.
+
+`tests/desktop/focus-entry.cjs`는 제품 Main·Preload·수집기·HTTP 전송기를 그대로
+실행한다. 개인 PC 정보가 수집되지 않도록 시험 프로세스에서만 helper/유휴값과
+수집기의 시계·분 타이머를 제어한다. 실제 IPC 핸들러와 전송기를 대체하지 않는다.
+임시 독립 프로필, 동적 loopback HTTP 제공자, 합성 HttpOnly 쿠키/CSRF를 사용하며
+설치 앱·OS 프로토콜 등록·실 DB·운영 서버에는 접근하지 않는다.
+
+| 사례 | 확인 범위 |
+| --- | --- |
+| 시작 전·잘못된 id | 실제 sandbox renderer의 Node 미노출, 집중도 API 4개만 공개, 잘못된 id에 helper/유휴 조회/타이머/전송 0 |
+| 비신뢰 페이지 | 같은 제품 preload를 가진 data: 페이지의 시작/중지 요청이 기존 수집을 변경하지 못함. 상태 조회/중지 반환은 null. 시작 거절 시 현재 상태를 반환하는 기존 계약은 유지 |
+| 정상 전송·중지·재시작 | 실제 Electron session fetch가 요약 행만 CSRF/Origin/합성 쿠키와 전송. renderer document.cookie에는 세션 쿠키 미노출. 중지 이벤트와 타이머/helper 종료, 새 수업에 이전 버퍼 미전송 |
+| 대기 응답 | 요청 중지 시 AbortSignal 발생, 늦은 합성 응답 뒤에도 off 유지 |
+| 서버 거절 4종 | 실제 HTTP 401/403/404/410에서 중지. 403은 실제 전송기의 CSRF 갱신 후 1회 재시도 포함 |
+| 쿠키 제거 | 실제 Electron cookies.remove 이벤트로 수집 중지, 자동 재시작 없음 |
+| owner 이동·파괴·크래시 | 실제 widget 탐색/destroy/forcefullyCrashRenderer 각각 중지. 다른 창의 같은 수업 시작이 owner를 바꾸지 않음 |
+
+helper의 실제 Windows 프로세스 실행·정확한 분 간격·장치 절전/화면 잠금 자체,
+Spring의 동의/수업 권한 판정·실모델, 설치본/Windows11 인수는 이 검사의 범위 밖이다.
+쿠키 제거는 로그아웃 이후의 Main 경계 검사이며 실제 Spring 로그아웃 성공 검사가 아니다.
+UI의 동의 문구·버튼 흐름은 별도 화면 검사로 확인한다. 같은 검사를 단위 검사나
+실제 서비스 검사 수에 중복 합산하지 않는다.
+
 ## Windows 패키지 ASAR 변조 거절
 
 Windows에서 `npm run dist:win` 다음 `npm run test:win-integrity`를 실행한다.
