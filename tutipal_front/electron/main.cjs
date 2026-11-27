@@ -3,7 +3,7 @@ const {
   app, BrowserWindow, ipcMain, Menu, nativeImage, powerMonitor, screen, session, shell, Tray,
 } = require('electron')
 const { finishBrowserLogin, startBrowserLogin } = require('./applogin.cjs')
-const { capture, listSources, loadSettings, saveSettings, targetStatus } = require('./screen.cjs')
+const { capture, listSources, loadSettings, saveSettings, targetStatus, previewSource, cancelPreview, cancelAnalysisCapture } = require('./screen.cjs')
 const { chooseShareSource, forwardDraw, installDisplayMediaHandler, showOverlay,
   helpShareSources, prepareHelpShare, setHelpShareVideoSize } = require('./share.cjs')
 const { startBridge } = require('./bridge.cjs')
@@ -288,6 +288,14 @@ if (!app.requestSingleInstanceLock()) {
       widgetWindow?.webContents.send('screen-settings-changed')
       return saved
     })
+    ipcMain.handle('screen-preview', async (event, sourceId) => {
+      if (!fromOurPage(event) || typeof sourceId !== 'string') throw new Error('허용되지 않은 요청이에요.')
+      const pending = previewSource(sourceId)
+      for (const win of BrowserWindow.getAllWindows()) win.webContents.send('screen-settings-changed')
+      return await pending
+    })
+    ipcMain.handle('screen-capture-cancel', event => { if (fromOurPage(event)) cancelAnalysisCapture() })
+    ipcMain.handle('screen-preview-cancel', event => { if (fromOurPage(event)) cancelPreview() })
     ipcMain.handle('screen-capture', (event) => (fromOurPage(event) ? capture() : { status: 'off' }))
     ipcMain.handle('screen-target-status', (event, sourceId) => (fromOurPage(event) ? targetStatus(typeof sourceId === 'string' ? sourceId : undefined) : { status: 'off' }))
     // Only trusted pages can suspend collection around record deletion.

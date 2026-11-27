@@ -49,7 +49,7 @@ export default function WidgetPage() {
     capture: () => desktop.captureScreen(),
     describe: async (image, _question, signal) => screenSummaryText(await screenApi.describe(image, undefined, signal)),
     checkTarget: (sourceId) => desktop.getScreenTargetStatus(sourceId),
-    onInvalidate: () => { chat.current?.reset(); setFailedQuestion(null); lastQuestion.current = ''; setText(''); setSuggestion(null); setAsking(false); setQuestion(''); setMood('happy') },
+    onInvalidate: () => { void desktop?.cancelScreenCapture?.(); chat.current?.reset(); setFailedQuestion(null); lastQuestion.current = ''; setText(''); setSuggestion(null); setAsking(false); setQuestion(''); setMood('happy') },
     observe: (summary, seconds) => reviewApi.observe(summary, seconds),
     onAnswer: (answer) => { if (!chat.current?.busy()) { setText(answer); setMood('happy') } },
     onSuggestion: setSuggestion,
@@ -125,7 +125,12 @@ export default function WidgetPage() {
       load()
     })
     const reviewUnsubscribe = desktop.onReviewDeletionChanged(value => analysis.current.deletion(value))
-    const contextUnsubscribe = desktop.onWidgetChatContextChanged(() => analysis.current.reset())
+    const contextUnsubscribe = desktop.onWidgetChatContextChanged(() => {
+      analysis.current.reset()
+      // Main navigation after consent can cancel the first capture. Refresh the
+      // new context immediately rather than leaving it idle until the next tick.
+      void analysis.current.look()
+    })
     return () => {
       active = false
       analysis.current.setRunning(false)
