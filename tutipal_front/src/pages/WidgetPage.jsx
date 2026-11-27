@@ -10,6 +10,7 @@ import { screenSummaryText } from '../utils/screenSummary'
 import { useRetryLock } from '../utils/useRetryLock'
 import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
+import ScreenAnalysisDialog from '../components/ScreenAnalysisDialog'
 
 /** 화면이 그대로면 서버를 부르지 않으므로, 40초마다 한 장 찍어 비교만 한다 */
 const SUMMARY_EVERY_MS = 40_000
@@ -27,6 +28,8 @@ export default function WidgetPage() {
   const [asking, setAsking] = useState(false)
   const [question, setQuestion] = useState('')
   const [text, setText] = useState('')
+  const [analysisSummary, setAnalysisSummary] = useState(null)
+  const [detailOpen, setDetailOpen] = useState(false)
   const [mood, setMood] = useState('happy')
   /** 선택한 창이 닫히면 다시 선택해야 한다. */
   const [gone, setGone] = useState(false)
@@ -49,6 +52,10 @@ export default function WidgetPage() {
     capture: () => desktop.captureScreen(),
     describe: async (image, _question, signal) => screenSummaryText(await screenApi.describe(image, undefined, signal)),
     checkTarget: (sourceId) => desktop.getScreenTargetStatus(sourceId),
+    onResult: result => {
+      setAnalysisSummary(result)
+      if (!result) { setDetailOpen(false); setQuestion(''); setFailedQuestion(null); lastQuestion.current = '' }
+    },
     onInvalidate: () => { void desktop?.cancelScreenCapture?.(); chat.current?.reset(); setFailedQuestion(null); lastQuestion.current = ''; setText(''); setSuggestion(null); setAsking(false); setQuestion(''); setMood('happy') },
     observe: (summary, seconds) => reviewApi.observe(summary, seconds),
     onAnswer: (answer) => { if (!chat.current?.busy()) { setText(answer); setMood('happy') } },
@@ -177,6 +184,31 @@ export default function WidgetPage() {
     setPaused((active) => !active)
   }
 
+  async function openDetail() {
+    // Validate the target again; a closed/replaced window must not reopen old text.
+    try {
+      const current = await analysis.current.summaryForChat()
+      if (current?.trim()) { setAsking(false); setDetailOpen(true) }
+    } catch { setDetailOpen(false) }
+  }
+
+  const questionForm = (
+    <form className="widget-ask" onSubmit={(e) => void onAsk(e)}>
+      <input value={question} onChange={(e) => setQuestion(e.target.value)} maxLength={500}
+        placeholder="지금 화면에 대해 물어보세요" autoFocus={!detailOpen} aria-label="화면 질문" />
+      <button className="btn btn-primary btn-sm" disabled={!question.trim() || chatting || !!questionLock}>보내기</button>
+      {!detailOpen && <button type="button" className="btn btn-sm" onClick={() => setAsking(false)} aria-label="취소">✕</button>}
+    </form>
+  )
+  const chatActions = <>
+    {chatting && <button className="btn btn-sm" onClick={() => {
+      const value = lastQuestion.current
+      chat.current.reset(); setFailedQuestion(value); setText('답변을 중지했어요.'); setMood('curious')
+    }}>답변 중지</button>}
+    {!chatting && failedQuestion && <button className="btn btn-sm" disabled={!!questionLock}
+      onClick={() => { if (!questionLock) void chat.current.ask(failedQuestion) }}>질문 다시 시도</button>}
+  </>
+
   const off = !settings?.enabled
   const message = off
     ? '화면 분석을 켜면 보고 있는 창을 요약해 드려요. 궁금한 건 질문하기!'
@@ -196,21 +228,12 @@ export default function WidgetPage() {
             </div>
           </div>
         ) : asking ? (
-          <form className="widget-ask" onSubmit={(e) => void onAsk(e)}>
-            <input value={question} onChange={(e) => setQuestion(e.target.value)} maxLength={500}
-              placeholder="지금 화면에 대해 물어보세요" autoFocus aria-label="화면 질문" />
-            <button className="btn btn-primary btn-sm" disabled={!question.trim() || chatting || !!questionLock}>보내기</button>
-            <button type="button" className="btn btn-sm" onClick={() => setAsking(false)} aria-label="취소">✕</button>
-          </form>
+          questionForm
         ) : (
           <p className="widget-text" aria-live="polite">{message}</p>
         )}
-        {chatting && <button className="btn btn-sm" onClick={() => {
-          const value = lastQuestion.current
-          chat.current.reset(); setFailedQuestion(value); setText('답변을 중지했어요.'); setMood('curious')
-        }}>답변 중지</button>}
-        {!chatting && failedQuestion && <button className="btn btn-sm" disabled={!!questionLock}
-          onClick={() => { if (!questionLock) void chat.current.ask(failedQuestion) }}>질문 다시 시도</button>}
+        {!detailOpen && chatActions}
+        {watching && analysisSummary && <button className="btn btn-sm" onClick={() => void openDetail()}>자세히 보기</button>}
         <div className="widget-row">
           <span className="widget-status">
             <span className={off || paused || gone ? 'dot off' : 'dot'} /> {off ? '꺼짐' : gone ? '창 종료' : paused ? '일시정지' : 'AI 보는 중'}
@@ -230,6 +253,12 @@ export default function WidgetPage() {
       <div className="widget-mascot" title="끌어서 옮기기">
         <Mascot mood={off || paused || gone ? 'sleep' : mood} size={110} float={!paused && !off && !gone} />
       </div>
+      <ScreenAnalysisDialog open={detailOpen} summary={analysisSummary} onClose={() => setDetailOpen(false)}>
+        <h3>화면에 대해 질문하기</h3>
+        {questionForm}
+        {lastQuestion.current && <p className="screen-analysis-answer" aria-live="polite">{text}</p>}
+        {chatActions}
+      </ScreenAnalysisDialog>
     </div>
   )
 }
