@@ -20,6 +20,11 @@ profile 삭제는 실제 tmp 바로 아래의 tutipal-e2e-profile- 접두사 경
 단위 실패주입 검사는 `node --test tests/electronCleanup.test.mjs`로 실행한다. PR84 초기의 별도 정리 모듈은
 공통 구현과 중복되어 통합 시 제거했다. 초기 실행 증거는 해당 source SHA의 기록으로 보존한다.
 
+일반 UI의 `tests/e2e/fixtures.js`도 같은 공통 정리 helper와 실제 JSON 파일 첨부를 사용한다.
+53ce8a9의 join-rate-limit 사례에서 기존 apps fixture의 무제한 종료 대기가60초를 넘긴 실행은
+원래 실패로 보존한다. 실패 화면 수집도5초 한도를 두며, 일반 UI의 정리 오류 역시 전체검사를 실패시킨다.
+본문의60초 제한과 기능 assertion은 유지한다. 가상시계가 내부 정지를 일으켰다는 결론은 내리지 않는다.
+
 ## PT-114 종료 회귀 보완
 
 PT-30 병합 07c483a의 CI45551908245에서 기존 Disconnected 조건이20초 안에 충족되지 않았다.

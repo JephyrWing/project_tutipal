@@ -8,6 +8,9 @@ import path from 'node:path'
 import { cleanupElectronItems, releaseFixtureMedia } from './helpers/electronCleanup.mjs'
 
 const pending = () => new Promise(() => {})
+// These accelerated unit deadlines also cover real temporary-directory IO.
+// Keep them independent of the production fixture's unchanged 5000ms deadline.
+const unitTimeoutMs = 200
 async function item(overrides = {}) {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'tutipal-e2e-profile-'))
   const child = new EventEmitter()
@@ -36,8 +39,8 @@ test('connected media disconnects after local tracks and videos are released', a
 })
 test('hung renderer cleanup fails explicitly but both Electron instances and profiles are still cleaned', async () => {
   const a = await item(), b = await item(); a.page.evaluate = pending
-  await assert.rejects(cleanupElectronItems([a, b], { timeoutMs: 20 }), error => {
-    assert.equal(error.results.filter(r => r.outcome === 'failed').length, 1)
+  await assert.rejects(cleanupElectronItems([a, b], { timeoutMs: unitTimeoutMs }), error => {
+    assert.equal(error.results.filter(r => r.outcome === 'failed').length, 1, JSON.stringify(error.results))
     assert.equal(error.results.find(r => r.outcome === 'failed').stage, 'renderer-media')
     assert.equal(error.results.filter(r => r.stage === 'profile-remove' && r.outcome === 'passed').length, 2)
     return true
@@ -46,7 +49,7 @@ test('hung renderer cleanup fails explicitly but both Electron instances and pro
 })
 test('hung app close stops only its owned child, removes its exited profile, and retains the failure', async () => {
   const a = await item(); a.application.close = pending
-  await assert.rejects(cleanupElectronItems([a], { timeoutMs: 20 }), error => {
+  await assert.rejects(cleanupElectronItems([a], { timeoutMs: unitTimeoutMs }), error => {
     assert.equal(error.results.find(r => r.stage === 'electron-close').outcome, 'failed')
     assert.equal(error.results.find(r => r.stage === 'owned-process-exit').outcome, 'passed')
     return true
@@ -55,7 +58,7 @@ test('hung app close stops only its owned child, removes its exited profile, and
 })
 test('a resolved close with a still-live process is detected before removing the profile', async () => {
   const a = await item(); a.application.close = async () => {}
-  await assert.rejects(cleanupElectronItems([a], { timeoutMs: 20 }), error => {
+  await assert.rejects(cleanupElectronItems([a], { timeoutMs: unitTimeoutMs }), error => {
     assert.equal(error.results.find(r => r.stage === 'electron-exit').outcome, 'failed')
     assert.equal(error.results.find(r => r.stage === 'owned-process-exit').outcome, 'passed')
     return true
@@ -73,7 +76,7 @@ test('a child ignoring SIGTERM is killed by its owned handle, with both timeout 
   const a = await item(); a.application.close = pending
   const child = a.application.process(), signals = []
   child.kill = signal => { signals.push(signal ?? 'SIGTERM'); if (signal === 'SIGKILL') { child.signalCode = signal; child.emit('exit', null, signal) } return true }
-  await assert.rejects(cleanupElectronItems([a], { timeoutMs: 20 }), error => {
+  await assert.rejects(cleanupElectronItems([a], { timeoutMs: unitTimeoutMs }), error => {
     assert.equal(error.results.filter(r => r.outcome === 'failed').length, 2)
     assert.equal(error.results.find(r => r.stage === 'owned-process-kill').outcome, 'passed'); return true
   })
@@ -95,7 +98,7 @@ test('a permanently live child retains its profile and releases every exit liste
   const a = await item(); a.application.close = pending
   const child = a.application.process(); child.kill = () => true
   try {
-    await assert.rejects(cleanupElectronItems([a], { timeoutMs: 20 }), error => {
+    await assert.rejects(cleanupElectronItems([a], { timeoutMs: unitTimeoutMs }), error => {
       assert.deepEqual(error.results.filter(r => r.outcome === 'failed').map(r => r.stage),
         ['electron-close', 'owned-process-exit', 'owned-process-kill'])
       assert.ok(error.results.every(r => r.startedAt && r.finishedAt))

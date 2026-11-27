@@ -1,10 +1,11 @@
 import { test as base, expect } from '@playwright/test'
 import { _electron } from 'playwright'
 import electronPath from 'electron'
-import { mkdtemp, realpath, rm } from 'node:fs/promises'
+import { mkdtemp, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { cleanupElectronItems, withDeadline } from '../helpers/electronCleanup.mjs'
 
 const front = fileURLToPath(new URL('../../', import.meta.url))
 export { expect }
@@ -36,15 +37,22 @@ export const test = base.extend({
     try {
       await use({ launch })
     } finally {
-      for (const item of opened.reverse()) {
+      for (const item of opened) {
         if (testInfo.status !== testInfo.expectedStatus && item.page && !item.page.isClosed()) {
-          await item.page.screenshot({ path: testInfo.outputPath(`failure-${opened.indexOf(item)}.png`) }).catch(() => undefined)
+          await withDeadline(() => item.page.screenshot({ path: testInfo.outputPath(`failure-${opened.indexOf(item)}.png`), timeout: 5000 }),
+            5000, 'failure-screenshot').catch(() => console.log('Fixture failure screenshot unavailable'))
         }
-        await item.application.close().catch(() => undefined)
-        const resolved = await realpath(item.profile)
-        if (path.dirname(resolved) === await realpath(os.tmpdir()) && path.basename(resolved).startsWith('tutipal-e2e-profile-')) {
-          await rm(resolved, { recursive: true, force: true })
-        }
+      }
+      const observations = []
+      try {
+        await cleanupElectronItems(opened.reverse(), { onStage: result => {
+          observations.push(result)
+          console.log('Electron cleanup ' + JSON.stringify(result))
+        } })
+      } finally {
+        const evidence = testInfo.outputPath('fixture-cleanup.json')
+        await writeFile(evidence, JSON.stringify(observations))
+        await testInfo.attach('fixture-cleanup.json', { path: evidence, contentType: 'application/json' })
       }
     }
   },
