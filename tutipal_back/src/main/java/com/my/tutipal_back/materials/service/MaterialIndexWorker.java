@@ -129,7 +129,7 @@ class MaterialIndexWorker {
         int updated = jdbc.update("""
                 UPDATE materials
                 SET status = 'DONE', indexed_at = statement_timestamp(), chunk_count = ?, error = NULL,
-                    index_retryable = FALSE, index_retry_count = 0, index_retry_at = NULL,
+                    index_retryable = FALSE, index_retry_count = 0, index_retry_at = NULL, original_missing = FALSE,
                     updated_at = statement_timestamp()
                 WHERE id = ? AND status = 'PROCESSING'
                 """, chunks.size(), id);

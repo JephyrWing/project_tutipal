@@ -50,6 +50,15 @@ tasks.named('test') {
     exclude '**/FocusStorePostgresTest.class'
     exclude '**/ConceptInsightsPostgresTest.class'
     exclude '**/ConversationRetentionPostgresTest.class'
+    exclude '**/MaterialReconciliationPostgresTest.class'
+}
+
+tasks.register('materialDbTest', Test) {
+    description = 'Runs PT-107 object reconciliation against disposable PostgreSQL/pgvector and loopback S3'
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    useJUnitPlatform()
+    include '**/MaterialReconciliationPostgresTest.class'
 }
 
 // PT-53: 실제 DB 검사는 별도 일회용 DB/CI에서 실행한다. env 누락은 skip 대신 실패한다.
