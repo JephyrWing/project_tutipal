@@ -1,5 +1,3 @@
-import { Client } from '@stomp/stompjs'
-import WebSocket from 'ws'
 import { test, expect, login, createRoom, joinRoom } from './fixtures.js'
 
 async function api(app, path, method = 'GET', body) {
@@ -15,41 +13,21 @@ async function api(app, path, method = 'GET', body) {
   }, { path, method, body })
 }
 
-async function subscribeToDraws(app) {
-  const { body: csrf } = await api(app, '/api/auth/csrf')
-  const origin = new URL(app.page.url()).origin
-  const cookies = await app.page.context().cookies(origin)
-  const socketUrl = new URL('/ws', origin)
-  socketUrl.protocol = 'ws:'
+function observeDraws(app) {
   const received = []
-  const client = new Client({
-    connectHeaders: { [csrf.headerName]: csrf.token },
-    reconnectDelay: 0,
-    webSocketFactory: () => new WebSocket(socketUrl, {
-      headers: { Origin: origin, Cookie: cookies.map(cookie => cookie.name + '=' + cookie.value).join('; ') },
-    }),
-  })
-  try {
-    await new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Drawing subscription did not connect')), 5000)
-      const failed = () => {
-        clearTimeout(timeout)
-        reject(new Error('Unable to open the drawing subscription'))
+  app.page.on('websocket', (socket) => {
+    if (new URL(socket.url()).pathname !== '/ws') return
+    socket.on('framereceived', ({ payload }) => {
+      for (const frame of payload.toString().split('\0')) {
+        const boundary = frame.indexOf('\n\n')
+        if (!frame.startsWith('MESSAGE\n') || boundary === -1) continue
+        const headers = frame.slice(0, boundary)
+        if (!/(?:^|\n)destination:[^\n]*\/queue\/draw(?:[-\n]|$)/.test(headers)) continue
+        received.push(JSON.parse(frame.slice(boundary + 2)))
       }
-      client.onStompError = failed
-      client.onWebSocketError = failed
-      client.onConnect = () => {
-        client.subscribe('/user/queue/draw', (frame) => received.push(JSON.parse(frame.body)))
-        clearTimeout(timeout)
-        resolve()
-      }
-      client.activate()
     })
-  } catch (error) {
-    await client.deactivate({ force: true })
-    throw error
-  }
-  return { client, received }
+  })
+  return received
 }
 
 async function acceptHelp(teacher, student, room) {
@@ -78,30 +56,24 @@ test('PT48 validated pen strokes reach only the request owner and stop after end
   const otherHelpId = await acceptHelp(teacher, other, room)
   const draw = (app, id, message) => api(app, '/api/help/' + id + '/draw', 'POST', { message })
   const pen = { k: 'add', id: 'synthetic-stroke', tool: 'pen', c: '#ef4444', p: [[0, 0], [1, 1]] }
-  const channels = []
-  try {
-    const studentChannel = await subscribeToDraws(student)
-    channels.push(studentChannel)
-    const otherChannel = await subscribeToDraws(other)
-    channels.push(otherChannel)
+  const studentDraws = observeDraws(student)
+  const otherDraws = observeDraws(other)
+  await Promise.all([student.page.reload(), other.page.reload()])
 
-    await expect.poll(async () => {
-      expect((await draw(teacher, helpId, pen)).status).toBe(204)
-      expect((await draw(teacher, otherHelpId, { k: 'clear' })).status).toBe(204)
-      return studentChannel.received.length > 0 && otherChannel.received.length > 0
-    }).toBe(true)
-    expect(studentChannel.received.every(frame => frame.helpId === helpId)).toBe(true)
-    expect(otherChannel.received.every(frame => frame.helpId === otherHelpId)).toBe(true)
-    expect(studentChannel.received[0]).toMatchObject({ helpId, sequence: expect.any(Number), message: pen })
+  await expect.poll(async () => {
+    expect((await draw(teacher, helpId, pen)).status).toBe(204)
+    expect((await draw(teacher, otherHelpId, { k: 'clear' })).status).toBe(204)
+    return studentDraws.length > 0 && otherDraws.length > 0
+  }).toBe(true)
+  expect(studentDraws.every(frame => frame.helpId === helpId)).toBe(true)
+  expect(otherDraws.every(frame => frame.helpId === otherHelpId)).toBe(true)
+  expect(studentDraws[0]).toMatchObject({ helpId, sequence: expect.any(Number), message: pen })
 
-    expect((await draw(student, helpId, pen)).status).toBe(403)
-    expect((await draw(teacher, helpId, { ...pen, tool: null })).status).toBe(400)
-    expect((await api(teacher, '/api/help/' + helpId + '/end', 'POST')).status).toBe(204)
-    expect((await draw(teacher, helpId, pen)).status).toBe(409)
+  expect((await draw(student, helpId, pen)).status).toBe(403)
+  expect((await draw(teacher, helpId, { ...pen, tool: null })).status).toBe(400)
+  expect((await api(teacher, '/api/help/' + helpId + '/end', 'POST')).status).toBe(204)
+  expect((await draw(teacher, helpId, pen)).status).toBe(409)
 
-    expect((await api(other, '/api/sessions/' + room.id + '/participants/me', 'DELETE')).status).toBe(204)
-    expect((await draw(teacher, otherHelpId, pen)).status).toBe(409)
-  } finally {
-    await Promise.all(channels.map(({ client }) => client.deactivate({ force: true })))
-  }
+  expect((await api(other, '/api/sessions/' + room.id + '/participants/me', 'DELETE')).status).toBe(204)
+  expect((await draw(teacher, otherHelpId, pen)).status).toBe(409)
 })
