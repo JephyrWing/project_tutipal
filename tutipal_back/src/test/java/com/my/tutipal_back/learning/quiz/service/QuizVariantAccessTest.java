@@ -130,7 +130,7 @@ class QuizVariantAccessTest {
 
     @Test
     void gradingFailedAnswerIsConflict() {
-        QuizAnswer failed = answer(USER, null, "답", false, GradedBy.AI);
+        QuizAnswer failed = answer(USER, null, "답", null, null);
         failed.gradingFailed("AI 채점 실패");
         myAnswer(failed);
 

@@ -171,6 +171,7 @@ public class StudySessionService {
         StudySession session = findSession(sessionId);
         if (!session.isEnded()) {
             session.end(clock.instant());
+            publisher.publishEvent(new SessionEnded(sessionId));
             events.toSession(sessionId, "ended", sessionId);
         }
         return response(session, SessionRole.TEACHER);
