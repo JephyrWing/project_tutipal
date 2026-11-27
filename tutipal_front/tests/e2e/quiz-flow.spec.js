@@ -33,6 +33,10 @@ async function quizRoom(apps, title) {
   return { teacher, student, room }
 }
 
+async function waitForGraceEnd(quiz) {
+  await expect.poll(() => Date.now() > Date.parse(quiz.closesAt) + 3000).toBe(true)
+}
+
 test('PT-68 직접 출제·제출·답안 관리와 수업별 권한', async ({ apps }) => {
   const { teacher, student, room } = await quizRoom(apps, 'PT-68 직접 출제')
   const otherTeacher = await apps.launch()
@@ -210,6 +214,97 @@ test('PT-50 승인 내용과 교사·수업을 검증하고 동시 전송은 한
   expect((await quizRequest(teacher, send, payload)).status).toBe(410)
 })
 
+test('PT-118 단일 출제, 마감 유예, 승인 초안 재전송과 늦은 참여·재연결', async ({ apps }) => {
+  const { teacher, student, room } = await quizRoom(apps, 'PT-118 단일 문항')
+  const late = await apps.launch()
+  await late.page.addInitScript(() => {
+    const send = WebSocket.prototype.send
+    window.quizSessionSockets = []
+    WebSocket.prototype.send = function (frame) {
+      send.call(this, frame)
+      if (typeof frame === 'string' && frame.startsWith('SUBSCRIBE\n')
+          && /\ndestination:\/topic\/sessions\/\d+\/events\n/.test(frame)) {
+        window.quizSessionSockets.push(this)
+      }
+    }
+  })
+  await login(late, 3)
+  await expect(student.page.getByText('실시간', { exact: true })).toBeVisible()
+
+  const path = `/api/sessions/${room.id}/quizzes`
+  const publish = (question, timeLimitSec = 120) => quizRequest(teacher, path, {
+    type: 'TEXT', question, modelAnswer: '예시', timeLimitSec,
+  })
+  const close = (id) => quizRequest(teacher, `/api/quizzes/${id}/close`, undefined, 'POST')
+  const first = await publish('작성 중인 첫 문항')
+  expect(first.status).toBe(201)
+  const studentDialog = student.page.getByRole('dialog', { name: '선생님 질문' })
+  await expect(studentDialog.getByText(first.data.question)).toBeVisible()
+  const answer = studentDialog.getByPlaceholder('답을 적어 주세요')
+  await answer.fill('작성 중인 답안')
+
+  expect((await publish('거절되어야 하는 직접 문항')).status).toBe(423)
+  await teacher.page.getByRole('button', { name: 'AI 문제 생성', exact: true }).click()
+  const form = teacher.page.getByRole('dialog', { name: 'AI 문제 생성' })
+  await form.getByRole('tab', { name: '주관식' }).click()
+  await form.getByRole('textbox', { name: 'AI 문제 힌트' }).fill('PT50DRAFT')
+  await form.getByRole('button', { name: /AI로 문제 만들기/ }).click()
+  await expect(form.getByRole('textbox', { name: '질문', exact: true })).toHaveValue('2의 제곱을 쓰세요.')
+  await form.getByRole('button', { name: '초안 승인' }).click()
+  const send = form.getByRole('button', { name: '전체 학생에게 보내기' })
+  await expect(send).toBeEnabled()
+  await send.click()
+  await expect(form.getByText(/이전 문항 마감 후 3초/)).toBeVisible()
+  await expect(send).toBeEnabled()
+  await expect(studentDialog.getByText(first.data.question)).toBeVisible()
+  await expect(answer).toHaveValue('작성 중인 답안')
+  expect((await quizRequest(teacher, path)).data.map(({ id }) => id)).toEqual([first.data.id])
+
+  const closed = await Promise.all([close(first.data.id), close(first.data.id)])
+  expect(closed.map(({ status }) => status)).toEqual([200, 200])
+  expect(closed[1].data.closesAt).toBe(closed[0].data.closesAt)
+  expect((await publish('교사 마감 유예 중')).status).toBe(423)
+  await waitForGraceEnd(closed[0].data)
+
+  const race = await Promise.all([publish('동시 요청 1', 10), publish('동시 요청 2', 10)])
+  expect(race.map(({ status }) => status).sort()).toEqual([201, 423])
+  const winner = race.find(({ status }) => status === 201).data
+  const winnerPath = `/api/quizzes/${winner.id}`
+  await expect.poll(async () => (await quizRequest(student, winnerPath)).data.open,
+    { timeout: 15_000, intervals: [100] }).toBe(false)
+  expect((await publish('자연 마감 유예 중')).status).toBe(423)
+  await waitForGraceEnd(winner)
+
+  await send.click()
+  await expect(form).toBeHidden()
+  const { data: [active] } = await quizRequest(student, `${path}/open`)
+  expect(active.question).toBe('2의 제곱을 쓰세요.')
+  expect((await quizRequest(teacher, path)).data.map(({ id }) => id)).toEqual([first.data.id, winner.id, active.id])
+
+  await joinRoom(late, room.code)
+  const lateDialog = late.page.getByRole('dialog', { name: '선생님 질문' })
+  await expect(lateDialog.getByText(active.question, { exact: true })).toBeVisible()
+  await expect.poll(() => late.page.evaluate(() => window.quizSessionSockets.length)).toBe(1)
+  const generated = await quizRequest(teacher, `${path}/generate`, { type: 'CHOICE', hint: 'PT50CHOICE' })
+  expect(generated.status).toBe(200)
+  const { draftId, ...content } = generated.data
+  const draftPath = `${path}/drafts/${draftId}`
+  expect((await quizRequest(teacher, `${draftPath}/approve`, content)).status).toBe(204)
+
+  const finished = await close(active.id)
+  expect(finished.status).toBe(200)
+  await waitForGraceEnd(finished.data)
+  await late.page.evaluate(() => window.quizSessionSockets[0].close())
+  const mixedRace = await Promise.all([
+    publish('연결이 끊긴 사이 출제된 문항'),
+    quizRequest(teacher, `${draftPath}/send`, content),
+  ])
+  expect(mixedRace.map(({ status }) => status).sort()).toEqual([201, 423])
+  const missed = mixedRace.find(({ status }) => status === 201).data
+  await expect.poll(() => late.page.evaluate(() => window.quizSessionSockets.length)).toBe(2)
+  await expect(lateDialog.getByText(missed.question, { exact: true })).toBeVisible()
+})
+
 async function gradingControl(marker, release = false) {
   const response = await fetch('http://127.0.0.1:28081/_test/quiz-grading', {
     method: 'POST',
@@ -306,6 +401,11 @@ test('PT-50 AI·교사 판정 순서와 동시 저장, 학생 공개 및 재시�
     await expect(dialog.getByText(feedback)).toHaveCount(0)
     await dialog.getByRole('button', { name: '닫기', exact: true }).click()
     checked.push({ quizId: created.data.id, answers, grade, expected, question })
+    if (order !== 'HELD_OVERLAP') {
+      const closed = await quizRequest(teacher, `${quiz}/close`, undefined, 'POST')
+      expect(closed.status).toBe(200)
+      await waitForGraceEnd(closed.data)
+    }
   }
 
   const review = teacher.page.getByRole('dialog', { name: '학생별 답안 관리' })
