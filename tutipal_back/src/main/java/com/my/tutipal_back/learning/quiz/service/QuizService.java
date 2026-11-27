@@ -178,7 +178,7 @@ public class QuizService {
     @Transactional
     public QuizSummary close(Long userId, Long quizId) {
         Quiz quiz = findQuiz(quizId);
-        sessions.requireTeacherOf(userId, quiz.getSessionId());
+        sessions.requireActiveTeacherForQuizWrite(userId, quiz.getSessionId());
         quiz.close(clock.instant());
         events.toSession(quiz.getSessionId(), "quizClosed", quizId);
         return summaries(quiz.getSessionId()).stream().filter(s -> s.id().equals(quizId)).findFirst().orElseThrow();
@@ -202,7 +202,7 @@ public class QuizService {
         QuizAnswer answer = answers.findById(answerId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "응답을 찾을 수 없어요"));
         Quiz quiz = findQuiz(answer.getQuizId());
-        sessions.requireTeacherOf(userId, quiz.getSessionId());
+        sessions.requireActiveTeacherForQuizWrite(userId, quiz.getSessionId());
         // AI 피드백은 판정이 그대로일 때만 남김 (정답으로 바꿨는데 "다시 생각해 보세요" 가 남으면 헷갈림).
         // 채점 전(AI 실패 안내문)이었으면 지움.
         String feedback = !answer.isPending() && Boolean.valueOf(correct).equals(answer.getCorrect())
