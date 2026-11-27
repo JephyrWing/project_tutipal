@@ -8,6 +8,7 @@ const agentEvent = (extra = {}) => ({
   route: 'code_debug', suggestHelp: true, variant: null, answerHidden: true, retryable: false, helpDraft: DRAFT, ...extra,
 })
 const reply = event => sse([
+  ['sources', { items: ['PT124 수업 자료.pdf p.1'] }],
   ['delta', { t: '힌트 3단계입니다.' }],
   ...(event.suggestHelp ? [['delta', { t: HELP_SUGGESTION }]] : []),
   ['agent', event],
@@ -15,7 +16,10 @@ const reply = event => sse([
 ])
 
 async function mockTutor(app, event = agentEvent()) {
-  await app.page.route('**/api/tutor/chat', route => route.fulfill({ contentType: 'text/event-stream', body: reply(event) }))
+  await app.page.route('**/api/conversations/*/messages', route => {
+    if (route.request().method() !== 'POST') return route.continue()
+    return route.fulfill({ contentType: 'text/event-stream', body: reply(event).replace('event: done', 'event: saved\ndata: {"userMessageId":"mock-q","assistantMessageId":"mock-a"}\n\nevent: done') })
+  })
 }
 
 /** 이 페이지에서 나가는 도움 요청 생성(POST /api/sessions/{id}/help) 본문을 모은다. */
@@ -53,6 +57,7 @@ test('PT113 추천 답변에서 초안을 채우고 학생이 고친 문구만 �
   const posts = helpPosts(student.page)
 
   await ask(student, 'range 에러가 계속 나요')
+  await expect(student.page.locator('.sources')).toContainText('PT124 수업 자료.pdf p.1')
   const helpButton = student.page.getByRole('button', { name: '✋ 선생님께 도움 요청', exact: true })
   await helpButton.click()
   const dialog = student.page.getByRole('dialog', { name: '선생님에게 도움 요청' })
@@ -113,8 +118,7 @@ test('PT113 추천이 없거나 개인 학습 채팅이면 도움 요청 버튼�
   const solo = await apps.launch(); await login(solo, 3)
   await solo.page.goto(new URL('/chat', solo.page.url()).href)
   await mockTutor(solo)
-  // Personal entry now uses the stored-conversation transport; the session
-  // recommendation cases above keep the original Tutor SSE mock unchanged.
+  // Personal entry also uses stored transport, but must never expose the help action.
   await solo.page.route('**/api/conversations/*/messages', route => route.fulfill({
     contentType: 'text/event-stream',
     body: sse([['delta', { t: '힌트 3단계입니다.' }], ['agent', agentEvent()],
