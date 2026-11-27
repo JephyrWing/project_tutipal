@@ -192,7 +192,7 @@ for (const boundary of ['leave', 'remove', 'end']) {
     await student.page.getByPlaceholder(/이어서 질문하세요/).fill('PT106 denied from record')
     await student.page.getByRole('button', { name: '보내기', exact: true }).click()
     if (boundary === 'end') await expect(student.page.getByRole('alert')).toBeVisible()
-    else await expect(student.page.getByText(/대화를 찾을 수 없어요/)).toBeVisible()
+    else await expect(student.page.getByText(/없는 대화예요/)).toBeVisible()
     expect(await rows(student.page, id)).toEqual(before)
   })
 }
