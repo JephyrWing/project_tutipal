@@ -19,10 +19,11 @@ async function idOf(page) {
 // real page, skipping just this interceptor, so Main supplies its normal header.
 async function forwarded(page, route) {
   const request = route.request()
-  return page.evaluate(async ({ url, body, headers }) => {
-    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers, 'X-PT124-Forward': '1' }, body })
+  return page.evaluate(async ({ url, body }) => {
+    const csrf = await (await fetch('/api/auth/csrf')).json()
+    const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json', [csrf.headerName]: csrf.token, 'X-PT124-Forward': '1' }, body })
     return { status: response.status, body: await response.text() }
-  }, { url: request.url(), body: request.postData(), headers: await request.allHeaders().then(h => Object.fromEntries(Object.entries(h).filter(([k]) => k.toLowerCase().includes('csrf')))) })
+  }, { url: request.url(), body: request.postData() })
 }
 
 test('PT124 personal entry persists once and continues the same conversation in records', async ({ apps }) => {
