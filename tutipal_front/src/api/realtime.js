@@ -1,6 +1,7 @@
 import { Client } from '@stomp/stompjs'
 import { useEffect, useRef, useState } from 'react'
 import { csrfHeader } from './client'
+import { createDrawReceiver } from '../draw'
 
 /**
  * 세션 실시간 알림 (STOMP over WebSocket, 로그인 세션 쿠키로 인증).
@@ -55,13 +56,19 @@ export function useHelpDrawing(helpId, onDrawing) {
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
     const client = new Client({ brokerURL: `${scheme}://${location.host}/ws`, reconnectDelay: 3000 })
     client.beforeConnect = async () => { client.connectHeaders = await csrfHeader() }
-    client.onConnect = () => client.subscribe('/user/queue/draw', (event) => {
-      try {
-        const body = JSON.parse(event.body)
-        if (body.helpId === helpId) handler.current(body.message)
-      } catch { /* 잘못된 이벤트는 그리지 않는다. */ }
-    })
+    const receiver = createDrawReceiver(helpId, (message) => handler.current(message))
+    let active = true
+    client.onConnect = () => {
+      if (!active) return
+      const receive = receiver.connect()
+      client.subscribe('/user/queue/draw', (event) => receive(event.body))
+    }
+    client.onWebSocketClose = () => { if (active) receiver.disconnect() }
     client.activate()
-    return () => { void client.deactivate() }
+    return () => {
+      active = false
+      receiver.disconnect()
+      void client.deactivate()
+    }
   }, [helpId])
 }

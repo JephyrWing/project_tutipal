@@ -4,18 +4,21 @@
 
 e44e1f8의 CI45920212469에서 본문 뒤 afterEach와 worker 정리가 각각90초 timeout했다.
 당시 로그에는 세부 정리 단계가 없으므로 SDK disconnect와 Electron 종료 중 어느 단계가 멈췄는지는 미확정이다.
-`tests/livekit/cleanup.js`는 앱별 renderer-disconnect/application-close/owned-process-exit/profile-remove를
-각각5초 안에 확인하고 시작·종료 UTC 시각과 passed/failed/timeout만 기록한다.
-앱 두 개는 함께 정리하며 한 단계의 오류가 다른 앱의 정리를 막지 않는다.
+PT45에서 통합된 공통 `tests/helpers/electronCleanup.mjs`를 사용한다. renderer-media/renderer-reset/
+electron-close/필요한 owned-process-exit·kill/profile-remove를 각각5초 안에 확인한다.
+이미 disconnected인 SDK의 락을 다시 획득하지 않고, 발행자 문서를 /login으로 초기화하는 기존 동작을 유지한다.
+시작·종료 UTC 시각과 passed/failed, timeout/error 구분을 기록하며 한 앱 오류 후에도 다음 앱을 정리한다.
 SDK 종료 오류나 timeout이 있으면 프로세스 정리에 성공해도 해당 검사는 실패한다.
-`cleanup.json`을 파일로 저장·첨부하고 진행 단계도 로그로 남긴다. 원문 오류·쿠키·주소·프로필 경로는 싣지 않는다.
+`fixture-cleanup.json`을 파일로 저장·첨부하고 진행 단계도 로그로 남긴다. 원문 오류·쿠키·주소·프로필 경로는 싣지 않는다.
 
-정상 close 후에도 살아 있으면 이 검사에서 직접 launch한 Electron의 ChildProcess에만 SIGKILL을 보내고
-exit를 확인한다. 프로세스 이름/PID 검색과 사용자 앱 종료는 하지 않는다. 종료가 확인되지 않으면 profile을 보존한다.
+정상 close 후에도 살아 있으면 이 검사에서 직접 launch한 Electron의 ChildProcess에만 SIGTERM→SIGKILL을 보내고
+exit를 확인한다. 각 exit 대기 listener는 성공·실패·timeout 모두 회수한다.
+프로세스 이름/PID 검색과 사용자 앱 종료는 하지 않는다. 종료가 확인되지 않으면 profile을 보존한다.
 profile 삭제는 실제 tmp 바로 아래의 tutipal-e2e-profile- 접두사 경로만 허용한다.
 본문의 디코딩·서버 참가자 제거·옛 주소 차단 조건과20초 assertion,90초 test timeout, retry0/repeat3은 유지한다.
 이 보완은 정리 무한 대기와 진단 공백을 다루며 과거 장애의 정확한 내부 원인을 확정한 것은 아니다.
-단위 실패주입 검사는 `node --test tests/livekitCleanup.test.mjs`로 실행한다.
+단위 실패주입 검사는 `node --test tests/electronCleanup.test.mjs`로 실행한다. PR84 초기의 별도 정리 모듈은
+공통 구현과 중복되어 통합 시 제거했다. 초기 실행 증거는 해당 source SHA의 기록으로 보존한다.
 
 ## PT-114 종료 회귀 보완
 

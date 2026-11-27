@@ -62,7 +62,7 @@ class MaterialIndexWorker {
     @Scheduled(fixedDelay = 1000)
     void indexPending() {
         List<Long> pending = jdbc.queryForList("""
-                SELECT id FROM materials WHERE status = 'PROCESSING'
+                SELECT id FROM materials WHERE status = 'PROCESSING' AND hidden_at IS NULL
                     AND (index_retry_at IS NULL OR index_retry_at <= statement_timestamp())
                 ORDER BY updated_at, id LIMIT 32
                 """, Long.class);
@@ -125,13 +125,13 @@ class MaterialIndexWorker {
                     ? retryOrFail(material, error) : fail(material, error, true);
         }
 
-        // 삭제가 먼저 커밋되면 수정할 행이 없다. 갱신이 먼저라면 FK가 이후 삭제에서 조각을 정리한다.
+        // 삭제 또는 내리기가 먼저 커밋되면 색인을 갱신하지 않는다.
         int updated = jdbc.update("""
                 UPDATE materials
                 SET status = 'DONE', indexed_at = statement_timestamp(), chunk_count = ?, error = NULL,
-                    index_retryable = FALSE, index_retry_count = 0, index_retry_at = NULL,
+                    index_retryable = FALSE, index_retry_count = 0, index_retry_at = NULL, original_missing = FALSE,
                     updated_at = statement_timestamp()
-                WHERE id = ? AND status = 'PROCESSING'
+                WHERE id = ? AND status = 'PROCESSING' AND hidden_at IS NULL
                 """, chunks.size(), id);
         if (updated == 0) {
             return null;
@@ -193,7 +193,7 @@ class MaterialIndexWorker {
                 SET index_retry_count = index_retry_count + 1,
                     index_retry_at = statement_timestamp() + make_interval(secs => ?),
                     updated_at = statement_timestamp()
-                WHERE id = ? AND status = 'PROCESSING'
+                WHERE id = ? AND status = 'PROCESSING' AND hidden_at IS NULL
                 """, RETRY_DELAYS_SECONDS.get(retries), material.getId());
         return null;
     }
@@ -206,7 +206,7 @@ class MaterialIndexWorker {
                 UPDATE materials
                 SET status = 'FAILED', error = ?, index_retryable = ?, index_retry_at = NULL,
                     updated_at = statement_timestamp()
-                WHERE id = ? AND status = 'PROCESSING'
+                WHERE id = ? AND status = 'PROCESSING' AND hidden_at IS NULL
                 """, error, retryable, material.getId());
         return updated == 1 ? material.getSessionId() : null;
     }

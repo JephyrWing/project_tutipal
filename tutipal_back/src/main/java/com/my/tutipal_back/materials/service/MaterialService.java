@@ -7,6 +7,8 @@ import java.util.Set;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.multipart.MultipartFile;
 
 import com.my.tutipal_back.materials.entity.Material;
@@ -32,13 +34,15 @@ public class MaterialService {
     private final StudySessionService sessions;
     private final SessionEvents events;
     private final MaterialObjectStore objects;
+    private final MaterialReconciliation reconciliation;
 
     public MaterialService(MaterialRepository materials, StudySessionService sessions,
-                           SessionEvents events, MaterialObjectStore objects) {
+                           SessionEvents events, MaterialObjectStore objects, MaterialReconciliation reconciliation) {
         this.materials = materials;
         this.sessions = sessions;
         this.events = events;
         this.objects = objects;
+        this.reconciliation = reconciliation;
     }
 
     @Transactional
@@ -71,25 +75,31 @@ public class MaterialService {
     public MaterialRow reuse(Long userId, Long sessionId, Long sourceId, boolean alert) {
         sessions.requireTeacherOf(userId, sessionId);
         sessions.requireActiveRole(userId, sessionId);
-        Material source = find(sourceId);
+        Material source = lockVisible(sourceId);
         // 이전 수업은 종료됐어도 그 수업의 교사가 다시 사용할 수 있다.
         sessions.requireTeacherOf(userId, source.getSessionId());
         if (sessionId.equals(source.getSessionId())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "다른 수업의 자료를 선택해 주세요");
         }
+        requireOriginal(source);
         // 대상 수업의 원본·청크를 따로 저장해 어느 쪽을 삭제해도 다른 수업에 영향이 없다.
         return store(userId, sessionId, source.getFilename(), objects.get(source.getStorageKey()), alert);
     }
 
     private MaterialRow store(Long userId, Long sessionId, String name, byte[] data, boolean alert) {
-        String key = objects.put(data);
-        org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
-            new org.springframework.transaction.support.TransactionSynchronization() {
+        String key = objects.newKey();
+        reconciliation.reserveUpload(sessionId, key);
+        TransactionSynchronizationManager.registerSynchronization(
+            new TransactionSynchronization() {
                 @Override public void afterCompletion(int status) {
-                    if (status != STATUS_COMMITTED) objects.delete(key);
+                    if (status == STATUS_ROLLED_BACK) {
+                        reconciliation.cleanupAfterTransaction(key);
+                    }
                 }
             });
+        objects.put(key, data);
         Material m = materials.save(new Material(sessionId, userId, name, key, data.length));
+        reconciliation.finishUpload(key);
         Long id = m.getId();
         events.toSession(sessionId, alert ? "materialAlert" : "materials", id);
         return materials.row(id).orElseThrow();
@@ -104,6 +114,7 @@ public class MaterialService {
     public Material download(Long userId, Long materialId) {
         Material m = find(materialId);
         sessions.requireActiveRole(userId, m.getSessionId());
+        requireOriginal(m);
         return m;
     }
 
@@ -111,21 +122,22 @@ public class MaterialService {
 
     @Transactional
     public void delete(Long userId, Long materialId) {
-        MaterialRow m = materials.row(materialId)
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "자료를 찾을 수 없어요"));
-        sessions.requireTeacherOf(userId, m.sessionId());
-        String key = find(materialId).getStorageKey();
-        materials.deleteById(materialId);   // 청크는 ON DELETE CASCADE
-        AfterCommit.run(() -> objects.delete(key));
-        events.toSession(m.sessionId(), "materials", materialId);
+        Material material = lockVisible(materialId);
+        sessions.requireTeacherOf(userId, material.getSessionId());
+        String key = material.getStorageKey();
+        materials.delete(material);   // 청크는 ON DELETE CASCADE
+        reconciliation.recordDeletion(material.getSessionId(), key);
+        AfterCommit.run(() -> reconciliation.cleanupAfterTransaction(key));
+        events.toSession(material.getSessionId(), "materials", materialId);
     }
 
     @Transactional
     public MaterialRow requestIndex(Long userId, Long materialId) {
-        Material material = find(materialId);
+        Material material = lockVisible(materialId);
         Long sessionId = material.getSessionId();
         sessions.requireTeacherOf(userId, sessionId);
         sessions.requireActiveRole(userId, sessionId);
+        requireOriginal(material);
         if (materials.queueIndex(materialId) == 1) {
             events.toSession(sessionId, "materials", materialId);
         }
@@ -153,6 +165,20 @@ public class MaterialService {
     }
 
     private Material find(Long id) {
-        return materials.findById(id).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "자료를 찾을 수 없어요"));
+        return materials.findByIdAndHiddenAtIsNull(id).orElseThrow(MaterialService::notFound);
+    }
+
+    private Material lockVisible(Long id) {
+        return materials.findLockedByIdAndHiddenAtIsNull(id).orElseThrow(MaterialService::notFound);
+    }
+
+    private static ApiException notFound() {
+        return new ApiException(HttpStatus.NOT_FOUND, "자료를 찾을 수 없어요");
+    }
+
+    private void requireOriginal(Material material) {
+        if (material.isOriginalMissing()) {
+            throw new ApiException(HttpStatus.CONFLICT, "원본 파일을 사용할 수 없어요. 운영자에게 문의해 주세요");
+        }
     }
 }

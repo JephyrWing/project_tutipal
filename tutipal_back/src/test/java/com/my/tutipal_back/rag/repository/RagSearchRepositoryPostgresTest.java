@@ -219,6 +219,35 @@ class RagSearchRepositoryPostgresTest {
     }
 
     @Test
+    void hiddenMaterialCannotActivateSearchOrSupplyAnyVectorHits() {
+        long session = 3003L;
+        jdbc.update("INSERT INTO study_sessions(id,created_at,updated_at,title,topic,invite_code,owner_id) "
+                + "VALUES (?,now(),now(),'moderation synthetic','수학','RAGC01',?)", session, OWNER);
+        long material = insertMaterial(session, "moderated.txt", true);
+        String vector = AiClient.pgVector(query);
+        try {
+            jdbc.update("INSERT INTO material_chunks(material_id,session_id,content,embedding,embedding_model) "
+                    + "VALUES (?,?,'synthetic content',?::vector,?)", material, session, vector, MODEL_A);
+            assertThat(repository.hasChunks(session)).isTrue();
+            assertThat(repository.findNearest(session, MODEL_A, vector, 10)).hasSize(1);
+
+            jdbc.update("UPDATE materials SET hidden_at = now() WHERE id = ?", material);
+            assertThat(repository.hasChunks(session)).isFalse();
+            assertThat(repository.findNearest(session, MODEL_A, vector, 10)).isEmpty();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM material_chunks WHERE material_id = ?", Long.class,
+                    material)).isEqualTo(1L);
+
+            jdbc.update("UPDATE materials SET hidden_at = NULL WHERE id = ?", material);
+            assertThat(repository.hasChunks(session)).isTrue();
+            assertThat(repository.findNearest(session, MODEL_A, vector, 10))
+                    .extracting(RagHit::content).containsExactly("synthetic content");
+        } finally {
+            jdbc.update("DELETE FROM materials WHERE id = ?", material);
+            jdbc.update("DELETE FROM study_sessions WHERE id = ?", session);
+        }
+    }
+
+    @Test
     void v20AddsChunkerColumnWithCharDefaultForOldAndNewRows() {
         assertThat(jdbc.queryForObject(
                 "SELECT chunker FROM material_chunks WHERE content='legacy chunk before V20'", String.class))

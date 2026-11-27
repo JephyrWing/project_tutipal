@@ -14,12 +14,47 @@ export const test = base.extend({
     const posts = []
     const requests = []
     const pending = new Set()
-    const control = { hold: false, status: 200 }
+    const control = { hold: false, status: 200, focusState: 'FOCUSED',
+      consented: false, version: null, consentError: 0, saveError: 0, withdrawError: 0, holdConsent: false }
+    const pendingConsents = []
+    const consent = () => ({ consented: control.consented, version: control.version,
+      consentedAt: control.consented ? '2026-11-27T00:00:00Z' : null, currentVersion: '2026-11-26',
+      retentionDays: 30, maxSampleAgeDays: 31, staleAfterSeconds: 180 })
     const server = createServer(async (req, res) => {
       const route = new URL(req.url, 'http://127.0.0.1').pathname
-      requests.push({ method: req.method, route })
+      const requestRecord = { method: req.method, route }
+      requests.push(requestRecord)
       const json = body => res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(body))
+      const error = (status, message) => res.writeHead(status, { 'Content-Type': 'application/json' })
+        .end(JSON.stringify({ status, message }))
       if (route === '/api/auth/csrf') return json({ token: 'synthetic-only', headerName: 'X-CSRF-TOKEN' })
+      if (route === '/api/focus/consent') {
+        if (req.method === 'GET') return control.consentError
+          ? error(control.consentError, '시험 동의 조회 실패') : json(consent())
+        if (req.method === 'PUT') {
+          let raw = ''
+          for await (const chunk of req) raw += chunk
+          const value = JSON.parse(raw)
+          requestRecord.body = value
+          const finish = () => {
+            if (res.destroyed) return
+            if (control.saveError) return error(control.saveError, '시험 동의 저장 실패')
+            if (value.version !== '2026-11-26') return error(409, '시험 동의 버전 불일치')
+            control.consented = true
+            control.version = value.version
+            json(consent())
+          }
+          if (control.holdConsent) pendingConsents.push(finish)
+          else finish()
+          return
+        }
+        if (req.method === 'DELETE') {
+          if (control.withdrawError) return error(control.withdrawError, '시험 동의 철회 실패')
+          control.consented = false
+          control.version = null
+          return res.writeHead(204).end()
+        }
+      }
       if (req.method === 'POST' && /^\/api\/sessions\/\d+\/focus$/.test(route)) {
         let raw = ''
         for await (const chunk of req) raw += chunk
@@ -27,11 +62,14 @@ export const test = base.extend({
           cookie: req.headers.cookie ?? '' })
         if (control.hold) { pending.add(res); res.on('close', () => pending.delete(res)); return }
         if (control.status !== 200) return res.writeHead(control.status).end()
-        return json({ state: 'FOCUSED', updatedAt: '2026-11-27T00:00:00Z' })
+        return json({ state: control.focusState, updatedAt: '2026-11-27T00:00:00Z' })
       }
       if (req.method !== 'GET') return res.writeHead(403).end()
       if (route === '/api/users/me') return json({ id: 1, name: 'PT30 synthetic user', role: 'USER', providers: [] })
       if (route === '/api/auth/config') return json({ devLogin: false, providers: [] })
+      if (route === '/api/sessions/1') return json({ id: 1, title: 'PT30 집중도 시험 수업', topic: '수학',
+        myRole: 'STUDENT', inviteCode: 'PT30UI', difficulty: 2, participantCount: 2, ended: false, aiRetentionDays: 14 })
+      if (route === '/api/sessions/1/help' || route === '/api/sessions/1/quizzes/open') return json([])
       if (route === '/api/auth/providers' || route === '/api/sessions' || route.startsWith('/api/review')) return json([])
       res.writeHead(404).end()
     })
@@ -61,7 +99,8 @@ export const test = base.extend({
           .end(JSON.stringify({ state: 'FOCUSED', updatedAt: '2026-11-27T00:00:00Z' }))
         pending.clear()
       }
-      await use({ application, page, backend, posts, control, snapshot, minute, release })
+      const releaseConsent = () => pendingConsents.splice(0).forEach(finish => finish())
+      await use({ application, page, backend, posts, requests, control, snapshot, minute, release, releaseConsent })
     } finally {
       if (application && testInfo.status !== testInfo.expectedStatus) {
         const snapshot = await application.evaluate(() => global.pt30Focus.snapshot()).catch(() => ({}))

@@ -5,6 +5,7 @@ import AppShell from './components/AppShell'
 import AppLoginDonePage from './pages/AppLoginDonePage'
 import ChatPage from './pages/ChatPage'
 import ConversationsPage from './pages/ConversationsPage'
+import ContentModerationPage from './pages/ContentModerationPage'
 import CreateSessionPage from './pages/CreateSessionPage'
 import JoinSessionPage from './pages/JoinSessionPage'
 import SessionPage from './pages/SessionPage'
@@ -37,6 +38,7 @@ export default function App() {
               <Route path="screen-consent" element={<ScreenConsentPage />} />
               <Route path="review" element={<ReviewPage />} />
               <Route path="settings" element={<SettingsPage />} />
+              <Route path="admin/content" element={<ContentModerationPage />} />
               <Route path="stats" element={<LearningResultsPage />} />
             </Route>
           </Route>

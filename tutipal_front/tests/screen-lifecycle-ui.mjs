@@ -15,7 +15,7 @@ import React from 'react';import {createRoot} from 'react-dom/client';import {Me
 import Widget from '/src/pages/WidgetPage.jsx';
 window.calls=[];window.records=[];window.loads=[];window.holdSettings=false;window.target='ok';window.captures=0;
 window.selected={enabled:true,sourceId:'window:A',sourceName:'Synthetic A'};
-window.desktop={captureScreen:async()=>{window.captures++;return{status:window.target,image:'synthetic',changed:true}},
+window.desktop={getWidgetChatContext:async()=>({topic:'수학'}),onWidgetChatContextChanged:cb=>{window.fireContext=cb;return()=>{}},captureScreen:async()=>{window.captures++;return{status:window.target,image:'synthetic',changed:true}},
  getScreenTargetStatus:async()=>({status:window.target}),
  getScreenSettings:()=>window.holdSettings?new Promise(resolve=>window.loads.push(resolve)):Promise.resolve({...window.selected}),
  getReviewDeletionState:async()=>false,onReviewDeletionChanged:()=>()=>{},
@@ -83,12 +83,18 @@ try{
 
  await page.evaluate(()=>{window.target='ok';window.selected={enabled:true,sourceId:'window:D'};window.fireSettings()})
  await expect.poll(count).toBe(before+2)
+ const beforeContext=await count()
+ await page.evaluate(()=>window.fireContext())
+ await expect.poll(count).toBe(beforeContext+1)
+ expect(await page.evaluate(()=>window.calls.at(-2).signal.aborted)).toBe(true)
+ await page.evaluate(()=>window.calls.at(-2).resolve('OLD CONTEXT CAPTURE'))
+ expect(await page.evaluate(()=>window.records.some(r=>r.summary==='OLD CONTEXT CAPTURE'))).toBe(false);passed++
  await page.evaluate(()=>window.root.unmount())
  expect(await page.evaluate(()=>window.calls.at(-1).signal.aborted)).toBe(true)
  await page.evaluate(()=>window.calls.at(-1).resolve('UNMOUNTED SUMMARY'))
  expect(await page.evaluate(()=>window.records.some(r=>r.summary==='UNMOUNTED SUMMARY'))).toBe(false);passed++
  expect(errors).toEqual([])
- console.log(`PT45 synthetic Electron widget: scenarios=6 passed=${passed} failed=0 rendererErrors=${errors.length}`)
+ console.log(`PT45 synthetic Electron widget: scenarios=7 passed=${passed} failed=0 rendererErrors=${errors.length}`)
 }finally{
  await app?.close();await server.close()
  const resolved=path.resolve(temp)

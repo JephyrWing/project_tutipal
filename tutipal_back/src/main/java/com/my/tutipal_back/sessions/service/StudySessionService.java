@@ -11,10 +11,12 @@ import java.util.stream.Collectors;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.my.tutipal_back.sessions.dto.ChatSettings;
 import com.my.tutipal_back.sessions.dto.CreateSessionRequest;
+import com.my.tutipal_back.sessions.dto.EndedSessionResponse;
 import com.my.tutipal_back.sessions.dto.ParticipantResponse;
 import com.my.tutipal_back.sessions.dto.SessionResponse;
 import com.my.tutipal_back.sessions.dto.UpdateSettingsRequest;
@@ -106,6 +108,12 @@ public class StudySessionService {
                 .sorted(Comparator.comparing((StudySession s) -> !mine.get(s.getId()).isPinned())
                         .thenComparing(StudySession::getId, Comparator.reverseOrder()))
                 .map(s -> response(s, mine.get(s.getId()).getRole()).withPinned(mine.get(s.getId()).isPinned()))
+                .toList();
+    }
+
+    public List<EndedSessionResponse> myEndedSessions(Long teacherId) {
+        return sessions.findEndedForTeacher(teacherId, SessionRole.TEACHER).stream()
+                .map(EndedSessionResponse::of)
                 .toList();
     }
 
@@ -237,6 +245,17 @@ public class StudySessionService {
     /** 다른 도메인(quiz)용: 그 세션의 선생님인지 확인 (아니면 404 · 403). */
     public void requireTeacherOf(Long userId, Long sessionId) {
         requireTeacher(sessionId, userId);
+    }
+
+    /** 문항 변경은 수업 종료와 같은 행을 잠근 상태에서만 허용한다. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void requireActiveTeacherForQuizWrite(Long userId, Long sessionId) {
+        requireTeacher(sessionId, userId);
+        StudySession session = sessions.lockById(sessionId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "방을 찾을 수 없어요"));
+        if (session.isEnded()) {
+            throw new ApiException(HttpStatus.GONE, "이미 닫힌 방이에요");
+        }
     }
 
     /** 이해도 질문 응답률 분모: 학생 수. */

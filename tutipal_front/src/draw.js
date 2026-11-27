@@ -56,3 +56,36 @@ export function hitStrokes(strokes, x, y, r = 0.02) {
   }
   return out
 }
+
+/** 판서는 연결 중에만 전달하며 재연결 때 빈 오버레이에서 다시 시작한다. */
+export function createDrawReceiver(helpId, onDrawing) {
+  let connection = 0
+
+  return {
+    connect() {
+      const current = ++connection
+      let lastSequence = 0
+      onDrawing({ k: 'clear' })
+
+      return (raw) => {
+        if (current !== connection) return
+        let body
+        try { body = JSON.parse(raw) } catch { return }
+        if (body?.helpId !== helpId || !body.message) return
+
+        // Older servers omit sequence. Once ordered frames arrive, ignore unsequenced frames.
+        if (body.sequence === undefined) {
+          if (lastSequence !== 0) return
+        } else {
+          if (!Number.isSafeInteger(body.sequence) || body.sequence <= lastSequence) return
+          lastSequence = body.sequence
+        }
+        onDrawing(body.message)
+      }
+    },
+    disconnect() {
+      ++connection
+      onDrawing({ k: 'clear' })
+    },
+  }
+}

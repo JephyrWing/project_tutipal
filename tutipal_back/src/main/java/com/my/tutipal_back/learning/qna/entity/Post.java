@@ -1,5 +1,7 @@
 package com.my.tutipal_back.learning.qna.entity;
 
+import java.time.Instant;
+
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
@@ -30,6 +32,8 @@ public class Post extends BaseTimeEntity {
 
     @Column(nullable = false, length = 3000)
     private String body;
+
+    private Instant hiddenAt;
 
     protected Post() {
     }

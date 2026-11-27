@@ -6,7 +6,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { login, createRoom, joinRoom } from '../e2e/fixtures.js'
 import { participantCount } from './participantProbe.js'
-import { cleanupApplications } from './cleanup.js'
+import { cleanupElectronItems } from '../helpers/electronCleanup.mjs'
 
 const front = fileURLToPath(new URL('../../', import.meta.url))
 const sdk = await readFile(path.join(front, 'node_modules/livekit-client/dist/livekit-client.umd.js'), 'utf8')
@@ -33,15 +33,19 @@ async function launch() {
   return item
 }
 test.afterEach(async ({}, testInfo) => {
-  const report = await cleanupApplications(opened.splice(0).reverse(), {
-    onPhase: record => console.log('PT114 cleanup', JSON.stringify(record)),
-  })
-  const evidence = testInfo.outputPath('cleanup.json')
-  await writeFile(evidence, JSON.stringify(report))
-  await testInfo.attach('cleanup.json', { path: evidence, contentType: 'application/json' })
-  const failures = report.flatMap(app => app.phases).filter(phase => phase.status !== 'passed')
-  expect(failures, 'Every cleanup stage must finish successfully; forced exit does not hide an earlier failure').toEqual([])
+  const observations = []
+  try {
+    await cleanupElectronItems(opened.splice(0).reverse(), { onStage: result => {
+      observations.push(result)
+      console.log('LiveKit cleanup ' + JSON.stringify(result))
+    } })
+  } finally {
+    const evidence = testInfo.outputPath('fixture-cleanup.json')
+    await writeFile(evidence, JSON.stringify(observations))
+    await testInfo.attach('fixture-cleanup.json', { path: evidence, contentType: 'application/json' })
+  }
 })
+
 async function api(app, route, method = 'GET', body) {
   return app.page.evaluate(async ({ route, method, body }) => {
     const headers = {}

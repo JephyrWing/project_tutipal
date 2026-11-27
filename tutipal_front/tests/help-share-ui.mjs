@@ -54,10 +54,15 @@ try {
   app = await electron.launch({ executablePath: electronPath, args: [main], env, timeout: 20000 })
   const page = await app.firstWindow({ timeout: 20000 }), errors = []
   page.on('pageerror', error => errors.push(error.message))
+  let helpOpen = true
   await page.route(url => url.pathname.startsWith('/api/'), route => {
     const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/help/17/end' && route.request().method() === 'POST') {
+      helpOpen = false
+      return route.fulfill({ status: 204 })
+    }
     const body = pathname.endsWith('/csrf') ? { headerName: 'X-XSRF-TOKEN', token: 'synthetic' }
-      : pathname.endsWith('/help') ? [{ id: 17, name: 'Synthetic Student', status: 'ACCEPTED', shareScreen: true }]
+      : pathname.endsWith('/help') ? (helpOpen ? [{ id: 17, name: 'Synthetic Student', status: 'ACCEPTED', shareScreen: true }] : [])
       : { url: '/livekit/synthetic', token: 'session-bound' }
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
   })
@@ -121,6 +126,7 @@ try {
   await expect(page.getByRole('button', { name: '✋ 도움 요청', exact: true })).toBeVisible()
   await page.evaluate(() => window.releaseMain())
   expect(await page.evaluate(() => window.testCapture.filter(Boolean).length)).toBe(peerCaptureCount); checks++
+  helpOpen = true
   await page.goto(`http://127.0.0.1:${port}/share-test.html?noTeacher`)
   await expect(page.getByText('선생님 화면 연결을 기다리는 중', {exact:true})).toBeVisible()
   await picker.selectOption('window:123:0')

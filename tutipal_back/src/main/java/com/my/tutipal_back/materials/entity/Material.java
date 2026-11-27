@@ -57,6 +57,11 @@ public class Material extends BaseTimeEntity {
     @Column(nullable = false)
     private int indexRetryCount;
 
+    @Column(nullable = false)
+    private boolean originalMissing;
+
+    private Instant hiddenAt;
+
     protected Material() {
     }
 
@@ -74,4 +79,5 @@ public class Material extends BaseTimeEntity {
     public String getStorageKey() { return storageKey; }
     public Status getStatus() { return status; }
     public int getIndexRetryCount() { return indexRetryCount; }
+    public boolean isOriginalMissing() { return originalMissing; }
 }

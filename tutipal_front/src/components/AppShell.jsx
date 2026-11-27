@@ -14,7 +14,7 @@ const MENU = [
 
 /** 목업 공통 틀: 왼쪽 세로 아이콘 메뉴 카드 + 오른쪽 본문 */
 export default function AppShell() {
-  const { logout, logoutError, loggingOut } = useAuth()
+  const { me, logout, logoutError, loggingOut } = useAuth()
   return (
     <div className="shell">
       <nav className="side card" aria-label="메인 메뉴">
@@ -31,6 +31,11 @@ export default function AppShell() {
               <Icon name={m.icon} />
             </span>
           ),
+        )}
+        {me?.role === 'ADMIN' && (
+          <NavLink to="/admin/content" className="side-item" title="콘텐츠 관리" aria-label="콘텐츠 관리">
+            <Icon name="shield" />
+          </NavLink>
         )}
         <button className="side-item side-bottom" disabled={loggingOut} onClick={() => void logout()} title="로그아웃" aria-label="로그아웃">
           <Icon name="logout" />
