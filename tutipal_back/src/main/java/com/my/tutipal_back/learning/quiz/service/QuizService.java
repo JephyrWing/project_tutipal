@@ -3,6 +3,7 @@ package com.my.tutipal_back.learning.quiz.service;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -91,8 +92,7 @@ public class QuizService {
     /** 목업 22: 질문을 만들어 바로 학생 전체에게 보낸다. */
     @Transactional
     public QuizSummary create(Long userId, Long sessionId, CreateQuizRequest req) {
-        sessions.requireTeacherOf(userId, sessionId);
-        sessions.requireActiveRole(userId, sessionId);   // 끝난 세션이면 410
+        sessions.requireActiveTeacherForQuizWrite(userId, sessionId);
         return publish(sessionId, content(req), req.timeLimitSec());
     }
 
@@ -145,9 +145,15 @@ public class QuizService {
     }
 
     private QuizSummary publish(Long sessionId, QuizDraft content, Integer timeLimitSec) {
+        // Both publication paths hold the session lock until commit. PostgreSQL stores closesAt to microseconds.
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        if (quizzes.existsBySessionIdAndClosesAtAfter(sessionId, now.minus(GRACE))) {
+            // An active quiz temporarily locks publication. A 409 on draft send still means reapproval.
+            throw new ApiException(HttpStatus.LOCKED, "이전 문항 마감 후 3초가 지나면 새 문항을 보낼 수 있어요");
+        }
         int limit = timeLimitSec == null ? DEFAULT_TIME_LIMIT : timeLimitSec;
         Quiz quiz = quizzes.save(new Quiz(sessionId, content.type(), content.question(), content.choices(),
-                content.answerIndex(), content.modelAnswer(), clock.instant().plusSeconds(limit)));
+                content.answerIndex(), content.modelAnswer(), now.plusSeconds(limit)));
         events.toSession(sessionId, "quiz", quiz.getId());
         return summary(sessionId, quiz.getId());
     }
@@ -226,11 +232,14 @@ public class QuizService {
     /** 일찍 닫기 (선생님). */
     @Transactional
     public QuizSummary close(Long userId, Long quizId) {
+        // Load the quiz after the lock so a retry cannot overwrite an earlier close time.
+        Long sessionId = quizzes.findSessionIdByQuizId(quizId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "질문을 찾을 수 없어요"));
+        sessions.requireActiveTeacherForQuizWrite(userId, sessionId);
         Quiz quiz = findQuiz(quizId);
-        sessions.requireActiveTeacherForQuizWrite(userId, quiz.getSessionId());
-        quiz.close(clock.instant());
-        events.toSession(quiz.getSessionId(), "quizClosed", quizId);
-        return summaries(quiz.getSessionId()).stream().filter(s -> s.id().equals(quizId)).findFirst().orElseThrow();
+        quiz.close(clock.instant().truncatedTo(ChronoUnit.MICROS));
+        events.toSession(sessionId, "quizClosed", quizId);
+        return summary(sessionId, quizId);
     }
 
     /** 목업 24: 응답 목록 (선생님). */
