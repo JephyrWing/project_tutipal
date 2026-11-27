@@ -54,7 +54,7 @@ public class QnaService {
 
     public List<PostSummary> list(Long userId, Long sessionId) {
         sessions.requireActiveRole(userId, sessionId);
-        return summaries(userId, posts.findBySessionIdOrderByIdDesc(sessionId));
+        return summaries(userId, posts.findBySessionIdAndHiddenAtIsNullOrderByIdDesc(sessionId));
     }
 
     public PostDetail get(Long userId, Long postId) {
@@ -70,7 +70,7 @@ public class QnaService {
 
     @Transactional
     public PostDetail comment(Long userId, Long postId, CreateComment req) {
-        Post p = findPost(postId);
+        Post p = lockPost(postId);
         sessions.requireActiveRole(userId, p.getSessionId());
         comments.save(new Comment(postId, userId, req.body().strip()));
         events.toSession(p.getSessionId(), "posts", postId);
@@ -79,7 +79,7 @@ public class QnaService {
 
     @Transactional
     public void deletePost(Long userId, Long postId) {
-        Post p = findPost(postId);
+        Post p = lockPost(postId);
         requireAuthorOrTeacher(userId, p.getAuthorId(), p.getSessionId());
         posts.delete(p);   // 댓글은 ON DELETE CASCADE
         events.toSession(p.getSessionId(), "posts", postId);
@@ -88,7 +88,7 @@ public class QnaService {
     @Transactional
     public void deleteComment(Long userId, Long commentId) {
         Comment c = comments.findById(commentId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "댓글을 찾을 수 없어요"));
-        Post p = findPost(c.getPostId());
+        Post p = lockPost(c.getPostId());
         requireAuthorOrTeacher(userId, c.getAuthorId(), p.getSessionId());
         comments.delete(c);
         events.toSession(p.getSessionId(), "posts", p.getId());
@@ -116,6 +116,14 @@ public class QnaService {
     }
 
     private Post findPost(Long id) {
-        return posts.findById(id).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "글을 찾을 수 없어요"));
+        return posts.findByIdAndHiddenAtIsNull(id).orElseThrow(QnaService::postNotFound);
+    }
+
+    private Post lockPost(Long id) {
+        return posts.findLockedByIdAndHiddenAtIsNull(id).orElseThrow(QnaService::postNotFound);
+    }
+
+    private static ApiException postNotFound() {
+        return new ApiException(HttpStatus.NOT_FOUND, "글을 찾을 수 없어요");
     }
 }

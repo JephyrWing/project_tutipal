@@ -220,21 +220,47 @@ export function NoticesPanel({ sessionId, teacher, reloadKey }) {
 /** 목업 29 오른쪽: 게시판 (참가자 누구나 글 · 댓글) */
 export function BoardPanel({ sessionId, teacher, reloadKey }) {
   const [list, setList] = useState([])
-  const [open, setOpen] = useState(null)
+  const [selectedId, setSelectedId] = useState(null)
+  const [detail, setDetail] = useState(null)
+  const [detailRefresh, setDetailRefresh] = useState(0)
   const [writing, setWriting] = useState(false)
   const [title, setTitle] = useState('')
   const [body, setBody] = useState('')
   const [comment, setComment] = useState('')
   const [error, setError] = useState('')
+  const listRequest = useRef(0)
+  const open = detail?.id === selectedId ? detail : null
 
   const load = useCallback(() => {
-    posts.list(sessionId).then(setList, (e) => setError(errText(e, '불러오지 못했어요')))
+    const version = ++listRequest.current
+    posts.list(sessionId).then(
+      (rows) => { if (version === listRequest.current) setList(rows) },
+      (e) => { if (version === listRequest.current) setError(errText(e, '불러오지 못했어요')) },
+    )
   }, [sessionId])
   useEffect(load, [load, reloadKey])
   useEffect(() => {
-    // 알림(reloadKey)이 오면 열어 둔 글도 다시 읽기 (댓글이 달렸을 수 있음)
-    if (open) posts.get(open.id).then(setOpen, () => setOpen(null))
-  }, [reloadKey])
+    if (selectedId === null) return
+    let active = true
+    posts.get(selectedId).then(
+      (post) => { if (active) setDetail(post) },
+      (e) => {
+        if (!active) return
+        setSelectedId(null)
+        setDetail(null)
+        setComment('')
+        setError(errText(e, '글을 불러오지 못했어요'))
+      },
+    )
+    return () => { active = false }
+  }, [selectedId, reloadKey, detailRefresh])
+
+  function closePost() {
+    setSelectedId(null)
+    setDetail(null)
+    setComment('')
+    load()
+  }
 
   const act = async (fn) => {
     setError('')
@@ -249,8 +275,8 @@ export function BoardPanel({ sessionId, teacher, reloadKey }) {
     return (
       <section className="card session-body">
         <div className="row-between">
-          <button className="btn btn-sm" onClick={() => { setOpen(null); load() }}>← 목록</button>
-          {(open.mine || teacher) && <button className="btn btn-sm" onClick={() => void act(async () => { await posts.remove(open.id); setOpen(null); load() })}>글 삭제</button>}
+          <button className="btn btn-sm" onClick={closePost}>← 목록</button>
+          {(open.mine || teacher) && <button className="btn btn-sm" onClick={() => void act(async () => { await posts.remove(open.id); closePost() })}>글 삭제</button>}
         </div>
         <h3 className="post-title">{open.title}</h3>
         <p className="muted small">{open.authorName} · {when(open.createdAt)}</p>
@@ -260,10 +286,10 @@ export function BoardPanel({ sessionId, teacher, reloadKey }) {
           <div key={c.id} className="comment">
             <strong>{c.authorName}</strong> <span>{c.body}</span>
             <span className="muted small"> {when(c.createdAt)}</span>
-            {(c.mine || teacher) && <button className="btn-link small" onClick={() => void act(async () => { await posts.removeComment(c.id); setOpen(await posts.get(open.id)) })}> 삭제</button>}
+            {(c.mine || teacher) && <button className="btn-link small" onClick={() => void act(async () => { await posts.removeComment(c.id); setDetailRefresh((n) => n + 1) })}> 삭제</button>}
           </div>
         ))}
-        <form className="row-gap" onSubmit={(e) => { e.preventDefault(); void act(async () => { setOpen(await posts.comment(open.id, comment.trim())); setComment('') }) }}>
+        <form className="row-gap" onSubmit={(e) => { e.preventDefault(); void act(async () => { await posts.comment(open.id, comment.trim()); setDetailRefresh((n) => n + 1); setComment('') }) }}>
           <input className="input" value={comment} onChange={(e) => setComment(e.target.value)} maxLength={1000} placeholder="댓글" />
           <button className="btn btn-primary" disabled={!comment.trim()}>등록</button>
         </form>
@@ -286,9 +312,10 @@ export function BoardPanel({ sessionId, teacher, reloadKey }) {
         </form>
       )}
       {error && <p className="error-text">{error}</p>}
+      {selectedId !== null && <p role="status">글을 불러오는 중이에요.</p>}
       {list.length === 0 && <p className="muted">아직 글이 없어요</p>}
       {list.map((p) => (
-        <button key={p.id} className="post-row" onClick={() => void posts.get(p.id).then(setOpen)}>
+        <button key={p.id} className="post-row" onClick={() => { setError(''); setSelectedId(p.id) }}>
           <span className="post-icon"><Icon name="book" size={20} /></span>
           <span className="post-text"><strong>{p.title}</strong><span className="muted small">{p.authorName} · {when(p.createdAt)}</span></span>
           <span className="muted"><Icon name="chat" size={16} /> {p.commentCount}</span>
