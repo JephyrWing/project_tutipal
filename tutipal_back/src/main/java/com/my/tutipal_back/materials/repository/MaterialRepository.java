@@ -46,7 +46,8 @@ public interface MaterialRepository extends JpaRepository<Material, Long> {
             UPDATE materials
             SET status = 'PROCESSING', error = NULL, index_retryable = FALSE, index_retry_count = 0,
                 index_retry_at = NULL, updated_at = statement_timestamp()
-            WHERE id = :id AND (status = 'DONE' OR (status = 'FAILED' AND index_retryable))
+            WHERE id = :id AND NOT original_missing
+                AND (status = 'DONE' OR (status = 'FAILED' AND index_retryable))
             """, nativeQuery = true)
     int queueIndex(@Param("id") Long id);
 }
