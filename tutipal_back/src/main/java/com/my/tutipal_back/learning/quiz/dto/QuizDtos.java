@@ -18,7 +18,7 @@ public final class QuizDtos {
     private QuizDtos() {
     }
 
-    /** 목업 22: 선생님이 만드는 질문. AI 로 만든 초안(QuizDraft)도 같은 모양으로 고쳐서 보낸다. */
+    /** 직접 출제와 AI 초안의 승인·전송에 공통으로 쓰는 질문 내용. */
     public record CreateQuizRequest(
             @NotNull QuizType type,
             @NotBlank @Size(max = 1000) String question,
@@ -31,9 +31,12 @@ public final class QuizDtos {
     public record GenerateQuizRequest(@NotNull QuizType type, @Size(max = 200) String hint) {
     }
 
-    /** AI 가 만든 질문 초안 (저장 안 함, 선생님이 고쳐서 CreateQuizRequest 로 보냄). */
+    /** AI 초안과 생성 API가 발급한 승인 대상 ID. */
     public record QuizDraft(QuizType type, String question, List<String> choices, Integer answerIndex,
-                            String modelAnswer) {
+                            String modelAnswer, Long draftId) {
+        public QuizDraft(QuizType type, String question, List<String> choices, Integer answerIndex, String modelAnswer) {
+            this(type, question, choices, answerIndex, modelAnswer, null);
+        }
     }
 
     public record AnswerRequest(Integer choiceIndex, @Size(max = 2000) String text) {
@@ -59,6 +62,7 @@ public final class QuizDtos {
 
     /** 목업 24: 응답 하나 (선생님용). */
     public record AnswerRow(Long answerId, Long userId, String name, Integer choiceIndex, String text,
-                            Boolean correct, GradedBy gradedBy, String feedback) {
+                            Boolean correct, GradedBy gradedBy, String feedback,
+                            Boolean aiOriginalCorrect, String aiOriginalFeedback, Boolean teacherCorrect) {
     }
 }

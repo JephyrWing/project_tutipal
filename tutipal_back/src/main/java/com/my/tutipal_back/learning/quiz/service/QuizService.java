@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.my.tutipal_back.learning.quiz.dto.QuizDtos.AnswerRequest;
@@ -26,6 +27,7 @@ import com.my.tutipal_back.learning.quiz.dto.QuizDtos.StudentQuiz;
 import com.my.tutipal_back.learning.quiz.entity.GradedBy;
 import com.my.tutipal_back.learning.quiz.entity.Quiz;
 import com.my.tutipal_back.learning.quiz.entity.QuizAnswer;
+import com.my.tutipal_back.learning.quiz.entity.QuizDraftApproval;
 import com.my.tutipal_back.learning.quiz.entity.QuizType;
 import com.my.tutipal_back.learning.quiz.repository.QuizAnswerRepository;
 import com.my.tutipal_back.learning.quiz.repository.QuizRepository;
@@ -60,16 +62,20 @@ public class QuizService {
     private final QuizAi quizAi;
     private final SessionEvents events;
     private final AiQuota quota;
+    private final QuizDrafts drafts;
+    private final QuizGradeWriter gradeWriter;
     private final Clock clock;
 
     @Autowired
     public QuizService(QuizRepository quizzes, QuizAnswerRepository answers, StudySessionService sessions,
-                       UserService users, QuizAi quizAi, SessionEvents events, AiQuota quota) {
-        this(quizzes, answers, sessions, users, quizAi, events, quota, Clock.systemUTC());
+                       UserService users, QuizAi quizAi, SessionEvents events, AiQuota quota,
+                       QuizDrafts drafts, QuizGradeWriter gradeWriter) {
+        this(quizzes, answers, sessions, users, quizAi, events, quota, drafts, gradeWriter, Clock.systemUTC());
     }
 
     QuizService(QuizRepository quizzes, QuizAnswerRepository answers, StudySessionService sessions,
-                UserService users, QuizAi quizAi, SessionEvents events, AiQuota quota, Clock clock) {
+                UserService users, QuizAi quizAi, SessionEvents events, AiQuota quota,
+                QuizDrafts drafts, QuizGradeWriter gradeWriter, Clock clock) {
         this.quizzes = quizzes;
         this.answers = answers;
         this.sessions = sessions;
@@ -77,6 +83,8 @@ public class QuizService {
         this.quizAi = quizAi;
         this.events = events;
         this.quota = quota;
+        this.drafts = drafts;
+        this.gradeWriter = gradeWriter;
         this.clock = clock;
     }
 
@@ -85,6 +93,36 @@ public class QuizService {
     public QuizSummary create(Long userId, Long sessionId, CreateQuizRequest req) {
         sessions.requireTeacherOf(userId, sessionId);
         sessions.requireActiveRole(userId, sessionId);   // 끝난 세션이면 410
+        return publish(sessionId, content(req), req.timeLimitSec());
+    }
+
+    @Transactional
+    public void approveDraft(Long userId, Long sessionId, Long draftId, CreateQuizRequest request) {
+        sessions.requireActiveTeacherForQuizWrite(userId, sessionId);
+        QuizDraftApproval draft = drafts.requireOwned(userId, sessionId, draftId);
+        if (draft.getSentQuizId() != null) {
+            throw new ApiException(HttpStatus.CONFLICT, "이미 보낸 초안이에요");
+        }
+        draft.approve(content(request));
+    }
+
+    @Transactional
+    public QuizSummary sendDraft(Long userId, Long sessionId, Long draftId, CreateQuizRequest request) {
+        sessions.requireActiveTeacherForQuizWrite(userId, sessionId);
+        QuizDraftApproval draft = drafts.requireOwned(userId, sessionId, draftId);
+        QuizDraft approved = draft.approvedContent();
+        if (approved == null || !approved.equals(content(request))) {
+            throw new ApiException(HttpStatus.CONFLICT, "문제 내용과 정답을 다시 승인해 주세요");
+        }
+        if (draft.getSentQuizId() != null) {
+            return summary(sessionId, draft.getSentQuizId());
+        }
+        QuizSummary published = publish(sessionId, approved, request.timeLimitSec());
+        draft.markSent(published.id());
+        return published;
+    }
+
+    private static QuizDraft content(CreateQuizRequest req) {
         List<String> choices = null;
         Integer answerIndex = null;
         String modelAnswer = null;
@@ -103,21 +141,32 @@ public class QuizService {
             }
             modelAnswer = req.modelAnswer().strip();
         }
-        int limit = req.timeLimitSec() == null ? DEFAULT_TIME_LIMIT : req.timeLimitSec();
-        Quiz quiz = quizzes.save(new Quiz(sessionId, req.type(), req.question().strip(), choices, answerIndex,
-                modelAnswer, clock.instant().plusSeconds(limit)));
+        return new QuizDraft(req.type(), req.question().strip(), choices, answerIndex, modelAnswer);
+    }
+
+    private QuizSummary publish(Long sessionId, QuizDraft content, Integer timeLimitSec) {
+        int limit = timeLimitSec == null ? DEFAULT_TIME_LIMIT : timeLimitSec;
+        Quiz quiz = quizzes.save(new Quiz(sessionId, content.type(), content.question(), content.choices(),
+                content.answerIndex(), content.modelAnswer(), clock.instant().plusSeconds(limit)));
         events.toSession(sessionId, "quiz", quiz.getId());
-        return summaries(sessionId).getLast();
+        return summary(sessionId, quiz.getId());
+    }
+
+    private QuizSummary summary(Long sessionId, Long quizId) {
+        return summaries(sessionId).stream().filter(s -> s.id().equals(quizId)).findFirst().orElseThrow();
     }
 
     /**
-     * 목업 22 "AI로 문제 만들기": 저장하지 않고 초안만 돌려준다.
+     * 목업 22 "AI로 문제 만들기": AI 응답을 받은 뒤 승인 대상 식별자를 등록한다.
      * 선생님 확인 → 설정 조회 → QUIZ_GENERATE 한도 예약 순서라 권한 · 세션 오류는 한도를 쓰지 않는다 (PT-97).
      */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public QuizDraft generate(Long userId, Long sessionId, GenerateQuizRequest req) {
         sessions.requireTeacherOf(userId, sessionId);
         ChatSettings settings = sessions.chatSettings(userId, sessionId);
-        return quota.run(userId, AiFeature.QUIZ_GENERATE, () -> quizAi.generate(settings, req.type(), req.hint()));
+        QuizDraft generated = quota.run(userId, AiFeature.QUIZ_GENERATE,
+                () -> quizAi.generate(settings, req.type(), req.hint()));
+        return drafts.register(userId, sessionId, generated);
     }
 
     /** 목업 23: 질문별 정답률 (선생님). */
@@ -192,31 +241,30 @@ public class QuizService {
         Map<Long, String> names = users.namesOf(list.stream().map(QuizAnswer::getUserId).toList());
         return list.stream()
                 .map(a -> new AnswerRow(a.getId(), a.getUserId(), names.getOrDefault(a.getUserId(), "(알 수 없음)"),
-                        a.getChoiceIndex(), a.getText(), a.getCorrect(), a.getGradedBy(), a.getFeedback()))
+                        a.getChoiceIndex(), a.getText(), a.getCorrect(), a.getGradedBy(), a.getFeedback(),
+                        a.getAiOriginalCorrect(), a.getAiOriginalFeedback(), a.getTeacherCorrect()))
                 .toList();
     }
 
     /** 목업 24 "맞음/틀림으로 변경": 선생님 판정이 최종. */
     @Transactional
     public AnswerRow regrade(Long userId, Long answerId, boolean correct) {
-        QuizAnswer answer = answers.findById(answerId)
+        Long quizId = answers.findQuizIdByAnswerId(answerId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "응답을 찾을 수 없어요"));
-        Quiz quiz = findQuiz(answer.getQuizId());
+        Quiz quiz = findQuiz(quizId);
         sessions.requireActiveTeacherForQuizWrite(userId, quiz.getSessionId());
-        // AI 피드백은 판정이 그대로일 때만 남김 (정답으로 바꿨는데 "다시 생각해 보세요" 가 남으면 헷갈림).
-        // 채점 전(AI 실패 안내문)이었으면 지움.
-        String feedback = !answer.isPending() && Boolean.valueOf(correct).equals(answer.getCorrect())
-                ? answer.getFeedback() : null;
-        answer.grade(correct, GradedBy.TEACHER, feedback);
+        QuizAnswer answer = answers.findForGrading(answerId)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "응답을 찾을 수 없어요"));
+        answer.regradeByTeacher(correct);
         events.toUser(answer.getUserId(), "quizResult", quiz.getId());
         events.toTeacher(quiz.getSessionId(), "quizStats", quiz.getId());
         return answers(userId, quiz.getId()).stream().filter(r -> r.answerId().equals(answerId)).findFirst().orElseThrow();
     }
 
-    /** 커밋 뒤 가상 스레드에서. AI 호출 중에는 트랜잭션을 잡지 않는다 (저장은 save 한 번). */
+    /** 커밋 뒤 가상 스레드에서 호출하며 결과가 도착한 뒤에만 DB를 잠근다. */
     void gradeWithAi(Long answerId) {
         QuizAnswer answer = answers.findById(answerId).orElse(null);
-        if (answer == null || !answer.isPending()) {
+        if (answer == null || answer.getAiOriginalCorrect() != null) {
             return;
         }
         Quiz quiz = findQuiz(answer.getQuizId());
@@ -226,17 +274,9 @@ public class QuizService {
         } catch (RuntimeException e) {
             log.warn("quiz AI grading failed: answer={} {}", answerId, e.getClass().getSimpleName());
         }
-        // ponytail: 다시 읽고 저장 사이의 아주 짧은 틈에 선생님 채점이 겹치면 덮어쓸 수 있음 (@Version 으로 막을 수 있음)
-        QuizAnswer fresh = answers.findById(answerId).orElse(null);
-        if (fresh == null || !fresh.isPending()) {
-            return;   // 그사이 선생님이 먼저 채점함
+        if (!gradeWriter.saveAiResult(answerId, grade)) {
+            return;
         }
-        if (grade != null) {
-            fresh.grade(grade.correct(), GradedBy.AI, grade.feedback());
-        } else {
-            fresh.gradingFailed(AI_FAILED);
-        }
-        answers.save(fresh);
         events.toUser(answer.getUserId(), "quizResult", quiz.getId());
         events.toTeacher(quiz.getSessionId(), "quizStats", quiz.getId());
     }

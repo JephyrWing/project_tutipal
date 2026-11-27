@@ -35,6 +35,8 @@ import com.my.tutipal_back.common.realtime.SessionEvents;
 import com.my.tutipal_back.learning.quiz.repository.QuizAnswerRepository;
 import com.my.tutipal_back.learning.quiz.repository.QuizRepository;
 import com.my.tutipal_back.learning.quiz.service.QuizAi;
+import com.my.tutipal_back.learning.quiz.service.QuizDrafts;
+import com.my.tutipal_back.learning.quiz.service.QuizGradeWriter;
 import com.my.tutipal_back.learning.quiz.service.QuizService;
 import com.my.tutipal_back.sessions.dto.ChatSettings;
 import com.my.tutipal_back.sessions.service.StudySessionService;
@@ -56,7 +58,8 @@ class QuizGenerateQuotaWebTest {
         SecurityContextHolder.getContext().setAuthentication(login);
         when(sessions.chatSettings(2L, 10L)).thenReturn(new ChatSettings("수학", 3, false, false));
         var service = new QuizService(mock(QuizRepository.class), mock(QuizAnswerRepository.class), sessions,
-                mock(UserService.class), quizAi, mock(SessionEvents.class), quota);
+                mock(UserService.class), quizAi, mock(SessionEvents.class), quota,
+                mock(QuizDrafts.class), mock(QuizGradeWriter.class));
         mvc = MockMvcBuilders.standaloneSetup(new QuizController(service))
                 .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
                 .setControllerAdvice(new GlobalExceptionHandler())

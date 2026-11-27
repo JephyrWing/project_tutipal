@@ -50,6 +50,20 @@ public class QuizController {
         return service.generate(userId(me), sessionId, request);
     }
 
+    @PostMapping("/sessions/{sessionId}/quizzes/drafts/{draftId}/approve")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void approveDraft(@AuthenticationPrincipal OAuth2User me, @PathVariable Long sessionId,
+                             @PathVariable Long draftId, @Valid @RequestBody CreateQuizRequest request) {
+        service.approveDraft(userId(me), sessionId, draftId, request);
+    }
+
+    @PostMapping("/sessions/{sessionId}/quizzes/drafts/{draftId}/send")
+    @ResponseStatus(HttpStatus.CREATED)
+    public QuizSummary sendDraft(@AuthenticationPrincipal OAuth2User me, @PathVariable Long sessionId,
+                                 @PathVariable Long draftId, @Valid @RequestBody CreateQuizRequest request) {
+        return service.sendDraft(userId(me), sessionId, draftId, request);
+    }
+
     @GetMapping("/sessions/{sessionId}/quizzes")
     public List<QuizSummary> list(@AuthenticationPrincipal OAuth2User me, @PathVariable Long sessionId) {
         return service.list(userId(me), sessionId);

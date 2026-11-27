@@ -119,7 +119,7 @@
  */
 
 /**
- * @typedef {Object} QuizDraft
+ * @typedef {Object} QuizContent
  * @property {QuizType} type
  * @property {string} question
  * @property {string[] | null} choices
@@ -128,7 +128,11 @@
  */
 
 /**
- * @typedef {QuizDraft & Object} CreateQuizRequest
+ * @typedef {QuizContent & {draftId: number}} QuizDraft
+ */
+
+/**
+ * @typedef {QuizContent & Object} CreateQuizRequest
  * @property {number} timeLimitSec
  */
 
@@ -180,6 +184,9 @@
  * @property {boolean | null} correct
  * @property {GradedBy | null} gradedBy
  * @property {string | null} feedback
+ * @property {boolean | null} aiOriginalCorrect
+ * @property {string | null} aiOriginalFeedback
+ * @property {boolean | null} teacherCorrect
  */
 
 /**

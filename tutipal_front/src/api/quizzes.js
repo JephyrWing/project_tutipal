@@ -13,6 +13,10 @@ export const quizzes = {
     request(`/api/sessions/${sessionId}/quizzes`, send('POST', req)),
   generate: (sessionId, type, hint) =>
     request(`/api/sessions/${sessionId}/quizzes/generate`, send('POST', { type, hint })),
+  approveDraft: (sessionId, draftId, req) =>
+    request(`/api/sessions/${sessionId}/quizzes/drafts/${draftId}/approve`, send('POST', req)),
+  sendDraft: (sessionId, draftId, req) =>
+    request(`/api/sessions/${sessionId}/quizzes/drafts/${draftId}/send`, send('POST', req)),
   list: (sessionId) => request(`/api/sessions/${sessionId}/quizzes`),
   close: (quizId) => request(`/api/quizzes/${quizId}/close`, { method: 'POST' }),
   answers: (quizId) => request(`/api/quizzes/${quizId}/answers`),

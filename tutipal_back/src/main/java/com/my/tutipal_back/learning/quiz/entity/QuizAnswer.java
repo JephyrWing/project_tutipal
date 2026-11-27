@@ -41,6 +41,11 @@ public class QuizAnswer extends BaseTimeEntity {
     @Column(length = 500)
     private String feedback;
 
+    private Boolean aiOriginalCorrect;
+
+    @Column(length = 500)
+    private String aiOriginalFeedback;
+
     protected QuizAnswer() {
     }
 
@@ -57,11 +62,35 @@ public class QuizAnswer extends BaseTimeEntity {
         this.feedback = feedback;
     }
 
-    /** AI 채점 실패: 채점 전으로 두고 안내만 남김 (선생님이 채점). */
-    public void gradingFailed(String note) {
-        this.correct = null;
-        this.gradedBy = null;
+    public boolean recordAiGrade(boolean verdict, String note) {
+        if (aiOriginalCorrect != null) {
+            return false;
+        }
+        aiOriginalCorrect = verdict;
+        aiOriginalFeedback = note;
+        if (gradedBy == GradedBy.TEACHER) {
+            feedback = Boolean.valueOf(verdict).equals(correct) ? note : null;
+        } else {
+            grade(verdict, GradedBy.AI, note);
+        }
+        return true;
+    }
+
+    public void regradeByTeacher(boolean verdict) {
+        Boolean choice = verdict;
+        String compatibleFeedback = aiOriginalCorrect != null
+                ? (choice.equals(aiOriginalCorrect) ? aiOriginalFeedback : null)
+                : (!isPending() && choice.equals(correct) ? feedback : null);
+        grade(verdict, GradedBy.TEACHER, compatibleFeedback);
+    }
+
+    /** 채점 대기인 답안에만 AI 실패 안내를 표시한다. */
+    public boolean gradingFailed(String note) {
+        if (gradedBy != null || aiOriginalCorrect != null || note.equals(feedback)) {
+            return false;
+        }
         this.feedback = note;
+        return true;
     }
 
     public boolean isPending() { return gradedBy == null; }
@@ -73,4 +102,7 @@ public class QuizAnswer extends BaseTimeEntity {
     public Boolean getCorrect() { return correct; }
     public GradedBy getGradedBy() { return gradedBy; }
     public String getFeedback() { return feedback; }
+    public Boolean getAiOriginalCorrect() { return aiOriginalCorrect; }
+    public String getAiOriginalFeedback() { return aiOriginalFeedback; }
+    public Boolean getTeacherCorrect() { return gradedBy == GradedBy.TEACHER ? correct : null; }
 }
