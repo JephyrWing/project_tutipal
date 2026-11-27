@@ -18,7 +18,7 @@ public class RagSearchRepository {
 
     public boolean hasChunks(Long sessionId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
-                "SELECT EXISTS (SELECT 1 FROM materials WHERE session_id = ? AND indexed_at IS NOT NULL)",
+                "SELECT EXISTS (SELECT 1 FROM materials WHERE session_id = ? AND indexed_at IS NOT NULL AND NOT original_missing)",
                 Boolean.class, sessionId));
     }
 
@@ -27,7 +27,7 @@ public class RagSearchRepository {
                 SELECT m.filename, c.page, c.content, 1 - (c.embedding <=> ?::vector) AS sim
                 FROM material_chunks c JOIN materials m ON m.id = c.material_id
                 WHERE m.session_id = ? AND c.session_id = m.session_id
-                    AND m.indexed_at IS NOT NULL AND c.embedding_model = ?
+                    AND m.indexed_at IS NOT NULL AND NOT m.original_missing AND c.embedding_model = ?
                 ORDER BY c.embedding <=> ?::vector LIMIT ?""",
                 (rs, i) -> new RagHit(rs.getString(1), (Integer) rs.getObject(2), rs.getString(3), rs.getDouble(4)),
                 vector, sessionId, embeddingModel, vector, limit);
