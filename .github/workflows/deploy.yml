@@ -2,7 +2,7 @@ name: Build and deploy TUTIPAL
 
 on:
   push:
-    branches: [develop]
+    branches: [main]
     paths: ["tutipal_back/**", "tutipal_front/**", "tutipal_ai/**", "infra/**", ".github/workflows/**"]
   workflow_dispatch:
 
@@ -20,7 +20,7 @@ jobs:
   build-and-push:
     needs: checks
     # 기본은 CI만 실행. 서버와 Secrets 준비 후 Repository variable ENABLE_CD=true로 활성화한다.
-    if: vars.ENABLE_CD == 'true' && github.ref == 'refs/heads/develop'
+    if: vars.ENABLE_CD == 'true' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     strategy:
       matrix:

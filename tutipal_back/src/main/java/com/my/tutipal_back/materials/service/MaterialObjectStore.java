@@ -17,6 +17,8 @@ import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.S3Exception;
@@ -54,20 +56,60 @@ public class MaterialObjectStore {
         this.mode = mode; this.root = Path.of(root).toAbsolutePath().normalize(); this.bucket = bucket; this.region = region;
         if (mode.equals("s3") && bucket.isBlank()) throw new IllegalArgumentException("S3_BUCKET이 필요합니다");
     }
-    private S3Client s3() { return S3Client.builder().region(Region.of(region)).build(); }
+    S3Client s3() { return S3Client.builder().region(Region.of(region)).build(); }
     private Path local(String key) {
         Path p = root.resolve(key).normalize();
         if (!p.startsWith(root)) throw new IllegalArgumentException("잘못된 저장소 경로");
         return p;
     }
-    public String put(byte[] data) {
-        String key = "materials/" + UUID.randomUUID();
+    String newKey() {
+        return "materials/" + UUID.randomUUID();
+    }
+
+    String scope() {
+        return mode.equals("s3") ? "s3:" + bucket : "local:" + root;
+    }
+
+    void put(String key, byte[] data) {
         try {
             if (mode.equals("s3")) try (S3Client client = s3()) {
                 client.putObject(PutObjectRequest.builder().bucket(bucket).key(key).contentType("application/octet-stream").build(), RequestBody.fromBytes(data));
             } else { Path p = local(key); Files.createDirectories(p.getParent()); Files.write(p, data); }
-            return key;
         } catch (Exception e) { throw unavailable(); }
+    }
+
+    boolean exists(String key) {
+        try {
+            if (mode.equals("s3")) {
+                try (S3Client client = s3()) {
+                    try {
+                        client.headObject(HeadObjectRequest.builder().bucket(bucket).key(key).build());
+                    } catch (S3Exception e) {
+                        if (e.statusCode() != 404) {
+                            throw e;
+                        }
+                        // A missing or unreachable bucket cannot establish that an individual key is missing.
+                        try {
+                            client.headBucket(HeadBucketRequest.builder().bucket(bucket).build());
+                        } catch (Exception bucketFailure) {
+                            ReadFailureKind kind = classifyReadFailure(bucketFailure);
+                            throw new ReadFailure(kind == ReadFailureKind.MISSING ? ReadFailureKind.UNKNOWN : kind);
+                        }
+                        return false;
+                    }
+                }
+            } else {
+                Files.readAttributes(local(key), java.nio.file.attribute.BasicFileAttributes.class);
+            }
+            return true;
+        } catch (ReadFailure e) {
+            throw e;
+        } catch (NoSuchFileException e) {
+            return false;
+        } catch (Exception e) {
+            ReadFailureKind kind = classifyReadFailure(e);
+            throw new ReadFailure(kind == ReadFailureKind.MISSING ? ReadFailureKind.UNKNOWN : kind);
+        }
     }
     public byte[] get(String key) {
         try {

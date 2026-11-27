@@ -1,10 +1,12 @@
 import { test, expect, login } from './fixtures.js'
+import { installSyntheticAnalysis, startSyntheticAnalysis } from './synthetic-analysis.js'
 
 async function widget(app) {
   await expect.poll(() => app.application.windows().some(p => p.url().endsWith('/widget'))).toBe(true)
   const page = app.application.windows().find(p => p.url().endsWith('/widget'))
   await expect(page.getByText('꺼짐', { exact: true })).toBeVisible()
   await page.clock.install()
+  await installSyntheticAnalysis(app)
   // Synthetic capture only: this suite must never read the user's desktop.
   await app.application.evaluate(({ ipcMain }) => {
     globalThis.reviewCapture = { count: 0, gone: false }
@@ -21,10 +23,12 @@ async function widget(app) {
   return page
 }
 async function start(app) {
-  await app.page.evaluate(() => window.desktop.setScreenSettings({ enabled: true, sourceId: 'window:synthetic', sourceName: '합성 학습 창' }))
+  await startSyntheticAnalysis(app)
 }
 async function deleteAll(app) {
-  await app.page.goto(new URL('/settings', app.page.url()).href)
+  if (new URL(app.page.url()).pathname !== '/settings') {
+    await app.page.goto(new URL('/settings', app.page.url()).href)
+  }
   await app.page.getByRole('tab', { name: '복습 기록', exact: true }).click()
   await app.page.getByRole('button', { name: '기록 전체 삭제', exact: true }).click()
   await app.page.getByRole('button', { name: '삭제', exact: true }).click()
@@ -74,6 +78,9 @@ test('위젯 제안을 일시정지·분석 끄기·실제 전체삭제 후 정�
 test('수집 응답이 삭제보다 늦어도 이전 제안·후속 요약 수집을 되살리지 않음', async ({ apps }) => {
   const app = await apps.launch(); await login(app, 9)
   const page = await widget(app)
+  // Main navigation legitimately starts analysis for the new context. Complete
+  // that navigation before holding the one observation involved in this race.
+  await app.page.goto(new URL('/settings', app.page.url()).href)
   await page.route('**/api/screen', r => fulfill(r, { text: '합성 요약' }))
   let release
   const gate = new Promise(resolve => { release = resolve })

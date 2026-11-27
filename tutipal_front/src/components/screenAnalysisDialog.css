@@ -1,0 +1,23 @@
+.screen-analysis-dialog {
+  box-sizing: border-box;
+  width: calc(100% - 16px);
+  max-width: 560px;
+  max-height: calc(100% - 16px);
+  margin: auto;
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  color: var(--text, #202838);
+  -webkit-app-region: no-drag;
+}
+.screen-analysis-dialog::backdrop { background: rgba(31, 38, 51, .35); }
+.screen-analysis-dialog header { position: sticky; top: -14px; padding: 6px 0; background: var(--surface, #fff); display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.screen-analysis-dialog h2 { margin: 0; font-size: 17px; }
+.screen-analysis-dialog h3 { font-size: 14px; margin: 12px 0 6px; }
+.screen-analysis-summary, .screen-analysis-answer { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; }
+.screen-analysis-notice { font-size: 13px; }
+.screen-analysis-dialog .widget-ask { flex-wrap: wrap; }
+.screen-analysis-dialog .widget-ask input { flex-basis: 100%; }
+.screen-analysis-dialog button:focus-visible, .screen-analysis-dialog input:focus-visible { outline: 2px solid var(--primary, #4668dc); outline-offset: 2px; }

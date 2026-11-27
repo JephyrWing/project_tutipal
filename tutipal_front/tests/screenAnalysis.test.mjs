@@ -3,6 +3,28 @@ import assert from 'node:assert/strict'
 import { createScreenAnalysis } from '../src/utils/screenAnalysis.js'
 
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r }); return { promise, resolve } }
+
+test('display result is cleared before a changed frame fails, never replaced by an error', async () => {
+  const results = []; let calls = 0
+  const { engine } = setup({ onResult: value => results.push(value),
+    capture: async () => ({status:'ok', changed:true, image:'synthetic'}),
+    describe: async () => { if (++calls === 2) throw Error('failed'); return 'current summary' } })
+  await engine.look(); assert.equal(results.at(-1), 'current summary')
+  await engine.look(); assert.equal(results.at(-1), null)
+})
+
+for (const boundary of ['pause', 'reset', 'delete']) test(`display result ${boundary} clears and ignores late completion`, async () => {
+  const results = [], pending = deferred(); let calls = 0
+  const { engine } = setup({ onResult: value => results.push(value),
+    capture: async () => ({status:'ok', changed:true, image:'synthetic'}),
+    describe: () => ++calls === 1 ? Promise.resolve('old') : pending.promise })
+  await engine.look(); const flight = engine.look(); await Promise.resolve()
+  if (boundary === 'pause') engine.setRunning(false)
+  else if (boundary === 'delete') engine.deletion(true)
+  else engine.reset()
+  pending.resolve('late'); await flight
+  assert.equal(results.at(-1), null); assert.ok(!results.includes('late'))
+})
 function setup(overrides = {}) {
   const seen = { captures: 0, descriptions: 0, records: [], answers: [], suggestions: [], errors: [], gone: [] }
   const engine = createScreenAnalysis({
@@ -216,4 +238,27 @@ test('late rejected model cannot replace the new answer with an error', async ()
   const first=engine.look(); await Promise.resolve(); engine.reset(); await engine.look()
   reject(Error('late failure')); await first
   assert.deepEqual(seen.answers,['new']); assert.deepEqual(seen.errors,[])
+})
+
+test('chat context contains only the latest automatic summary, never question answers',async()=>{
+ const {engine}=setup({describe:async(_,q)=>q?'QUESTION ANSWER':'SCREEN SUMMARY'})
+ assert.equal(await engine.summaryForChat(),undefined)
+ await engine.look();assert.equal(await engine.summaryForChat(),'SCREEN SUMMARY')
+ await engine.look('q');assert.equal(await engine.summaryForChat(),'SCREEN SUMMARY')
+ engine.setRunning(false);assert.equal(await engine.summaryForChat(),undefined)
+ engine.setRunning(true);assert.equal(await engine.summaryForChat(),undefined)
+})
+test('a changed frame whose analysis fails cannot reuse its previous summary',async()=>{
+ let count=0
+ const {engine}=setup({capture:async()=>({status:'ok',changed:true,image:'synthetic'}),describe:async()=>{if(++count>1)throw Error('failed');return'old'}})
+ await engine.look();assert.equal(await engine.summaryForChat(),'old')
+ await engine.look();assert.equal(await engine.summaryForChat(),undefined)
+})
+test('summary lookup cannot carry a late snapshot across reset or closure',async()=>{
+ let status='ok'
+ const {engine,seen}=setup({checkTarget:async()=>({status})})
+ await engine.look();const lookup=engine.summaryForChat();engine.reset()
+ assert.equal(await lookup,undefined)
+ await engine.look();status='gone';assert.equal(await engine.summaryForChat(),undefined)
+ assert.deepEqual(seen.gone,[true])
 })

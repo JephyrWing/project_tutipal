@@ -3,7 +3,7 @@ const {
   app, BrowserWindow, ipcMain, Menu, nativeImage, powerMonitor, screen, session, shell, Tray,
 } = require('electron')
 const { finishBrowserLogin, startBrowserLogin } = require('./applogin.cjs')
-const { capture, listSources, loadSettings, saveSettings, targetStatus } = require('./screen.cjs')
+const { capture, listSources, loadSettings, saveSettings, targetStatus, previewSource, cancelPreview, cancelAnalysisCapture } = require('./screen.cjs')
 const { chooseShareSource, forwardDraw, installDisplayMediaHandler, showOverlay,
   helpShareSources, prepareHelpShare, setHelpShareVideoSize } = require('./share.cjs')
 const { startBridge } = require('./bridge.cjs')
@@ -11,6 +11,7 @@ const { loadServerUrl } = require('./serverConfig.cjs')
 const { createFocusCollector } = require('./focusCollector.cjs')
 const { canProbe, startFocusProbe } = require('./focusProbe.cjs')
 const { createFocusTransport } = require('./focusTransport.cjs')
+const { widgetChatContext } = require('./widgetChatContext.cjs')
 
 /**
  * Spring 업무 서버 주소. React 화면은 설치 패키지의 dist에 내장한다.
@@ -85,6 +86,9 @@ function createMainWindow() {
   })
   bridge.own(win.webContents)
   harden(win.webContents)
+  const notifyChatContext = () => widgetWindow?.webContents.send('widget-chat-context-changed')
+  win.webContents.on('did-navigate', notifyChatContext)
+  win.webContents.on('did-navigate-in-page', notifyChatContext)
   void win.loadURL(BASE.href)
   win.on('closed', () => {
     mainWindow = null
@@ -260,6 +264,10 @@ if (!app.requestSingleInstanceLock()) {
       const t = typeof topic === 'string' && TOPICS.has(topic) ? topic : ''
       showMain(t ? `/chat?topic=${t}` : '/chat')
     })
+    ipcMain.handle('widget-chat-context', event => {
+      if (!fromOurPage(event)) throw new Error('허용되지 않은 요청이에요.')
+      return widgetChatContext(mainWindow?.webContents.getURL() || BASE.href, BASE)
+    })
     ipcMain.on('toggle-widget', (event) => {
       if (fromOurPage(event)) toggleWidget()
     })
@@ -280,6 +288,14 @@ if (!app.requestSingleInstanceLock()) {
       widgetWindow?.webContents.send('screen-settings-changed')
       return saved
     })
+    ipcMain.handle('screen-preview', async (event, sourceId) => {
+      if (!fromOurPage(event) || typeof sourceId !== 'string') throw new Error('허용되지 않은 요청이에요.')
+      const pending = previewSource(sourceId)
+      for (const win of BrowserWindow.getAllWindows()) win.webContents.send('screen-settings-changed')
+      return await pending
+    })
+    ipcMain.handle('screen-capture-cancel', event => { if (fromOurPage(event)) cancelAnalysisCapture() })
+    ipcMain.handle('screen-preview-cancel', event => { if (fromOurPage(event)) cancelPreview() })
     ipcMain.handle('screen-capture', (event) => (fromOurPage(event) ? capture() : { status: 'off' }))
     ipcMain.handle('screen-target-status', (event, sourceId) => (fromOurPage(event) ? targetStatus(typeof sourceId === 'string' ? sourceId : undefined) : { status: 'off' }))
     // Only trusted pages can suspend collection around record deletion.

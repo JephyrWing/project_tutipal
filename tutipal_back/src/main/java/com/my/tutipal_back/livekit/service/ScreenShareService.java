@@ -92,6 +92,7 @@ public class ScreenShareService {
     public HelpResponse accept(Long userId, Long helpId) {
         HelpRequest help = findOpenForUpdate(helpId);
         sessions.requireTeacherOf(userId, help.getSessionId());
+        sessions.requireActiveRole(userId, help.getSessionId());
         if (help.getStatus() != Status.PENDING) {
             throw new ApiException(HttpStatus.CONFLICT, "이미 처리된 요청이에요");
         }
@@ -108,6 +109,7 @@ public class ScreenShareService {
     public void later(Long userId, Long helpId) {
         HelpRequest help = findOpenForUpdate(helpId);
         sessions.requireTeacherOf(userId, help.getSessionId());
+        sessions.requireActiveRole(userId, help.getSessionId());
         if (help.getStatus() != Status.PENDING) {
             throw new ApiException(HttpStatus.CONFLICT, "진행 중인 도움은 '종료' 로 끝내 주세요");
         }
@@ -122,6 +124,7 @@ public class ScreenShareService {
         if (!help.getUserId().equals(userId)) {
             sessions.requireTeacherOf(userId, help.getSessionId());
         }
+        sessions.requireActiveRole(userId, help.getSessionId());
         help.moveTo(Status.DONE);
         notifyBoth(help, "helpEnded");
     }
