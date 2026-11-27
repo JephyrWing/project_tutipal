@@ -1,12 +1,16 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
+import { spawn } from 'node:child_process'
 import { mkdtemp, access, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { cleanupElectronItems, releaseFixtureMedia } from './helpers/electronCleanup.mjs'
 
 const pending = () => new Promise(() => {})
+// These accelerated unit deadlines also cover real temporary-directory IO.
+// Keep them independent of the production fixture's unchanged 5000ms deadline.
+const unitTimeoutMs = 200
 async function item(overrides = {}) {
   const profile = await mkdtemp(path.join(os.tmpdir(), 'tutipal-e2e-profile-'))
   const child = new EventEmitter()
@@ -35,8 +39,8 @@ test('connected media disconnects after local tracks and videos are released', a
 })
 test('hung renderer cleanup fails explicitly but both Electron instances and profiles are still cleaned', async () => {
   const a = await item(), b = await item(); a.page.evaluate = pending
-  await assert.rejects(cleanupElectronItems([a, b], { timeoutMs: 20 }), error => {
-    assert.equal(error.results.filter(r => r.outcome === 'failed').length, 1)
+  await assert.rejects(cleanupElectronItems([a, b], { timeoutMs: unitTimeoutMs }), error => {
+    assert.equal(error.results.filter(r => r.outcome === 'failed').length, 1, JSON.stringify(error.results))
     assert.equal(error.results.find(r => r.outcome === 'failed').stage, 'renderer-media')
     assert.equal(error.results.filter(r => r.stage === 'profile-remove' && r.outcome === 'passed').length, 2)
     return true
@@ -45,7 +49,7 @@ test('hung renderer cleanup fails explicitly but both Electron instances and pro
 })
 test('hung app close stops only its owned child, removes its exited profile, and retains the failure', async () => {
   const a = await item(); a.application.close = pending
-  await assert.rejects(cleanupElectronItems([a], { timeoutMs: 20 }), error => {
+  await assert.rejects(cleanupElectronItems([a], { timeoutMs: unitTimeoutMs }), error => {
     assert.equal(error.results.find(r => r.stage === 'electron-close').outcome, 'failed')
     assert.equal(error.results.find(r => r.stage === 'owned-process-exit').outcome, 'passed')
     return true
@@ -54,7 +58,7 @@ test('hung app close stops only its owned child, removes its exited profile, and
 })
 test('a resolved close with a still-live process is detected before removing the profile', async () => {
   const a = await item(); a.application.close = async () => {}
-  await assert.rejects(cleanupElectronItems([a], { timeoutMs: 20 }), error => {
+  await assert.rejects(cleanupElectronItems([a], { timeoutMs: unitTimeoutMs }), error => {
     assert.equal(error.results.find(r => r.stage === 'electron-exit').outcome, 'failed')
     assert.equal(error.results.find(r => r.stage === 'owned-process-exit').outcome, 'passed')
     return true
@@ -72,7 +76,7 @@ test('a child ignoring SIGTERM is killed by its owned handle, with both timeout 
   const a = await item(); a.application.close = pending
   const child = a.application.process(), signals = []
   child.kill = signal => { signals.push(signal ?? 'SIGTERM'); if (signal === 'SIGKILL') { child.signalCode = signal; child.emit('exit', null, signal) } return true }
-  await assert.rejects(cleanupElectronItems([a], { timeoutMs: 20 }), error => {
+  await assert.rejects(cleanupElectronItems([a], { timeoutMs: unitTimeoutMs }), error => {
     assert.equal(error.results.filter(r => r.outcome === 'failed').length, 2)
     assert.equal(error.results.find(r => r.stage === 'owned-process-kill').outcome, 'passed'); return true
   })
@@ -87,5 +91,56 @@ test('a profile outside the fixture prefix is preserved and reported as a cleanu
   } finally {
     assert.equal(path.dirname(profile), os.tmpdir()); assert.ok(path.basename(profile).startsWith('pt45-preserved-'))
     await rm(profile, { recursive: true }); await rm(ownProfile, { recursive: true })
+  }
+})
+
+test('a permanently live child retains its profile and releases every exit listener after deadlines', async () => {
+  const a = await item(); a.application.close = pending
+  const child = a.application.process(); child.kill = () => true
+  try {
+    await assert.rejects(cleanupElectronItems([a], { timeoutMs: unitTimeoutMs }), error => {
+      assert.deepEqual(error.results.filter(r => r.outcome === 'failed').map(r => r.stage),
+        ['electron-close', 'owned-process-exit', 'owned-process-kill'])
+      assert.ok(error.results.every(r => r.startedAt && r.finishedAt))
+      assert.equal(error.results.some(r => r.stage === 'profile-remove'), false)
+      return true
+    })
+    assert.equal(child.listenerCount('exit'), 0)
+    await access(a.profile)
+  } finally {
+    assert.equal(path.dirname(a.profile), os.tmpdir())
+    assert.ok(path.basename(a.profile).startsWith('tutipal-e2e-profile-'))
+    await rm(a.profile, { recursive: true })
+  }
+})
+
+test('cleanup errors retain stage and outcome without reporting source URLs or credentials', async () => {
+  const a = await item()
+  a.page.evaluate = async () => { throw Error('https://private.invalid/?token=secret cookie=private') }
+  await assert.rejects(cleanupElectronItems([a]), error => {
+    assert.equal(error.results[0].stage, 'renderer-media')
+    assert.equal(error.results[0].error, 'error')
+    assert.ok(!JSON.stringify(error.results).includes('private'))
+    assert.ok(!error.message.includes('secret'))
+    return true
+  })
+  await assert.rejects(access(a.profile))
+})
+
+test('an actual owned child exits before profile deletion while a hung close remains a failure', async () => {
+  const a = await item()
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { windowsHide: true, stdio: 'ignore' })
+  await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
+  a.application = { process: () => child, close: pending }
+  try {
+    await assert.rejects(cleanupElectronItems([a], { timeoutMs: 500 }), error => {
+      assert.equal(error.results.find(r => r.stage === 'electron-close').outcome, 'failed')
+      assert.equal(error.results.find(r => r.stage === 'owned-process-exit').outcome, 'passed')
+      return true
+    })
+    assert.ok(child.exitCode !== null || child.signalCode !== null)
+    await assert.rejects(access(a.profile))
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
   }
 })

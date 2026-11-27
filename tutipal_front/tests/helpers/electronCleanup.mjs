@@ -4,11 +4,32 @@ import path from 'node:path'
 
 export async function withDeadline(action, ms, stage) {
   let timer
+  const controller = new AbortController()
   try {
-    return await Promise.race([Promise.resolve().then(action), new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`${stage} timed out after ${ms}ms`)), ms)
+    return await Promise.race([Promise.resolve().then(() => action(controller.signal)), new Promise((_, reject) => {
+      timer = setTimeout(() => reject(Object.assign(new Error(`${stage} timed out after ${ms}ms`), { code: 'CLEANUP_TIMEOUT' })), ms)
     })])
-  } finally { clearTimeout(timer) }
+  } finally { clearTimeout(timer); controller.abort() }
+}
+
+function waitForOwnedExit(child, signal, killSignal) {
+  return new Promise((resolve, reject) => {
+    const done = error => {
+      child.removeListener('exit', onExit)
+      signal.removeEventListener('abort', onAbort)
+      if (error) reject(error); else resolve()
+    }
+    const onExit = () => done()
+    const onAbort = () => done(new Error('Owned exit wait ended'))
+    child.once('exit', onExit)
+    signal.addEventListener('abort', onAbort, { once: true })
+    try {
+      if (child.exitCode !== null || child.signalCode !== null) done()
+      else if (killSignal && !child.kill(killSignal) && child.exitCode === null && child.signalCode === null) {
+        done(new Error('Could not stop owned Electron process'))
+      }
+    } catch (error) { done(error) }
+  })
 }
 
 // Self-contained because Playwright serializes this function into the renderer.
@@ -31,11 +52,15 @@ export async function cleanupElectronItems(items, { timeoutMs = 5000, onStage = 
     const start = Date.now()
     try {
       const detail = await withDeadline(action, timeoutMs, name)
-      const result = { index, stage: name, outcome: 'passed', ms: Date.now() - start, detail }
+      const result = { index, stage: name, outcome: 'passed', ms: Date.now() - start,
+        startedAt: new Date(start).toISOString(), finishedAt: new Date().toISOString(), detail }
       results.push(result); onStage(result); return true
     } catch (error) {
-      const result = { index, stage: name, outcome: 'failed', ms: Date.now() - start, error: error.message }
-      results.push(result); onStage(result); errors.push(new Error(`app ${index} ${name}: ${error.message}`)); return false
+      // Playwright errors can contain request URLs, cookies or profile paths.
+      const reason = error?.code === 'CLEANUP_TIMEOUT' ? 'timeout' : 'error'
+      const result = { index, stage: name, outcome: 'failed', ms: Date.now() - start, error: reason,
+        startedAt: new Date(start).toISOString(), finishedAt: new Date().toISOString() }
+      results.push(result); onStage(result); errors.push(new Error(`app ${index} ${name}: ${reason}`)); return false
     }
   }
   for (const [index, item] of items.entries()) {
@@ -56,21 +81,15 @@ export async function cleanupElectronItems(items, { timeoutMs = 5000, onStage = 
         const child = item.application.process()
         const closed = await stage(index, 'electron-close', () => item.application.close())
         if (closed && child.exitCode === null && child.signalCode === null) {
-          await stage(index, 'electron-exit', () => new Promise(resolve => child.once('exit', resolve)))
+          await stage(index, 'electron-exit', signal => waitForOwnedExit(child, signal))
         }
         if (child.exitCode === null && child.signalCode === null) {
           // Only the process returned by this fixture's launch is eligible.
           // Recovery does not erase the failed close stage or make the test pass.
-          await stage(index, 'owned-process-exit', () => new Promise((resolve, reject) => {
-            child.once('exit', resolve)
-            if (!child.kill()) reject(new Error('Could not stop owned Electron process'))
-          }))
+          await stage(index, 'owned-process-exit', signal => waitForOwnedExit(child, signal, 'SIGTERM'))
         }
         if (child.exitCode === null && child.signalCode === null) {
-          await stage(index, 'owned-process-kill', () => new Promise((resolve, reject) => {
-            child.once('exit', resolve)
-            if (!child.kill('SIGKILL')) reject(new Error('Could not kill owned Electron process'))
-          }))
+          await stage(index, 'owned-process-kill', signal => waitForOwnedExit(child, signal, 'SIGKILL'))
         }
         if (child.exitCode === null && child.signalCode === null) continue // never delete a live profile
       }

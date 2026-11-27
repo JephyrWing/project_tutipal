@@ -40,7 +40,9 @@ test.afterEach(async ({}, testInfo) => {
       console.log('LiveKit cleanup ' + JSON.stringify(result))
     } })
   } finally {
-    await testInfo.attach('fixture-cleanup.json', { body: JSON.stringify(observations), contentType: 'application/json' })
+    const evidence = testInfo.outputPath('fixture-cleanup.json')
+    await writeFile(evidence, JSON.stringify(observations))
+    await testInfo.attach('fixture-cleanup.json', { path: evidence, contentType: 'application/json' })
   }
 })
 
