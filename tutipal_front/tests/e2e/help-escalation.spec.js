@@ -15,7 +15,10 @@ const reply = event => sse([
 ])
 
 async function mockTutor(app, event = agentEvent()) {
-  await app.page.route('**/api/tutor/chat', route => route.fulfill({ contentType: 'text/event-stream', body: reply(event) }))
+  await app.page.route('**/api/conversations/*/messages', route => {
+    if (route.request().method() !== 'POST') return route.continue()
+    return route.fulfill({ contentType: 'text/event-stream', body: reply(event).replace('event: done', 'event: saved\ndata: {"userMessageId":"mock-q","assistantMessageId":"mock-a"}\n\nevent: done') })
+  })
 }
 
 /** 이 페이지에서 나가는 도움 요청 생성(POST /api/sessions/{id}/help) 본문을 모은다. */

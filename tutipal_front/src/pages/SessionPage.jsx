@@ -5,7 +5,7 @@ import { useSessionEvents } from '../api/realtime'
 import { sessions } from '../api/sessions'
 import Icon from '../components/Icon'
 import Mascot from '../components/Mascot'
-import { ChatPanel } from './ChatPage'
+import SessionStoredChat from './SessionStoredChat'
 import SubjectPicker from '../components/SubjectPicker'
 import AiRetentionInput from '../components/AiRetentionInput'
 import { parseAiRetentionDays } from '../utils/aiRetention'
@@ -168,7 +168,7 @@ function StudentView({ session, reload }) {
         <button role="tab" aria-selected={tab === 'board'} onClick={() => setTab('board')}>게시판</button>
         <button role="tab" aria-selected={tab === 'materials'} onClick={() => setTab('materials')}>자료</button>
       </nav>
-      {tab === 'chat' && <ChatPanel topic={session.topic} sessionId={session.id}
+      {tab === 'chat' && <SessionStoredChat topic={session.topic} sessionId={session.id}
         onRequestHelp={(text) => setHelpDraft((d) => ({ text, sessionId: session.id, seq: (d?.seq ?? 0) + 1 }))} />}
       {tab === 'live' && <StudentLiveTab sessionId={session.id} />}
       {tab === 'notice' && <NoticesPanel sessionId={session.id} teacher={false} reloadKey={keys.notice} />}
