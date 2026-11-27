@@ -64,3 +64,6 @@ jobs:
       - name: Verify actual analysis consent UI with mock API
         working-directory: tutipal_front
         run: node tests/analysis-consent-ui.mjs
+      - name: Verify analysis authentication boundary and question drafts
+        working-directory: tutipal_front
+        run: node tests/analysis-session-ui.mjs

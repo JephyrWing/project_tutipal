@@ -3,7 +3,7 @@ const {
   app, BrowserWindow, ipcMain, Menu, nativeImage, powerMonitor, screen, session, shell, Tray,
 } = require('electron')
 const { finishBrowserLogin, startBrowserLogin } = require('./applogin.cjs')
-const { capture, listSources, loadSettings, saveSettings, targetStatus, previewSource, cancelPreview, cancelAnalysisCapture } = require('./screen.cjs')
+const { capture, listSources, loadSettings, saveSettings, targetStatus, previewSource, cancelPreview, cancelAnalysisCapture, stopAnalysis } = require('./screen.cjs')
 const { chooseShareSource, forwardDraw, installDisplayMediaHandler, showOverlay,
   helpShareSources, prepareHelpShare, setHelpShareVideoSize } = require('./share.cjs')
 const { startBridge } = require('./bridge.cjs')
@@ -28,6 +28,23 @@ const PROTOCOL = 'tutipal'
 let mainWindow = null
 let widgetWindow = null
 let tray = null
+let screenReturnPath = '/'
+
+function stopScreenAnalysis() {
+  screenReturnPath = '/'
+  try { stopAnalysis() } finally {
+    for (const win of BrowserWindow.getAllWindows()) win.webContents.send('screen-settings-changed')
+  }
+}
+
+function openScreenConsent() {
+  const current = mainWindow?.webContents.getURL()
+  if (current && isOurPage(current)) {
+    const route = new URL(current)
+    if (route.pathname !== '/screen-consent') screenReturnPath = /^\/sessions\/[1-9]\d*\/?$/.test(route.pathname) ? route.pathname : '/'
+  }
+  showMain('/screen-consent')
+}
 let pendingDeepLink = process.argv.find((value) => value.startsWith(`${PROTOCOL}://`))
 // PT-90 집중도 수집 (학생이 수업 화면에서 시작한 동안만). focusOwner = 시작한 화면
 let focus = null
@@ -220,7 +237,7 @@ function createTray() {
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: '열기', click: () => showMain() },
     { label: '캐릭터 위젯 보이기/숨기기', click: () => toggleWidget() },
-    { label: '화면 분석 설정', click: () => showMain('/screen-consent') },
+    { label: '화면 분석 설정', click: openScreenConsent },
     { type: 'separator' },
     { label: '종료', click: () => app.quit() },
   ]))
@@ -250,8 +267,12 @@ if (!app.requestSingleInstanceLock()) {
   })
 
   app.whenReady().then(async () => {
-    bridge = await startBridge(BACKEND)
+    bridge = await startBridge(BACKEND, { onAuthBoundary: stopScreenAnalysis })
     BASE = bridge.base
+    session.defaultSession.cookies.on('changed', (_event, cookie) => {
+      const domain = cookie.domain?.replace(/^\./, '')
+      if (cookie.name === 'TUTIPAL_SESSION' && (!domain || BACKEND.hostname === domain || BACKEND.hostname.endsWith('.' + domain))) bridge.invalidateAuth()
+    })
     // 권한은 화면 공유(display-capture, 우리 페이지에서만)만 허용. 카메라 · 마이크 · 알림 등은 모두 거절.
     // 실제로 어떤 창을 공유할지는 share.ts 의 setDisplayMediaRequestHandler 가 정한다
     session.defaultSession.setPermissionRequestHandler((wc, permission, callback) =>
@@ -272,7 +293,16 @@ if (!app.requestSingleInstanceLock()) {
       if (fromOurPage(event)) toggleWidget()
     })
     ipcMain.on('open-screen-consent', (event) => {
-      if (fromOurPage(event)) showMain('/screen-consent')
+      if (fromOurPage(event)) openScreenConsent()
+    })
+    ipcMain.handle('screen-analysis-stop', event => {
+      if (fromOurPage(event)) bridge.invalidateAuth()
+    })
+    ipcMain.handle('screen-consent-complete', event => {
+      if (!fromOurPage(event) || new URL(event.sender.getURL()).pathname !== '/screen-consent') return
+      const target = screenReturnPath
+      screenReturnPath = '/'
+      showMain(target)
     })
     ipcMain.on('open-review', (event, id) => {
       if (fromOurPage(event) && Number.isSafeInteger(id) && (id) > 0) showMain(`/review?explain=${id}`)

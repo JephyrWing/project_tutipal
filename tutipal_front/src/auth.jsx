@@ -4,13 +4,20 @@ import { advanceAuthGeneration, api, AUTH_EXPIRED_EVENT } from './api/client'
 import { createAuthSession, initialAuthState } from './utils/authSession'
 
 const AuthContext = createContext(null)
+const stopAnalysis = () => { void window.desktop?.stopScreenAnalysis?.().catch(() => undefined) }
 
 export function AuthProvider({ children }) {
   const [state, setState] = useState(initialAuthState)
   const session = useRef(null)
   const refresh = useCallback(() => session.current?.refresh(), [])
-  const logout = useCallback(() => session.current?.logout(), [])
+  const logout = useCallback(() => { stopAnalysis(); return session.current?.logout() }, [])
   const updateName = useCallback(name => session.current?.updateName(name), [])
+  const previousAccount = useRef(null)
+  useEffect(() => {
+    const current = state.me?.id ?? null
+    if (previousAccount.current !== null && previousAccount.current !== current) stopAnalysis()
+    previousAccount.current = current
+  }, [state.me?.id])
 
   useEffect(() => {
     const control = createAuthSession({ api, onChange: setState, onBoundary: advanceAuthGeneration })

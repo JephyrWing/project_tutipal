@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ApiRequestError, formatRetryTime, isQuotaError } from '../api/client'
+import { ApiRequestError, AUTH_EXPIRED_EVENT, formatRetryTime, isQuotaError } from '../api/client'
 import { reviewApi } from '../api/review'
 import { screenApi } from '../api/screen'
 import { streamChat } from '../api/tutor'
@@ -54,9 +54,8 @@ export default function WidgetPage() {
     checkTarget: (sourceId) => desktop.getScreenTargetStatus(sourceId),
     onResult: result => {
       setAnalysisSummary(result)
-      if (!result) { setDetailOpen(false); setQuestion(''); setFailedQuestion(null); lastQuestion.current = '' }
     },
-    onInvalidate: () => { void desktop?.cancelScreenCapture?.(); chat.current?.reset(); setFailedQuestion(null); lastQuestion.current = ''; setText(''); setSuggestion(null); setAsking(false); setQuestion(''); setMood('happy') },
+    onInvalidate: () => { void desktop?.cancelScreenCapture?.(); chat.current?.reset(); setDetailOpen(false); setFailedQuestion(null); lastQuestion.current = ''; setText(''); setSuggestion(null); setAsking(false); setQuestion(''); setMood('happy') },
     observe: (summary, seconds) => reviewApi.observe(summary, seconds),
     onAnswer: (answer) => { if (!chat.current?.busy()) { setText(answer); setMood('happy') } },
     onSuggestion: setSuggestion,
@@ -68,6 +67,7 @@ export default function WidgetPage() {
     // 멈춘 동안 다음 주기(창을 다시 고른 뒤 · 질문 답을 보여 준 뒤 포함)마다 안내를 다시 띄운다
     onPaused: showAutoPaused,
     onError: (error, asked) => {
+      if (error instanceof ApiRequestError && error.status === 401) { expireAnalysis(); return }
       if (!asked && error instanceof ApiRequestError && error.status === 503) return
       if (isQuotaError(error)) {
         // 자동 요약은 엔진이 기다릴 시간만큼 멈췄다가 스스로 다시 시작하고, 질문 한도는 자동 요약에 영향을 주지 않는다.
@@ -95,6 +95,7 @@ export default function WidgetPage() {
     onDelta: answer => { setText(answer); setMood('talk') },
     onDone: answer => { setText(answer || '답변 내용이 도착하지 않았어요.'); setMood('happy') },
     onError: error => {
+      if (error instanceof ApiRequestError && error.status === 401) { expireAnalysis(); return }
       setFailedQuestion(lastQuestion.current)
       setMood('curious')
       if (isQuotaError(error)) {
@@ -106,9 +107,17 @@ export default function WidgetPage() {
     },
   })
 
+  function expireAnalysis() {
+    analysis.current.setRunning(false)
+    analysis.current.reset()
+    setSettings(null)
+    void desktop?.stopScreenAnalysis?.().catch(() => undefined)
+  }
+
   useEffect(() => {
     document.documentElement.classList.add('transparent')
-    return () => document.documentElement.classList.remove('transparent')
+    window.addEventListener(AUTH_EXPIRED_EVENT, expireAnalysis)
+    return () => { document.documentElement.classList.remove('transparent'); window.removeEventListener(AUTH_EXPIRED_EVENT, expireAnalysis) }
   }, [])
 
   // 화면 분석 설정 (메인 창에서 바꾸면 알려 줌)

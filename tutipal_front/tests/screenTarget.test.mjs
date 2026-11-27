@@ -24,6 +24,21 @@ async function fixture(start=true) {
 test('selected source is checked without requesting pixels',async()=>{
  const f=await fixture();assert.equal((await f.status()).status,'ok');assert.equal(f.options().thumbnailSize.width,0);assert.equal(f.options().thumbnailSize.height,0)
 })
+
+test('session boundary revokes selected source and previously issued preview permission',async()=>{
+ const f=await fixture(false),p=await f.api.previewSource('window:chosen')
+ f.api.stopAnalysis()
+ assert.equal(f.api.loadSettings().enabled,false);assert.equal(f.api.loadSettings().sourceId,'')
+ assert.throws(()=>f.api.saveSettings({enabled:true,sourceId:p.sourceId,previewToken:p.previewToken}))
+ assert.equal((await f.api.capture()).status,'off')
+})
+
+test('session boundary discards an in-flight capture and requires a new preview',async()=>{
+ const f=await fixture();let release;f.gate(new Promise(r=>{release=r}))
+ const work=f.api.capture();while(!f.captures())await Promise.resolve()
+ f.api.stopAnalysis();release();assert.equal((await work).status,'off')
+ assert.equal(f.api.loadSettings().sourceId,'');assert.equal((await f.api.capture()).status,'off')
+})
 test('a different window with the same display name is never substituted',async()=>{
  const f=await fixture();f.sources([{id:'window:other'}]);assert.equal((await f.status()).status,'gone');assert.equal((await f.api.capture()).status,'gone');assert.equal(f.captures(),0)
 })

@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('desktop', {
   loginInBrowser: (provider) => ipcRenderer.send('login-in-browser', provider),
   // 목업 04 · 07 · 08: 화면 분석 (고른 창만, 이미지는 저장 안 함)
   openScreenConsent: () => ipcRenderer.send('open-screen-consent'),
+  stopScreenAnalysis: () => ipcRenderer.invoke('screen-analysis-stop'),
+  completeScreenConsent: () => ipcRenderer.invoke('screen-consent-complete'),
   openReview: (id) => ipcRenderer.send('open-review', id),
   screenSources: () => ipcRenderer.invoke('screen-sources'),
   previewScreenSource: id => ipcRenderer.invoke('screen-preview', id),
