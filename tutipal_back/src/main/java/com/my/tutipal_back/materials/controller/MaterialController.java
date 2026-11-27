@@ -3,6 +3,7 @@ package com.my.tutipal_back.materials.controller;
 import java.util.List;
 
 import org.springframework.http.ContentDisposition;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -66,6 +67,7 @@ public class MaterialController {
         MediaType type = m.getFilename().toLowerCase().endsWith(".pdf") ? MediaType.APPLICATION_PDF : MediaType.TEXT_PLAIN;
         return ResponseEntity.ok()
                 .contentType(type)
+                .cacheControl(CacheControl.noStore())
                 .header(HttpHeaders.CONTENT_DISPOSITION,
                         ContentDisposition.attachment().filename(m.getFilename(), java.nio.charset.StandardCharsets.UTF_8).build().toString())
                 .header("X-Content-Type-Options", "nosniff")

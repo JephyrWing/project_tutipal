@@ -60,6 +60,8 @@ public class Material extends BaseTimeEntity {
     @Column(nullable = false)
     private boolean originalMissing;
 
+    private Instant hiddenAt;
+
     protected Material() {
     }
 

@@ -75,7 +75,7 @@ public class MaterialService {
     public MaterialRow reuse(Long userId, Long sessionId, Long sourceId, boolean alert) {
         sessions.requireTeacherOf(userId, sessionId);
         sessions.requireActiveRole(userId, sessionId);
-        Material source = find(sourceId);
+        Material source = lockVisible(sourceId);
         // 이전 수업은 종료됐어도 그 수업의 교사가 다시 사용할 수 있다.
         sessions.requireTeacherOf(userId, source.getSessionId());
         if (sessionId.equals(source.getSessionId())) {
@@ -122,19 +122,18 @@ public class MaterialService {
 
     @Transactional
     public void delete(Long userId, Long materialId) {
-        MaterialRow m = materials.row(materialId)
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "자료를 찾을 수 없어요"));
-        sessions.requireTeacherOf(userId, m.sessionId());
-        String key = find(materialId).getStorageKey();
-        materials.deleteById(materialId);   // 청크는 ON DELETE CASCADE
-        reconciliation.recordDeletion(m.sessionId(), key);
+        Material material = lockVisible(materialId);
+        sessions.requireTeacherOf(userId, material.getSessionId());
+        String key = material.getStorageKey();
+        materials.delete(material);   // 청크는 ON DELETE CASCADE
+        reconciliation.recordDeletion(material.getSessionId(), key);
         AfterCommit.run(() -> reconciliation.cleanupAfterTransaction(key));
-        events.toSession(m.sessionId(), "materials", materialId);
+        events.toSession(material.getSessionId(), "materials", materialId);
     }
 
     @Transactional
     public MaterialRow requestIndex(Long userId, Long materialId) {
-        Material material = find(materialId);
+        Material material = lockVisible(materialId);
         Long sessionId = material.getSessionId();
         sessions.requireTeacherOf(userId, sessionId);
         sessions.requireActiveRole(userId, sessionId);
@@ -166,7 +165,15 @@ public class MaterialService {
     }
 
     private Material find(Long id) {
-        return materials.findById(id).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "자료를 찾을 수 없어요"));
+        return materials.findByIdAndHiddenAtIsNull(id).orElseThrow(MaterialService::notFound);
+    }
+
+    private Material lockVisible(Long id) {
+        return materials.findLockedByIdAndHiddenAtIsNull(id).orElseThrow(MaterialService::notFound);
+    }
+
+    private static ApiException notFound() {
+        return new ApiException(HttpStatus.NOT_FOUND, "자료를 찾을 수 없어요");
     }
 
     private void requireOriginal(Material material) {

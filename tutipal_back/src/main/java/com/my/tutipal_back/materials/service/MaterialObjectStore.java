@@ -78,7 +78,7 @@ public class MaterialObjectStore {
         } catch (Exception e) { throw unavailable(); }
     }
 
-    boolean exists(String key) {
+    public boolean exists(String key) {
         try {
             if (mode.equals("s3")) {
                 try (S3Client client = s3()) {
