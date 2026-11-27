@@ -1,5 +1,22 @@
 # PT-65 실제 LiveKit 미디어 검사
 
+## PT-114 정리 단계 진단
+
+e44e1f8의 CI45920212469에서 본문 뒤 afterEach와 worker 정리가 각각90초 timeout했다.
+당시 로그에는 세부 정리 단계가 없으므로 SDK disconnect와 Electron 종료 중 어느 단계가 멈췄는지는 미확정이다.
+`tests/livekit/cleanup.js`는 앱별 renderer-disconnect/application-close/owned-process-exit/profile-remove를
+각각5초 안에 확인하고 시작·종료 UTC 시각과 passed/failed/timeout만 기록한다.
+앱 두 개는 함께 정리하며 한 단계의 오류가 다른 앱의 정리를 막지 않는다.
+SDK 종료 오류나 timeout이 있으면 프로세스 정리에 성공해도 해당 검사는 실패한다.
+`cleanup.json`을 파일로 저장·첨부하고 진행 단계도 로그로 남긴다. 원문 오류·쿠키·주소·프로필 경로는 싣지 않는다.
+
+정상 close 후에도 살아 있으면 이 검사에서 직접 launch한 Electron의 ChildProcess에만 SIGKILL을 보내고
+exit를 확인한다. 프로세스 이름/PID 검색과 사용자 앱 종료는 하지 않는다. 종료가 확인되지 않으면 profile을 보존한다.
+profile 삭제는 실제 tmp 바로 아래의 tutipal-e2e-profile- 접두사 경로만 허용한다.
+본문의 디코딩·서버 참가자 제거·옛 주소 차단 조건과20초 assertion,90초 test timeout, retry0/repeat3은 유지한다.
+이 보완은 정리 무한 대기와 진단 공백을 다루며 과거 장애의 정확한 내부 원인을 확정한 것은 아니다.
+단위 실패주입 검사는 `node --test tests/livekitCleanup.test.mjs`로 실행한다.
+
 ## PT-114 종료 회귀 보완
 
 PT-30 병합 07c483a의 CI45551908245에서 기존 Disconnected 조건이20초 안에 충족되지 않았다.

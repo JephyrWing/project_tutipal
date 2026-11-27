@@ -1,11 +1,12 @@
 import { test, expect, _electron } from '@playwright/test'
 import electronPath from 'electron'
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { login, createRoom, joinRoom } from '../e2e/fixtures.js'
 import { participantCount } from './participantProbe.js'
+import { cleanupApplications } from './cleanup.js'
 
 const front = fileURLToPath(new URL('../../', import.meta.url))
 const sdk = await readFile(path.join(front, 'node_modules/livekit-client/dist/livekit-client.umd.js'), 'utf8')
@@ -31,22 +32,15 @@ async function launch() {
   await expect(item.page.getByRole('button', { name: '개발용 로그인 (내 PC 전용)', exact: true })).toBeVisible()
   return item
 }
-test.afterEach(async () => {
-  for (const item of opened.splice(0).reverse()) {
-    if (item.page && !item.page.isClosed()) await item.page.evaluate(async () => {
-      const m = window.pt65Media
-      if (!m) return
-      clearInterval(m.paint)
-      m.stream?.getTracks().forEach(t => t.stop())
-      await m.room.disconnect()
-      m.videos.forEach(v => v.remove())
-    }).catch(() => {})
-    await item.application?.close().catch(() => {})
-    const resolved = await realpath(item.profile)
-    if (path.dirname(resolved) === await realpath(os.tmpdir()) && path.basename(resolved).startsWith('tutipal-e2e-profile-')) {
-      await rm(resolved, { recursive: true, force: true })
-    }
-  }
+test.afterEach(async ({}, testInfo) => {
+  const report = await cleanupApplications(opened.splice(0).reverse(), {
+    onPhase: record => console.log('PT114 cleanup', JSON.stringify(record)),
+  })
+  const evidence = testInfo.outputPath('cleanup.json')
+  await writeFile(evidence, JSON.stringify(report))
+  await testInfo.attach('cleanup.json', { path: evidence, contentType: 'application/json' })
+  const failures = report.flatMap(app => app.phases).filter(phase => phase.status !== 'passed')
+  expect(failures, 'Every cleanup stage must finish successfully; forced exit does not hide an earlier failure').toEqual([])
 })
 async function api(app, route, method = 'GET', body) {
   return app.page.evaluate(async ({ route, method, body }) => {
