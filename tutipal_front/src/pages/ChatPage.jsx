@@ -7,6 +7,8 @@ import Mascot from '../components/Mascot'
 import SubjectPicker from '../components/SubjectPicker'
 import { helpDraftOf } from '../utils/helpDraft'
 import { useRetryLock } from '../utils/useRetryLock'
+import { useAuth } from '../auth'
+import PersonalStoredChat from './PersonalStoredChat'
 
 /** 예전 주소(?topic=coding)도 열리게 id → 과목 이름 */
 const LEGACY = { general: '자유 주제', coding: '코딩', english: '영어', math: '수학' }
@@ -31,9 +33,10 @@ function toTopic(value) {
 /** 목업 06 도우미 챗봇 (개인 학습): 주소의 ?topic= 과목 이름 (드롭다운 · 직접 입력) */
 export default function ChatPage() {
   const [params, setParams] = useSearchParams()
+  const { me } = useAuth()
   const ask = params.get('ask')
   return (
-    <ChatPanel
+    <PersonalStoredChat key={`${me?.id}:${toTopic(params.get('topic'))}`}
       topic={toTopic(params.get('topic'))}
       onTopicChange={(t) => setParams({ topic: t }, { replace: true })}
       initialAsk={ask ?? undefined}
