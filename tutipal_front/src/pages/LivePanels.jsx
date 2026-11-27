@@ -258,6 +258,8 @@ export function StudentHelp({ sessionId, reloadKey, draft }) {
   const [share, setShare] = useState(true)
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
+  const [endState, setEndState] = useState(null)
+  const endAttempt = useRef(null)
   const [fromDraft, setFromDraft] = useState(false)
   /** 이 수업의 내 도움 요청 목록 상태: loading → ok | failed. ok 일 때만 열린 요청 유무를 알 수 있으므로 초안 모달을 연다 */
   const [listState, setListState] = useState('loading')
@@ -266,6 +268,7 @@ export function StudentHelp({ sessionId, reloadKey, draft }) {
   const checkedDraft = useRef(0)
   const [refreshKey, setRefreshKey] = useState(0)
   const active = mine?.status === 'PENDING' || mine?.status === 'ACCEPTED'
+  const ending = endState?.id === mine?.id && endState?.pending === true
 
   // 다른 수업으로 바뀌면 이전 수업의 요청 상태 · 모달 · 초안을 버린다
   useEffect(() => {
@@ -275,6 +278,8 @@ export function StudentHelp({ sessionId, reloadKey, draft }) {
     setMessage('')
     setFromDraft(false)
     setNote('')
+    setEndState(null)
+    endAttempt.current = null
   }, [sessionId])
 
   useEffect(() => {
@@ -318,9 +323,10 @@ export function StudentHelp({ sessionId, reloadKey, draft }) {
     screenshare.listHelp(sessionId).then((l) => {
       if (!current) return
       const next = l[0] ?? null
-      // 대기 중이던 요청이 사라짐 = 선생님이 "나중에" (내가 취소한 경우는 cancel() 이 먼저 mine 을 비움)
       setMine((prev) => {
-        if (prev?.status === 'PENDING' && !next) setNote('선생님이 조금 뒤에 볼게요. 잠시 후 다시 요청해 주세요')
+        if (prev?.status === 'PENDING' && !next && endAttempt.current?.id !== prev.id) {
+          setNote('선생님이 조금 뒤에 볼게요. 잠시 후 다시 요청해 주세요')
+        }
         return next
       })
       setListState('ok')
@@ -344,18 +350,36 @@ export function StudentHelp({ sessionId, reloadKey, draft }) {
   }
 
   async function cancel() {
-    if (mine) await screenshare.end(mine.id).catch(() => undefined)
-    setMine(null)
+    if (!mine || endAttempt.current?.pending) return
+    const attempt = { id: mine.id, pending: true }
+    endAttempt.current = attempt
+    setEndState({ id: attempt.id, pending: true })
+    try {
+      await screenshare.end(attempt.id)
+      if (endAttempt.current !== attempt) return
+      setMine((request) => request?.id === attempt.id ? null : request)
+      setEndState(null)
+      setRefreshKey((key) => key + 1)
+    } catch (err) {
+      if (endAttempt.current !== attempt) return
+      setEndState({
+        id: attempt.id,
+        error: errText(err, mine.status === 'PENDING' ? '요청을 취소하지 못했어요' : '도움을 종료하지 못했어요'),
+      })
+      setRefreshKey((key) => key + 1)
+    } finally {
+      attempt.pending = false
+    }
   }
 
   return (
     <>
       {mine?.status === 'ACCEPTED' ? (
-        <HelpSession help={mine} refreshKey={reloadKey} onEnd={() => void cancel()} />
+        <HelpSession help={mine} refreshKey={reloadKey} ending={ending} onEnd={() => void cancel()} />
       ) : mine?.status === 'PENDING' ? (
         <span className="help-chip">
           <span className="badge badge-warn">도움 요청 대기 중</span>
-          <button className="btn btn-sm" onClick={() => void cancel()}>취소</button>
+          <button className="btn btn-sm" disabled={ending} onClick={() => void cancel()}>취소</button>
         </span>
       ) : (
         <button className="btn btn-sm" onClick={() => {
@@ -365,6 +389,7 @@ export function StudentHelp({ sessionId, reloadKey, draft }) {
         }}>✋ 도움 요청</button>
       )}
       {note && <span className="muted small">{note}</span>}
+      {endState?.id === mine?.id && endState?.error && <span role="alert" className="error-text small">{endState.error}</span>}
       {open && (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="선생님에게 도움 요청">
           <form className="card modal" onSubmit={(e) => void onSubmit(e)}>
@@ -394,7 +419,7 @@ export function StudentHelp({ sessionId, reloadKey, draft }) {
 }
 
 /** 학생 쪽 진행 중인 1:1: 화면 올리기 + 받은 그림을 오버레이로 */
-function HelpSession({ help, refreshKey, onEnd }) {
+function HelpSession({ help, refreshKey, ending, onEnd }) {
   const desktop = window.desktop
   const getInfo = useCallback(() => screenshare.helpToken(help.id), [help.id])
   const connection = useRoom(getInfo)
@@ -534,7 +559,7 @@ function HelpSession({ help, refreshKey, onEnd }) {
           <button className="btn btn-sm" onClick={() => void shareControl.current?.stop()}>화면 공유 중지</button>
         </>
       )}
-      <button className="btn btn-sm" onClick={onEnd}>끝내기</button>
+      <button className="btn btn-sm" disabled={ending} onClick={onEnd}>끝내기</button>
       <ConnectionNotice {...connection} />
       {peerNotice && <span className="muted small">{peerNotice}</span>}
       {shareError && <span className="error-text small">{shareError}</span>}
